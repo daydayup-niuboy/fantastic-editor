@@ -1,0 +1,34 @@
+{
+  "name": "@fantastic-editor/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron .",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.2",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.1",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.39.16",
+    "@fantastic-editor/document-core": "*",
+    "@fantastic-editor/shared": "*",
+    "@resvg/resvg-js": "^2.6.2",
+    "docx": "^9.7.1",
+    "katex": "^0.18.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.4.1",
+    "electron-vite": "^5.0.0"
+  }
+}

@@ -1,0 +1,444 @@
+{
+  "schema": "fantastic-editor-parsed-document",
+  "udmVersion": "0.5",
+  "parserProfile": "fantastic-editor-p0-markdown-0.1",
+  "documentId": "fixture-resource-security",
+  "sourceHash": "2ae8e8abc17093ad96e559ab1a3ff34cc028775e1c8666258b9462e5c42879b0",
+  "sourceLength": 295,
+  "metadata": {},
+  "children": [
+    {
+      "id": "node-1",
+      "type": "heading",
+      "source": {
+        "from": 0,
+        "to": 7,
+        "startLine": 1,
+        "startColumn": 1,
+        "endLine": 2,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "level": 1
+      },
+      "children": [
+        {
+          "id": "node-2",
+          "type": "text",
+          "source": {
+            "from": 2,
+            "to": 6,
+            "startLine": 1,
+            "startColumn": 3,
+            "endLine": 1,
+            "endColumn": 7,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "资源安全"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-3",
+      "type": "paragraph",
+      "source": {
+        "from": 8,
+        "to": 45,
+        "startLine": 3,
+        "startColumn": 1,
+        "endLine": 4,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-10",
+          "type": "image",
+          "source": {
+            "from": 8,
+            "to": 44,
+            "startLine": 3,
+            "startColumn": 1,
+            "endLine": 3,
+            "endColumn": 37,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "markdown-inline",
+            "originalRef": "https://example.com/image.png",
+            "resolvedRef": "https://example.com/image.png",
+            "normalizedResolvedRef": "11:remote-http29:https://example.com/image.png",
+            "alt": "远程",
+            "title": null,
+            "referenceKey": "675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-4",
+      "type": "paragraph",
+      "source": {
+        "from": 46,
+        "to": 100,
+        "startLine": 5,
+        "startColumn": 1,
+        "endLine": 6,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-11",
+          "type": "image",
+          "source": {
+            "from": 46,
+            "to": 99,
+            "startLine": 5,
+            "startColumn": 1,
+            "endLine": 5,
+            "endColumn": 54,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "markdown-inline",
+            "originalRef": "data:[blocked]",
+            "resolvedRef": "data:[blocked]",
+            "normalizedResolvedRef": "data-uri:sha256:3940eb678027d9fa4b35ca5871d3b3e82520aab9f37b139d4fc0e603c8838a60",
+            "alt": "内嵌",
+            "title": null,
+            "referenceKey": "29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-5",
+      "type": "paragraph",
+      "source": {
+        "from": 101,
+        "to": 129,
+        "startLine": 7,
+        "startColumn": 1,
+        "endLine": 8,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-12",
+          "type": "image",
+          "source": {
+            "from": 101,
+            "to": 128,
+            "startLine": 7,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 28,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "markdown-inline",
+            "originalRef": "C:images\\photo.png",
+            "resolvedRef": "C:images\\photo.png",
+            "normalizedResolvedRef": "C:images/photo.png",
+            "alt": "盘符相对",
+            "title": null,
+            "referenceKey": "d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-6",
+      "type": "paragraph",
+      "source": {
+        "from": 130,
+        "to": 157,
+        "startLine": 9,
+        "startColumn": 1,
+        "endLine": 10,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-13",
+          "type": "image",
+          "source": {
+            "from": 130,
+            "to": 156,
+            "startLine": 9,
+            "startColumn": 1,
+            "endLine": 9,
+            "endColumn": 27,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "markdown-inline",
+            "originalRef": "images/bad%ZZ.png",
+            "resolvedRef": "images/bad%ZZ.png",
+            "normalizedResolvedRef": "images/bad%ZZ.png",
+            "alt": "非法编码",
+            "title": null,
+            "referenceKey": "586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-14",
+      "type": "rawHtmlBlock",
+      "source": {
+        "from": 158,
+        "to": 200,
+        "startLine": 11,
+        "startColumn": 1,
+        "endLine": 11,
+        "endColumn": 43,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "raw": "[blocked raw HTML img]",
+        "safetyState": "blocked",
+        "removedFeatures": [
+          "img"
+        ],
+        "safeRepresentation": null
+      }
+    },
+    {
+      "id": "node-9",
+      "type": "codeBlock",
+      "source": {
+        "from": 202,
+        "to": 295,
+        "startLine": 13,
+        "startColumn": 1,
+        "endLine": 16,
+        "endColumn": 4,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "value": "![代码示例](data:image/png;base64,SHOULD_NOT_PARSE)\n<img src=\"also-not-a-resource.png\">\n",
+        "language": "md",
+        "originalLanguage": "md",
+        "meta": "",
+        "fence": "```"
+      }
+    }
+  ],
+  "resourceReferences": [
+    {
+      "referenceKey": "675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed",
+      "nodeId": "node-10",
+      "source": {
+        "from": 8,
+        "to": 44,
+        "startLine": 3,
+        "startColumn": 1,
+        "endLine": 3,
+        "endColumn": 37,
+        "precision": "exact"
+      },
+      "kind": "remote-http",
+      "syntax": "markdown-inline",
+      "originalRef": "https://example.com/image.png",
+      "resolvedRef": "https://example.com/image.png",
+      "normalizedResolvedRef": "11:remote-http29:https://example.com/image.png"
+    },
+    {
+      "referenceKey": "29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d",
+      "nodeId": "node-11",
+      "source": {
+        "from": 46,
+        "to": 99,
+        "startLine": 5,
+        "startColumn": 1,
+        "endLine": 5,
+        "endColumn": 54,
+        "precision": "exact"
+      },
+      "kind": "data-uri",
+      "syntax": "markdown-inline",
+      "originalRef": "data:[blocked]",
+      "resolvedRef": "data:[blocked]",
+      "normalizedResolvedRef": "data-uri:sha256:3940eb678027d9fa4b35ca5871d3b3e82520aab9f37b139d4fc0e603c8838a60"
+    },
+    {
+      "referenceKey": "d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04",
+      "nodeId": "node-12",
+      "source": {
+        "from": 101,
+        "to": 128,
+        "startLine": 7,
+        "startColumn": 1,
+        "endLine": 7,
+        "endColumn": 28,
+        "precision": "exact"
+      },
+      "kind": "local-path",
+      "syntax": "markdown-inline",
+      "originalRef": "C:images\\photo.png",
+      "resolvedRef": "C:images\\photo.png",
+      "normalizedResolvedRef": "C:images/photo.png"
+    },
+    {
+      "referenceKey": "586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb",
+      "nodeId": "node-13",
+      "source": {
+        "from": 130,
+        "to": 156,
+        "startLine": 9,
+        "startColumn": 1,
+        "endLine": 9,
+        "endColumn": 27,
+        "precision": "exact"
+      },
+      "kind": "local-path",
+      "syntax": "markdown-inline",
+      "originalRef": "images/bad%ZZ.png",
+      "resolvedRef": "images/bad%ZZ.png",
+      "normalizedResolvedRef": "images/bad%ZZ.png"
+    }
+  ],
+  "diagnostics": [
+    {
+      "id": "diagnostic-675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed-REMOTE_IMAGE_BLOCKED",
+      "code": "REMOTE_IMAGE_BLOCKED",
+      "severity": "blocking",
+      "category": "security",
+      "message": "资源引用已被 P0 安全策略阻止（remote-http）。",
+      "source": {
+        "from": 8,
+        "to": 44,
+        "startLine": 3,
+        "startColumn": 1,
+        "endLine": 3,
+        "endColumn": 37,
+        "precision": "exact"
+      },
+      "nodeId": "node-10",
+      "referenceKey": "675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed",
+      "suggestedActions": [
+        "改用工作区内经过授权的本地图片路径。"
+      ]
+    },
+    {
+      "id": "diagnostic-29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d-DATA_URI_SOURCE_BLOCKED",
+      "code": "DATA_URI_SOURCE_BLOCKED",
+      "severity": "blocking",
+      "category": "security",
+      "message": "资源引用已被 P0 安全策略阻止（data-uri）。",
+      "source": {
+        "from": 46,
+        "to": 99,
+        "startLine": 5,
+        "startColumn": 1,
+        "endLine": 5,
+        "endColumn": 54,
+        "precision": "exact"
+      },
+      "nodeId": "node-11",
+      "referenceKey": "29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d",
+      "suggestedActions": [
+        "改用工作区内经过授权的本地图片路径。"
+      ]
+    },
+    {
+      "id": "diagnostic-d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04-DRIVE_RELATIVE_PATH_BLOCKED",
+      "code": "DRIVE_RELATIVE_PATH_BLOCKED",
+      "severity": "blocking",
+      "category": "security",
+      "message": "资源引用已被 P0 安全策略阻止（local-path）。",
+      "source": {
+        "from": 101,
+        "to": 128,
+        "startLine": 7,
+        "startColumn": 1,
+        "endLine": 7,
+        "endColumn": 28,
+        "precision": "exact"
+      },
+      "nodeId": "node-12",
+      "referenceKey": "d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04",
+      "suggestedActions": [
+        "改用工作区内经过授权的本地图片路径。"
+      ]
+    },
+    {
+      "id": "diagnostic-586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb-INVALID_PERCENT_ENCODING",
+      "code": "INVALID_PERCENT_ENCODING",
+      "severity": "blocking",
+      "category": "security",
+      "message": "资源引用已被 P0 安全策略阻止（local-path）。",
+      "source": {
+        "from": 130,
+        "to": 156,
+        "startLine": 9,
+        "startColumn": 1,
+        "endLine": 9,
+        "endColumn": 27,
+        "precision": "exact"
+      },
+      "nodeId": "node-13",
+      "referenceKey": "586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb",
+      "suggestedActions": [
+        "改用工作区内经过授权的本地图片路径。"
+      ]
+    },
+    {
+      "id": "diagnostic-node-14-RAW_HTML_IMAGE_BLOCKED",
+      "code": "RAW_HTML_IMAGE_BLOCKED",
+      "severity": "blocking",
+      "category": "security",
+      "message": "P0 不支持原始 HTML 图片，请改用 Markdown 图片语法。",
+      "source": {
+        "from": 158,
+        "to": 200,
+        "startLine": 11,
+        "startColumn": 1,
+        "endLine": 11,
+        "endColumn": 43,
+        "precision": "exact"
+      },
+      "nodeId": "node-14",
+      "suggestedActions": [
+        "将 img 标签改写为 Markdown 图片语法。"
+      ]
+    }
+  ],
+  "statistics": {
+    "headings": 1,
+    "images": 4,
+    "formulas": 0,
+    "characters": 295
+  }
+}

@@ -1,0 +1,6 @@
+:root { color: #111; background: #fff; font-family: KaTeX_Main, "Times New Roman", serif; }
+* { box-sizing: border-box; }
+html, body { width: max-content; min-width: 1px; min-height: 1px; margin: 0; overflow: hidden; background: #fff; }
+body { padding: 16px; }
+#formula-root { display: inline-block; width: max-content; max-width: 4064px; color: #111; background: #fff; font-size: 20px; line-height: 1.25; }
+#formula-root > .katex-display { margin: 0; }

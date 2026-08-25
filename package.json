@@ -1,0 +1,88 @@
+{
+  "name": "fantastic-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first Markdown editor for Windows",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:packages && npm run dev --workspace @fantastic-editor/desktop",
+    "start": "npm run build && npm run start --workspace @fantastic-editor/desktop",
+    "build": "npm run build:packages && npm run build --workspace @fantastic-editor/desktop",
+    "build:packages": "npm run build --workspace @fantastic-editor/document-core && npm run build --workspace @fantastic-editor/shared",
+    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist:win": "npm run build && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "jszip": "^3.10.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "main": "apps/desktop/out/main/index.js",
+  "dependencies": {
+    "@fantastic-editor/document-core": "file:packages/document-core",
+    "@fantastic-editor/shared": "file:packages/shared",
+    "@resvg/resvg-js": "^2.6.2",
+    "docx": "^9.7.1",
+    "katex": "^0.18.4"
+  },
+  "build": {
+    "appId": "com.fantastic.editor",
+    "productName": "fantastic-editor",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "apps/desktop/out/**/*",
+      "packages/document-core/dist/**/*",
+      "packages/document-core/package.json",
+      "packages/shared/dist/**/*",
+      "packages/shared/package.json",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/@types/**/*",
+      "!node_modules/typescript/**/*",
+      "!node_modules/vitest/**/*",
+      "!node_modules/@vitest/**/*",
+      "!node_modules/vite/**/*",
+      "!node_modules/@vitejs/**/*",
+      "!node_modules/electron-vite/**/*",
+      "!node_modules/esbuild/**/*",
+      "!node_modules/@esbuild/**/*",
+      "!node_modules/rollup/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "fantastic-editor-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "fantastic-editor"
+    }
+  }
+}

@@ -1,0 +1,1284 @@
+{
+  "schema": "fantastic-editor-parsed-document",
+  "udmVersion": "0.5",
+  "parserProfile": "fantastic-editor-p0-markdown-0.1",
+  "documentId": "fixture-core-syntax",
+  "sourceHash": "8409d6b8ec4454b11213c21360593e4a84586a34afa9d42424b50460aebf6517",
+  "sourceLength": 357,
+  "metadata": {},
+  "children": [
+    {
+      "id": "node-1",
+      "type": "heading",
+      "source": {
+        "from": 0,
+        "to": 9,
+        "startLine": 1,
+        "startColumn": 1,
+        "endLine": 2,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "level": 1
+      },
+      "children": [
+        {
+          "id": "node-2",
+          "type": "text",
+          "source": {
+            "from": 2,
+            "to": 8,
+            "startLine": 1,
+            "startColumn": 3,
+            "endLine": 1,
+            "endColumn": 9,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "ATX 标题"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-3",
+      "type": "heading",
+      "source": {
+        "from": 10,
+        "to": 32,
+        "startLine": 3,
+        "startColumn": 1,
+        "endLine": 5,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "level": 2
+      },
+      "children": [
+        {
+          "id": "node-4",
+          "type": "text",
+          "source": {
+            "from": 10,
+            "to": 19,
+            "startLine": 3,
+            "startColumn": 1,
+            "endLine": 3,
+            "endColumn": 10,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "Setext 标题"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-5",
+      "type": "paragraph",
+      "source": {
+        "from": 33,
+        "to": 103,
+        "startLine": 6,
+        "startColumn": 1,
+        "endLine": 7,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-6",
+          "type": "text",
+          "source": {
+            "from": 33,
+            "to": 49,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 6,
+            "endColumn": 17,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "中文与 emoji 😀，包含 "
+          }
+        },
+        {
+          "id": "node-7",
+          "type": "emphasis",
+          "source": {
+            "from": 33,
+            "to": 103,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 1,
+            "precision": "block"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-8",
+              "type": "text",
+              "source": {
+                "from": 50,
+                "to": 52,
+                "startLine": 6,
+                "startColumn": 18,
+                "endLine": 6,
+                "endColumn": 20,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {
+                "value": "强调"
+              }
+            }
+          ]
+        },
+        {
+          "id": "node-9",
+          "type": "text",
+          "source": {
+            "from": 53,
+            "to": 54,
+            "startLine": 6,
+            "startColumn": 21,
+            "endLine": 6,
+            "endColumn": 22,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "、"
+          }
+        },
+        {
+          "id": "node-10",
+          "type": "strong",
+          "source": {
+            "from": 33,
+            "to": 103,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 1,
+            "precision": "block"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-11",
+              "type": "text",
+              "source": {
+                "from": 56,
+                "to": 58,
+                "startLine": 6,
+                "startColumn": 24,
+                "endLine": 6,
+                "endColumn": 26,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {
+                "value": "加粗"
+              }
+            }
+          ]
+        },
+        {
+          "id": "node-12",
+          "type": "text",
+          "source": {
+            "from": 60,
+            "to": 61,
+            "startLine": 6,
+            "startColumn": 28,
+            "endLine": 6,
+            "endColumn": 29,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "、"
+          }
+        },
+        {
+          "id": "node-13",
+          "type": "strikethrough",
+          "source": {
+            "from": 33,
+            "to": 103,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 1,
+            "precision": "block"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-14",
+              "type": "text",
+              "source": {
+                "from": 63,
+                "to": 65,
+                "startLine": 6,
+                "startColumn": 31,
+                "endLine": 6,
+                "endColumn": 33,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {
+                "value": "删除"
+              }
+            }
+          ]
+        },
+        {
+          "id": "node-15",
+          "type": "text",
+          "source": {
+            "from": 67,
+            "to": 68,
+            "startLine": 6,
+            "startColumn": 35,
+            "endLine": 6,
+            "endColumn": 36,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "、"
+          }
+        },
+        {
+          "id": "node-16",
+          "type": "inlineCode",
+          "source": {
+            "from": 33,
+            "to": 103,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 1,
+            "precision": "block"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "行内代码"
+          }
+        },
+        {
+          "id": "node-17",
+          "type": "text",
+          "source": {
+            "from": 74,
+            "to": 76,
+            "startLine": 6,
+            "startColumn": 42,
+            "endLine": 6,
+            "endColumn": 44,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "和 "
+          }
+        },
+        {
+          "id": "node-18",
+          "type": "link",
+          "source": {
+            "from": 33,
+            "to": 103,
+            "startLine": 6,
+            "startColumn": 1,
+            "endLine": 7,
+            "endColumn": 1,
+            "precision": "block"
+          },
+          "generated": false,
+          "attributes": {
+            "originalHref": "https://example.com",
+            "normalizedHref": "https://example.com",
+            "title": null,
+            "safetyState": "allowed"
+          },
+          "children": [
+            {
+              "id": "node-19",
+              "type": "text",
+              "source": {
+                "from": 77,
+                "to": 79,
+                "startLine": 6,
+                "startColumn": 45,
+                "endLine": 6,
+                "endColumn": 47,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {
+                "value": "链接"
+              }
+            }
+          ]
+        },
+        {
+          "id": "node-20",
+          "type": "text",
+          "source": {
+            "from": 101,
+            "to": 102,
+            "startLine": 6,
+            "startColumn": 69,
+            "endLine": 6,
+            "endColumn": 70,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-21",
+      "type": "bulletList",
+      "source": {
+        "from": 104,
+        "to": 136,
+        "startLine": 8,
+        "startColumn": 1,
+        "endLine": 12,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "tight": true
+      },
+      "children": [
+        {
+          "id": "node-22",
+          "type": "listItem",
+          "source": {
+            "from": 104,
+            "to": 111,
+            "startLine": 8,
+            "startColumn": 1,
+            "endLine": 9,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-23",
+              "type": "paragraph",
+              "source": {
+                "from": 104,
+                "to": 111,
+                "startLine": 8,
+                "startColumn": 1,
+                "endLine": 9,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-24",
+                  "type": "text",
+                  "source": {
+                    "from": 106,
+                    "to": 110,
+                    "startLine": 8,
+                    "startColumn": 3,
+                    "endLine": 8,
+                    "endColumn": 7,
+                    "precision": "exact"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "value": "普通项目"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "node-25",
+          "type": "taskItem",
+          "source": {
+            "from": 111,
+            "to": 123,
+            "startLine": 9,
+            "startColumn": 1,
+            "endLine": 10,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "checked": true
+          },
+          "children": [
+            {
+              "id": "node-26",
+              "type": "paragraph",
+              "source": {
+                "from": 111,
+                "to": 123,
+                "startLine": 9,
+                "startColumn": 1,
+                "endLine": 10,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-27",
+                  "type": "text",
+                  "source": {
+                    "from": 116,
+                    "to": 122,
+                    "startLine": 9,
+                    "startColumn": 6,
+                    "endLine": 9,
+                    "endColumn": 12,
+                    "precision": "exact"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "value": " 已完成任务"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "node-28",
+          "type": "taskItem",
+          "source": {
+            "from": 123,
+            "to": 136,
+            "startLine": 10,
+            "startColumn": 1,
+            "endLine": 12,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "checked": false
+          },
+          "children": [
+            {
+              "id": "node-29",
+              "type": "paragraph",
+              "source": {
+                "from": 123,
+                "to": 135,
+                "startLine": 10,
+                "startColumn": 1,
+                "endLine": 11,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-30",
+                  "type": "text",
+                  "source": {
+                    "from": 128,
+                    "to": 134,
+                    "startLine": 10,
+                    "startColumn": 6,
+                    "endLine": 10,
+                    "endColumn": 12,
+                    "precision": "exact"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "value": " 未完成任务"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "node-31",
+      "type": "orderedList",
+      "source": {
+        "from": 136,
+        "to": 151,
+        "startLine": 12,
+        "startColumn": 1,
+        "endLine": 15,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "start": 1,
+        "tight": true
+      },
+      "children": [
+        {
+          "id": "node-32",
+          "type": "listItem",
+          "source": {
+            "from": 136,
+            "to": 143,
+            "startLine": 12,
+            "startColumn": 1,
+            "endLine": 13,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-33",
+              "type": "paragraph",
+              "source": {
+                "from": 136,
+                "to": 143,
+                "startLine": 12,
+                "startColumn": 1,
+                "endLine": 13,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-34",
+                  "type": "text",
+                  "source": {
+                    "from": 139,
+                    "to": 142,
+                    "startLine": 12,
+                    "startColumn": 4,
+                    "endLine": 12,
+                    "endColumn": 7,
+                    "precision": "exact"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "value": "第一项"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "node-35",
+          "type": "listItem",
+          "source": {
+            "from": 143,
+            "to": 151,
+            "startLine": 13,
+            "startColumn": 1,
+            "endLine": 15,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-36",
+              "type": "paragraph",
+              "source": {
+                "from": 143,
+                "to": 150,
+                "startLine": 13,
+                "startColumn": 1,
+                "endLine": 14,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-37",
+                  "type": "text",
+                  "source": {
+                    "from": 146,
+                    "to": 149,
+                    "startLine": 13,
+                    "startColumn": 4,
+                    "endLine": 13,
+                    "endColumn": 7,
+                    "precision": "exact"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "value": "第二项"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "node-38",
+      "type": "blockquote",
+      "source": {
+        "from": 151,
+        "to": 158,
+        "startLine": 15,
+        "startColumn": 1,
+        "endLine": 16,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-39",
+          "type": "paragraph",
+          "source": {
+            "from": 151,
+            "to": 158,
+            "startLine": 15,
+            "startColumn": 1,
+            "endLine": 16,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-40",
+              "type": "text",
+              "source": {
+                "from": 153,
+                "to": 157,
+                "startLine": 15,
+                "startColumn": 3,
+                "endLine": 15,
+                "endColumn": 7,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {
+                "value": "引用段落"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "node-41",
+      "type": "codeBlock",
+      "source": {
+        "from": 159,
+        "to": 199,
+        "startLine": 17,
+        "startColumn": 1,
+        "endLine": 20,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "value": "const answer = 42;\n",
+        "language": "ts",
+        "originalLanguage": "ts",
+        "meta": "meta=value",
+        "fence": "```"
+      }
+    },
+    {
+      "id": "node-42",
+      "type": "table",
+      "source": {
+        "from": 200,
+        "to": 257,
+        "startLine": 21,
+        "startColumn": 1,
+        "endLine": 24,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "alignments": [
+          "left",
+          "center",
+          "right"
+        ]
+      },
+      "children": [
+        {
+          "id": "node-43",
+          "type": "tableHead",
+          "source": {
+            "from": 200,
+            "to": 219,
+            "startLine": 21,
+            "startColumn": 1,
+            "endLine": 22,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-44",
+              "type": "tableRow",
+              "source": {
+                "from": 200,
+                "to": 219,
+                "startLine": 21,
+                "startColumn": 1,
+                "endLine": 22,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-45",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 200,
+                    "to": 219,
+                    "startLine": 21,
+                    "startColumn": 1,
+                    "endLine": 22,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": true,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-46",
+                      "type": "text",
+                      "source": {
+                        "from": 202,
+                        "to": 205,
+                        "startLine": 21,
+                        "startColumn": 3,
+                        "endLine": 21,
+                        "endColumn": 6,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "左对齐"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "node-47",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 200,
+                    "to": 219,
+                    "startLine": 21,
+                    "startColumn": 1,
+                    "endLine": 22,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": true,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-48",
+                      "type": "text",
+                      "source": {
+                        "from": 208,
+                        "to": 210,
+                        "startLine": 21,
+                        "startColumn": 9,
+                        "endLine": 21,
+                        "endColumn": 11,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "居中"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "node-49",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 200,
+                    "to": 219,
+                    "startLine": 21,
+                    "startColumn": 1,
+                    "endLine": 22,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": true,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-50",
+                      "type": "text",
+                      "source": {
+                        "from": 213,
+                        "to": 216,
+                        "startLine": 21,
+                        "startColumn": 14,
+                        "endLine": 21,
+                        "endColumn": 17,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "右对齐"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "node-51",
+          "type": "tableBody",
+          "source": {
+            "from": 243,
+            "to": 257,
+            "startLine": 23,
+            "startColumn": 1,
+            "endLine": 24,
+            "endColumn": 1,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {},
+          "children": [
+            {
+              "id": "node-52",
+              "type": "tableRow",
+              "source": {
+                "from": 243,
+                "to": 257,
+                "startLine": 23,
+                "startColumn": 1,
+                "endLine": 24,
+                "endColumn": 1,
+                "precision": "exact"
+              },
+              "generated": false,
+              "attributes": {},
+              "children": [
+                {
+                  "id": "node-53",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 243,
+                    "to": 257,
+                    "startLine": 23,
+                    "startColumn": 1,
+                    "endLine": 24,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": false,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-54",
+                      "type": "text",
+                      "source": {
+                        "from": 245,
+                        "to": 246,
+                        "startLine": 23,
+                        "startColumn": 3,
+                        "endLine": 23,
+                        "endColumn": 4,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "A"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "node-55",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 243,
+                    "to": 257,
+                    "startLine": 23,
+                    "startColumn": 1,
+                    "endLine": 24,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": false,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-56",
+                      "type": "text",
+                      "source": {
+                        "from": 249,
+                        "to": 250,
+                        "startLine": 23,
+                        "startColumn": 7,
+                        "endLine": 23,
+                        "endColumn": 8,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "B"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "node-57",
+                  "type": "tableCell",
+                  "source": {
+                    "from": 243,
+                    "to": 257,
+                    "startLine": 23,
+                    "startColumn": 1,
+                    "endLine": 24,
+                    "endColumn": 1,
+                    "precision": "block"
+                  },
+                  "generated": false,
+                  "attributes": {
+                    "header": false,
+                    "colspan": 1,
+                    "rowspan": 1
+                  },
+                  "children": [
+                    {
+                      "id": "node-58",
+                      "type": "text",
+                      "source": {
+                        "from": 253,
+                        "to": 254,
+                        "startLine": 23,
+                        "startColumn": 11,
+                        "endLine": 23,
+                        "endColumn": 12,
+                        "precision": "exact"
+                      },
+                      "generated": false,
+                      "attributes": {
+                        "value": "C"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "node-59",
+      "type": "thematicBreak",
+      "source": {
+        "from": 258,
+        "to": 262,
+        "startLine": 25,
+        "startColumn": 1,
+        "endLine": 26,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {}
+    },
+    {
+      "id": "node-60",
+      "type": "paragraph",
+      "source": {
+        "from": 263,
+        "to": 278,
+        "startLine": 27,
+        "startColumn": 1,
+        "endLine": 28,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-61",
+          "type": "text",
+          "source": {
+            "from": 263,
+            "to": 268,
+            "startLine": 27,
+            "startColumn": 1,
+            "endLine": 27,
+            "endColumn": 6,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "行内公式 "
+          }
+        },
+        {
+          "id": "node-68",
+          "type": "formulaInline",
+          "source": {
+            "from": 268,
+            "to": 276,
+            "startLine": 27,
+            "startColumn": 6,
+            "endLine": 27,
+            "endColumn": 14,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "latex": "E=mc^2",
+            "displayMode": false,
+            "delimiter": "$",
+            "accessibleText": null
+          }
+        },
+        {
+          "id": "node-62",
+          "type": "text",
+          "source": {
+            "from": 276,
+            "to": 277,
+            "startLine": 27,
+            "startColumn": 14,
+            "endLine": 27,
+            "endColumn": 15,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "value": "。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-69",
+      "type": "formulaBlock",
+      "source": {
+        "from": 279,
+        "to": 301,
+        "startLine": 29,
+        "startColumn": 1,
+        "endLine": 31,
+        "endColumn": 3,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {
+        "latex": "\\int_0^1 x^2\\,dx",
+        "displayMode": true,
+        "delimiter": "$$",
+        "accessibleText": null
+      }
+    },
+    {
+      "id": "node-63",
+      "type": "paragraph",
+      "source": {
+        "from": 303,
+        "to": 336,
+        "startLine": 33,
+        "startColumn": 1,
+        "endLine": 34,
+        "endColumn": 1,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-66",
+          "type": "image",
+          "source": {
+            "from": 303,
+            "to": 335,
+            "startLine": 33,
+            "startColumn": 1,
+            "endLine": 33,
+            "endColumn": 33,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "markdown-inline",
+            "originalRef": "assets/示例%20图片.png",
+            "resolvedRef": "assets/示例%20图片.png",
+            "normalizedResolvedRef": "assets/示例 图片.png",
+            "alt": "本地图片",
+            "title": "示例",
+            "referenceKey": "d3a9043950a7e7b63d119e06ec508808de0f0fb29e555ff68261e0c24acfd16f",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "node-64",
+      "type": "paragraph",
+      "source": {
+        "from": 337,
+        "to": 357,
+        "startLine": 35,
+        "startColumn": 1,
+        "endLine": 35,
+        "endColumn": 21,
+        "precision": "exact"
+      },
+      "generated": false,
+      "attributes": {},
+      "children": [
+        {
+          "id": "node-67",
+          "type": "image",
+          "source": {
+            "from": 337,
+            "to": 357,
+            "startLine": 35,
+            "startColumn": 1,
+            "endLine": 35,
+            "endColumn": 21,
+            "precision": "exact"
+          },
+          "generated": false,
+          "attributes": {
+            "syntax": "wiki-image",
+            "originalRef": "assets/wiki.png",
+            "resolvedRef": "assets/wiki.png",
+            "normalizedResolvedRef": "assets/wiki.png",
+            "alt": "",
+            "title": null,
+            "referenceKey": "89f871fd4b2794fcb10b7adbd34185775e7541c372c33d2a927e9172ac12743f",
+            "requestedWidth": null,
+            "requestedHeight": null
+          }
+        }
+      ]
+    }
+  ],
+  "resourceReferences": [
+    {
+      "referenceKey": "d3a9043950a7e7b63d119e06ec508808de0f0fb29e555ff68261e0c24acfd16f",
+      "nodeId": "node-66",
+      "source": {
+        "from": 303,
+        "to": 335,
+        "startLine": 33,
+        "startColumn": 1,
+        "endLine": 33,
+        "endColumn": 33,
+        "precision": "exact"
+      },
+      "kind": "local-path",
+      "syntax": "markdown-inline",
+      "originalRef": "assets/示例%20图片.png",
+      "resolvedRef": "assets/示例%20图片.png",
+      "normalizedResolvedRef": "assets/示例 图片.png"
+    },
+    {
+      "referenceKey": "89f871fd4b2794fcb10b7adbd34185775e7541c372c33d2a927e9172ac12743f",
+      "nodeId": "node-67",
+      "source": {
+        "from": 337,
+        "to": 357,
+        "startLine": 35,
+        "startColumn": 1,
+        "endLine": 35,
+        "endColumn": 21,
+        "precision": "exact"
+      },
+      "kind": "local-path",
+      "syntax": "wiki-image",
+      "originalRef": "assets/wiki.png",
+      "resolvedRef": "assets/wiki.png",
+      "normalizedResolvedRef": "assets/wiki.png"
+    }
+  ],
+  "diagnostics": [],
+  "statistics": {
+    "headings": 2,
+    "images": 2,
+    "formulas": 2,
+    "characters": 357
+  }
+}

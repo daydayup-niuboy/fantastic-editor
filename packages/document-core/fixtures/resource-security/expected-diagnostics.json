@@ -1,0 +1,106 @@
+[
+  {
+    "id": "diagnostic-675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed-REMOTE_IMAGE_BLOCKED",
+    "code": "REMOTE_IMAGE_BLOCKED",
+    "severity": "blocking",
+    "category": "security",
+    "message": "资源引用已被 P0 安全策略阻止（remote-http）。",
+    "source": {
+      "from": 8,
+      "to": 44,
+      "startLine": 3,
+      "startColumn": 1,
+      "endLine": 3,
+      "endColumn": 37,
+      "precision": "exact"
+    },
+    "nodeId": "node-10",
+    "referenceKey": "675995dfe5b3fc05bde6da736ab01cbd5819586f0180a067f21ab68b0bdc23ed",
+    "suggestedActions": [
+      "改用工作区内经过授权的本地图片路径。"
+    ]
+  },
+  {
+    "id": "diagnostic-29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d-DATA_URI_SOURCE_BLOCKED",
+    "code": "DATA_URI_SOURCE_BLOCKED",
+    "severity": "blocking",
+    "category": "security",
+    "message": "资源引用已被 P0 安全策略阻止（data-uri）。",
+    "source": {
+      "from": 46,
+      "to": 99,
+      "startLine": 5,
+      "startColumn": 1,
+      "endLine": 5,
+      "endColumn": 54,
+      "precision": "exact"
+    },
+    "nodeId": "node-11",
+    "referenceKey": "29a24ee2c3dce0f444b8cca397c3b6705a33585d2adc925f1b8612e74339c66d",
+    "suggestedActions": [
+      "改用工作区内经过授权的本地图片路径。"
+    ]
+  },
+  {
+    "id": "diagnostic-d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04-DRIVE_RELATIVE_PATH_BLOCKED",
+    "code": "DRIVE_RELATIVE_PATH_BLOCKED",
+    "severity": "blocking",
+    "category": "security",
+    "message": "资源引用已被 P0 安全策略阻止（local-path）。",
+    "source": {
+      "from": 101,
+      "to": 128,
+      "startLine": 7,
+      "startColumn": 1,
+      "endLine": 7,
+      "endColumn": 28,
+      "precision": "exact"
+    },
+    "nodeId": "node-12",
+    "referenceKey": "d40cbf9639d92778bda8e66a6dbcfe120bf383d3f8a7af50fb66e91bc42c2a04",
+    "suggestedActions": [
+      "改用工作区内经过授权的本地图片路径。"
+    ]
+  },
+  {
+    "id": "diagnostic-586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb-INVALID_PERCENT_ENCODING",
+    "code": "INVALID_PERCENT_ENCODING",
+    "severity": "blocking",
+    "category": "security",
+    "message": "资源引用已被 P0 安全策略阻止（local-path）。",
+    "source": {
+      "from": 130,
+      "to": 156,
+      "startLine": 9,
+      "startColumn": 1,
+      "endLine": 9,
+      "endColumn": 27,
+      "precision": "exact"
+    },
+    "nodeId": "node-13",
+    "referenceKey": "586ee44404db42562d4dfa62eaed8e02cfebcab76f698c86bd9f605786fdf0cb",
+    "suggestedActions": [
+      "改用工作区内经过授权的本地图片路径。"
+    ]
+  },
+  {
+    "id": "diagnostic-node-14-RAW_HTML_IMAGE_BLOCKED",
+    "code": "RAW_HTML_IMAGE_BLOCKED",
+    "severity": "blocking",
+    "category": "security",
+    "message": "P0 不支持原始 HTML 图片，请改用 Markdown 图片语法。",
+    "source": {
+      "from": 158,
+      "to": 200,
+      "startLine": 11,
+      "startColumn": 1,
+      "endLine": 11,
+      "endColumn": 43,
+      "precision": "exact"
+    },
+    "nodeId": "node-14",
+    "suggestedActions": [
+      "将 img 标签改写为 Markdown 图片语法。"
+    ]
+  }
+]
