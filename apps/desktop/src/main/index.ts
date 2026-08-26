@@ -546,6 +546,8 @@ function createMainWindow(): BrowserWindow {
           };
           check();
         })`, true);
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 150));
         const after = await window.webContents.executeJavaScript(`({
           tabText: document.querySelector(\".document-tab.active .tab-select span\")?.textContent ?? \"\",
           tabCount: document.querySelectorAll(\".document-tab\").length,
@@ -573,7 +575,7 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 120));
-        await window.webContents.insertText("# Mermaid smoke\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
+        await window.webContents.insertText("# Mermaid smoke\n\nOriginal paragraph\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
         await new Promise((resolve) => setTimeout(resolve, 250));
         const mermaidRendered = await window.webContents.executeJavaScript(`new Promise((resolve) => {
           const deadline = Date.now() + 8000;
@@ -612,6 +614,71 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 150));
         const selectionBoxCount = await window.webContents.executeJavaScript(`Number(document.querySelector(".preview-selection-layer")?.getAttribute("data-box-count") ?? 0)`, true) as number;
+        const wysiwyg = await window.webContents.executeJavaScript(`(async () => {
+          const switcher = document.querySelector("[data-testid=editor-mode-switch]");
+          const sourceButton = switcher?.querySelector("button:first-child");
+          const visualButton = switcher?.querySelector("button:last-child");
+          if (!(sourceButton instanceof HTMLButtonElement) || !(visualButton instanceof HTMLButtonElement)) return { exists: false };
+          visualButton.click();
+          const waitFor = async (predicate, timeout = 8000) => {
+            const deadline = Date.now() + timeout;
+            while (Date.now() < deadline) {
+              if (predicate()) return true;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            return false;
+          };
+          const ready = await waitFor(() => Boolean(document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content p[data-source-from]")) && Boolean(document.querySelector(".wysiwyg-editor-layer.active .mermaid-diagram svg")));
+          const paragraph = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content p[data-source-from]");
+          if (!(paragraph instanceof HTMLElement)) return { exists: true, ready, edited: false };
+          paragraph.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+          paragraph.textContent = "可视编辑已写回";
+          paragraph.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+          paragraph.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+          const edited = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
+          const afterEdit = document.querySelector(".cm-content")?.textContent ?? "";
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }));
+          const undone = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("Original paragraph"));
+          const afterUndo = document.querySelector(".cm-content")?.textContent ?? "";
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "y", ctrlKey: true, bubbles: true, cancelable: true }));
+          const redone = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
+          const afterRedo = document.querySelector(".cm-content")?.textContent ?? "";
+          const diagramReady = await waitFor(() => {
+            const content = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content");
+            const candidate = content?.querySelector(".mermaid-diagram");
+            return Boolean(candidate && content) && Number(candidate?.getAttribute("data-source-to")) <= Number(content?.getAttribute("data-document-length"));
+          });
+          const diagram = diagramReady ? document.querySelector(".wysiwyg-editor-layer.active .mermaid-diagram") : null;
+          diagram?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+          const sourceAreaReady = await waitFor(() => document.querySelector(".wysiwyg-source-card textarea") instanceof HTMLTextAreaElement);
+          const sourceArea = document.querySelector(".wysiwyg-source-card textarea");
+          if (sourceArea instanceof HTMLTextAreaElement) {
+            const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+            setter?.call(sourceArea, sourceArea.value.replace("A --> B", "A --> C"));
+            sourceArea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+            document.querySelector(".wysiwyg-source-card > div button:first-child")?.click();
+          }
+          const sourceCardApplied = sourceAreaReady && await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("A --> C"));
+          document.querySelector(".wysiwyg-source-card > div button:last-child")?.click();
+          sourceButton.click();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return {
+            exists: true,
+            ready,
+            edited,
+            undone,
+            redone,
+            sourceCardApplied,
+            sourceAreaReady,
+            sourceAreaValue: sourceArea instanceof HTMLTextAreaElement ? sourceArea.value : "",
+            sourceCardLabel: document.querySelector(".wysiwyg-source-card")?.getAttribute("aria-label") ?? "",
+            visualWasActive: visualButton.getAttribute("aria-pressed") === "false",
+            sourceRestored: sourceButton.getAttribute("aria-pressed") === "true" && Boolean(document.querySelector(".source-editor-layer.active")) && Boolean(document.querySelector(".split-handle")),
+            afterEdit,
+            afterUndo,
+            afterRedo
+          };
+        })()`, true) as { exists: boolean; ready?: boolean; edited?: boolean; undone?: boolean; redone?: boolean; sourceCardApplied?: boolean; visualWasActive?: boolean; sourceRestored?: boolean; afterEdit?: string; afterUndo?: string; afterRedo?: string };
         const imageBridge = await window.webContents.executeJavaScript(`(async () => {
           const binary = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII="), character => character.charCodeAt(0));
           const file = new File([binary], "smoke.png", { type: "image/png" });
@@ -622,6 +689,8 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const themeAfter = await window.webContents.executeJavaScript(`document.querySelector(\".app-shell\")?.classList.contains(\"theme-dark\") ?? false`, true) as boolean;
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 300));
         window.show();
         await new Promise((resolve) => setTimeout(resolve, 250));
         const image = await window.webContents.capturePage();
@@ -629,8 +698,8 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
-        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText.includes("未命名文档") && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && fontControl.exists && fontControl.applied && fontApplied && mermaidRendered && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
-        console.log(JSON.stringify({ uiReady, before, drag, after, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
+        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText.includes("未命名文档") && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && fontControl.exists && fontControl.applied && fontApplied && mermaidRendered && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        console.log(JSON.stringify({ uiReady, before, drag, after, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
         app.exit(valid ? 0 : 1);
       })().catch((error: unknown) => { console.error(error); app.exit(1); });
     });

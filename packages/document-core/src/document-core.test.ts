@@ -74,6 +74,8 @@ describe("ParsedDocument", () => {
     expect(html).toMatch(/<h1[^>]*data-source-from="0"[^>]*data-source-kind="heading"/);
     expect(html).toMatch(/<p[^>]*data-source-kind="paragraph"/);
     expect(html).toContain('data-source-kind="formula-block"');
+    const fenced = renderPreviewHtml("```mermaid\ngraph TD\n  A --> B\n```\n");
+    expect(fenced).toMatch(/<pre[^>]*data-source-from="0"[^>]*data-source-kind="code-block"/);
   });
 
   it("renders wiki images as keyed placeholders and never leaks data URI payloads", async () => {

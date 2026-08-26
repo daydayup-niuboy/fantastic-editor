@@ -1,7 +1,7 @@
 # fantastic-editor 统一文档模型规格
 
 > 规格标识：fantastic-editor UDM  
-> 版本：0.8-draft
+> 版本：0.9-draft
 > 状态：待阶段 0 技术验证后冻结  
 > 关联文档：[fantastic-editor 开发项目书](fantastic-editor-开发项目书.md)
 
@@ -30,6 +30,39 @@
 
 - ON/OFF 是 `syncScrollEnabled` 的可视化文本，`aria-pressed` 仍是可访问性真值。按钮文案、样式或图标不得成为同步逻辑的数据源。
 
+## 源代码 / 所见即所得双编辑模式补充规格（首轮已实现）
+
+> 首轮实现已使用 `WysiwygTextChange { from, to, insert, expectedText }` 做快照校验和最小文本补丁，并把事务提交到常驻 CodeMirror 历史。复杂块暂用 SourceRange 源码卡片，后续结构化命令仍必须遵守本节模型。
+
+### 唯一数据源与视图
+
+- `editorText` 是文件会话内唯一可变正文；CodeMirror 和 WysiwygEditorView 都是它的编辑视图。WysiwygEditorView、DOM、React state 和 ParsedDocument 不得成为第二保存源。
+- WysiwygEditorView 由当前 ParsedDocument、ResolutionSnapshot 和预览派生清单投影生成。图片、KaTeX DOM、Mermaid SVG 和选区边框均为短生命周期表现层，不能反向序列化。
+- `editorMode` 固定为 `source | wysiwyg`，属于 Renderer 本机 UI 状态，不进入 ParsedDocument、PreviewSession、输出 IPC、恢复稿或 Markdown。
+
+### WysiwygEditTransaction
+
+一次所见即所得操作必须形成一个结构化事务，至少包含：
+
+- `transactionId`
+- `documentId`
+- `baseSourceHash`
+- `intent`
+- 目标 `SourceRange` 或可映射文本选择
+- 有界操作载荷
+- `createdAt`
+
+允许的首轮 intent 包括 `replaceText`、`setInlineMark`、`setHeadingLevel`、`setLink`、`toggleTask`、`insertBlock`、`deleteBlock`、`replaceImage`、`editImageAlt`、`editFormulaSource`、`editMermaidSource` 和 `editTableCellText`。结构化事务不是 IPC 文件写入请求，也不得携带 DOM、HTML、绝对路径或资源二进制。
+
+主编辑事务管理器必须校验 documentId 与 baseSourceHash，基于 SourceRange 生成最小 `TextChangeSet`，原子更新 canonical editorText，再触发正常解析和资源解析。旧快照事务只能重新定位后重试或明确拒绝；禁止对旧偏移盲写。
+
+### 历史、选择和失败语义
+
+- CodeMirror transaction 与 WysiwygEditTransaction 进入同一文档级撤销/重做历史；一次用户意图只产生一个历史项。模式切换、重新解析和派生资源刷新不进入历史。
+- 选择映射使用 UTF-16 文本偏移和 SourceRange，不使用跨解析不稳定的 nodeId。切换前必须结束 IME composition；无法精确映射时折叠到最近安全块边界并给出非阻塞提示。
+- 解析失败时保留 canonical editorText 和上一份可识别视图，阻止会覆盖不确定范围的所见即所得命令，并允许立即切回源代码模式修复。
+- 不支持安全可视编辑的语法必须保留原文字节范围并显示只读占位；不得通过 HTML→Markdown 转换静默改写。
+
 ## 一、目的
 
 统一文档模型（Unified Document Model，UDM）是 Markdown 解析、资源解析以及预览/导出组合视图的一组分层、与输出格式无关的结构化表示；ParsedDocument 是其中唯一的纯语法快照。
@@ -56,7 +89,8 @@
 ### 1. 两条独立数据路径
 
     编辑与保存路径
-    CodeMirror 原始文本缓冲区
+    canonical editorText 缓冲区
+      ↑ CodeMirror transaction / WysiwygEditTransaction
             ↓
     编码和换行策略
             ↓
@@ -65,7 +99,7 @@
     Markdown 文件
 
     预览与导出路径
-    CodeMirror 原始文本快照
+    canonical editorText 不可变快照
             ↓
     document-core
             ↓
@@ -79,6 +113,7 @@
 
 - 禁止从 ParsedDocument、ResolutionSnapshot 或任何派生清单重新生成 Markdown 后覆盖用户文件。
 - 禁止使用美化、格式化或 AST 序列化结果替代原始缓冲区。
+- 禁止把 WysiwygEditorView 的 DOM、innerHTML 或浏览器编辑结果整体转换为 Markdown 后保存。
 - 禁止因为预览解析失败而修改原文。
 - 禁止导出适配器反向修改编辑缓冲区。
 
@@ -166,7 +201,7 @@ document-core 是唯一 Markdown 语义实现。它包含：
 - 诊断生成
 - UDM 构建
 
-CodeMirror 的语法树仅用于编辑器高亮和交互，不能决定预览或导出语义。
+CodeMirror 的语法树仅用于源代码模式高亮和交互；WysiwygEditorView 的 DOM 仅用于可视交互。两者都不能决定预览或导出语义。
 
 ### 2. parserProfile
 
@@ -211,7 +246,7 @@ P0 明确设置 breaks 为 false，采用 CommonMark 单换行语义。编辑器
     ├── endLine：结束行，1 开始
     └── endColumn：结束列，1 开始
 
-from 和 to 使用 canonical editorText 的 UTF-16 code unit 偏移。editorText 已移除 BOM并将换行统一表示为 LF，因此与 CodeMirror 内部文档位置保持一致。磁盘 CRLF 和 BOM 通过文件会话元数据恢复，不参与 SourceRange。
+from 和 to 使用 canonical editorText 的 UTF-16 code unit 偏移。editorText 已移除 BOM并将换行统一表示为 LF，因此可与 CodeMirror 位置和 WysiwygEditorView 选择统一映射。磁盘 CRLF 和 BOM 通过文件会话元数据恢复，不参与 SourceRange。
 
 ### 2. 位置要求
 
@@ -243,7 +278,7 @@ from 和 to 使用 canonical editorText 的 UTF-16 code unit 偏移。editorText
 - 内部实时预览 HTML 可以包含 data-source-from、data-source-to、data-source-kind 等定位属性；这些属性不是目标定义输出，必须与 PDF、DOCX、离线 HTML和公众号 HTML 的渲染路径隔离。
 - PreviewSyncMap 必须与当前 documentId、sourceHash、parserProfile 和 taskSequence 匹配。任一身份过期时立即停止同步并清除选区提示。
 - 滚动定位使用块级锚点和相邻锚点区间插值，不把整页 scrollTop 百分比当作源码语义位置。
-- P0 只定义编辑区到预览区的单向同步。预览主动滚动不产生 CodeMirror transaction，也不修改选择区。
+- 源代码模式只定义编辑区到预览区的单向同步。预览主动滚动不产生 CodeMirror transaction，也不修改选择区；所见即所得模式默认隐藏重复预览并暂停同步定位，但保留用户的 ON/OFF 偏好。
 - P0 选区提示以非空主选区为输入，选择与可见块级 SourceRange 相交的最小非重叠元素；图片等精确可视锚点只在选区完全落入其 SourceRange 时优先。
 - SelectionOverlay 是 pointer-events: none 的纯 UI 层，不属于预览正文 DOM 语义，不进入复制、保存、导出或公众号发布内容。
 - 只有折叠光标时 SelectionOverlay 为空。切换文档、关闭同步、隐藏预览或身份失效时必须清空。
@@ -489,6 +524,7 @@ id 只保证在同一次解析中唯一。P0 不要求在两次解析之间保�
   - language
   - meta
   - value
+  - `language` 大小写归一后为 `mermaid` 时，节点仍是 codeBlock；预览适配器生成临时 SVG，输出适配器使用经校验的 PNG 派生资源
 - table
   - alignments
 - tableHead
@@ -707,7 +743,7 @@ Renderer 维护：
     └── createdAt
 
 - placementMode 为 `drop-coordinates` 或 `current-selection`。
-- anchorFrom/anchorTo 是 CodeMirror 编辑事务中的临时锚点，必须通过后续 ChangeDesc 映射；它不是 SourceRange，不进入 IPC、恢复稿或 ParsedDocument。
+- anchorFrom/anchorTo 是主编辑事务中的临时文本锚点；源代码模式通过 CodeMirror ChangeDesc 映射，所见即所得模式通过共享 TextChangeSet 映射。它不是 SourceRange，不进入 IPC、恢复稿或 ParsedDocument。
 - 拖放使用 `EditorView.posAtCoords` 得到初始位置；按钮入口使用当前选择区。多图共享一个起始锚点并按 DataTransfer/对话框顺序展开。
 - 根窗口拖放处理器必须先分类：支持图片且落点位于 EditorView 时进入图片导入；Markdown 文件进入打开文档流程；图片落在编辑区外时不修改 editorText；Markdown 与图片混合批次固定拒绝并提示分开操作。
 
@@ -744,7 +780,7 @@ Renderer 维护：
 - relativeRef 固定为从当前 Markdown 到同级 `assets/` 中文件的正斜杠相对引用，不含绝对路径、file URL 或应用协议。
 - 默认文件名由安全化原文件名、contentHash 短后缀和经文件签名确认的扩展名组成；禁止覆盖不同内容的已有文件。
 - 主进程先在目标目录写临时文件并完成刷新/关闭，再以经过 Windows 验证的安全方式落位。相同 contentHash 可以返回已有 relativeRef。
-- 写入成功后更新资源索引并递增 workspaceRevision；回执带新 revision。Renderer 只有在 documentId/sessionId 仍匹配时才接受回执，然后以一次 CodeMirror transaction 插入 Markdown 图片语法。
+- 写入成功后更新资源索引并递增 workspaceRevision；回执带新 revision。Renderer 只有在 documentId/sessionId 仍匹配时才接受回执，然后通过主编辑事务管理器以一次共享事务插入 Markdown 图片语法。
 - alt 默认取清洗后的文件名，不含扩展名；用户选中的文字可以作为 alt。生成语法必须正确转义 Markdown 方括号、圆括号、反斜杠和空白路径。
 - 导入失败不修改 editorText。导入已落盘但锚点失效或插入失败时，资源登记为未引用候选；不得自动删除，因为相同文件可能已被其他引用复用。
 - 用户撤销插入只撤销 editorText transaction，不删除资源。资源清理由独立命令扫描当前文档/工作区引用并再次确认。
@@ -1022,7 +1058,7 @@ OutputResult.status 固定枚举：
 
 拥有：
 
-- CodeMirror 文本
+- canonical editorText、共享编辑事务历史和当前 editorMode
 - 当前 sourceHash
 - UI 状态
 - 预览结果
@@ -1153,7 +1189,7 @@ ImportImageRequest.dropped-file.bytes 是唯一允许携带用户本次明确拖
 - 超大文档达到软限制时发出性能警告。
 - 达到硬限制时阻止实时预览，但仍允许用户保存原文。
 - 具体软硬限制在阶段 0 基准测试后冻结。
-- CodeMirror 滚动监听使用 passive listener，并通过 requestAnimationFrame 合并到每帧至多一次预览定位；不得为每个 scroll 事件提交 React state。
+- 源代码模式的 CodeMirror 滚动监听使用 passive listener，并通过 requestAnimationFrame 合并到每帧至多一次预览定位；不得为每个 scroll 事件提交 React state。所见即所得模式默认隐藏重复预览，不运行同步滚动定位。
 - PreviewSyncMap 的 DOM 测量在预览 HTML、视图宽度或内容尺寸变化后更新；图片、公式和派生资源的布局变化由 ResizeObserver 触发，不为像素重测重新解析文档。
 - 同步滚动使用即时 scrollTop 定位，不在连续滚动期间堆叠 smooth-scroll 动画。
 
@@ -1183,7 +1219,7 @@ UDM 使用语义化版本思想。1.0 正式冻结前的 0.x-draft 允许破坏�
 - expected.parsed-document.json
 - expected-diagnostics.json
 
-固定用例必须分别覆盖 ATX 标题与 Setext 标题。
+固定用例必须分别覆盖 ATX 标题与 Setext 标题，以及 Mermaid 有效语法、无效语法、大小写语言标识和 SourceRange 保持。
 
 ### 2. 确定性测试
 
@@ -1225,6 +1261,14 @@ UDM 使用语义化版本思想。1.0 正式冻结前的 0.x-draft 允许破坏�
 ### 5. 保存隔离测试
 
 构造包含不同列表标记、尾随空格、围栏长度、UTF-8 BOM、LF 和 CRLF 的 Markdown，完成预览后直接保存，重新读取并转换为 canonical editorText 后必须与编辑缓冲区逐字符一致。
+
+### 6. 双编辑模式测试
+
+- 无编辑往返切换 source / wysiwyg 后 editorText、sourceHash、BOM、编码和 lineSeparator 不变。
+- 每个 WysiwygEditTransaction 只修改预期 SourceRange，重解析后意图仍成立，未触及语法保持逐字符一致。
+- 跨模式撤销和重做使用同一历史，IME composition、emoji、组合字符和迟到解析结果不能造成重复提交或偏移写入。
+- 图片、公式和 Mermaid 的可视节点只提交相应 Markdown 源码事务；预览 DOM、SVG、PNG 和临时句柄不得进入 editorText。
+- 不支持语法保持只读并可切回源代码模式；解析失败不得损坏或替换原文。
 
 混合换行文件必须先经过用户确认的统一流程；不能以普通往返样例宣称字节级无损。
 

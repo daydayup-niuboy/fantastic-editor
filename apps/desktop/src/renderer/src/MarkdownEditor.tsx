@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type DragEvent } from "react";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
@@ -7,6 +7,7 @@ import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, 
 import type { ImportedAssetReceipt } from "@fantastic-editor/shared";
 import { createImageMarkdown, mapImageInsertionAnchor, type ImageInsertionAnchor } from "./image-insertion";
 import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync";
+import { applyWysiwygTextChange, type WysiwygTextChange } from "./wysiwyg-transactions";
 
 interface MarkdownEditorProps {
   value: string;
@@ -21,6 +22,9 @@ export interface MarkdownEditorHandle {
   createInsertionAnchor(coordinates?: { x: number; y: number }): string | null;
   discardInsertionAnchor(anchorId: string): void;
   insertImages(anchorId: string, receipts: readonly ImportedAssetReceipt[]): boolean;
+  applyTextChange(change: WysiwygTextChange): string | null;
+  undo(): boolean;
+  redo(): boolean;
   focus(): void;
 }
 
@@ -73,7 +77,31 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       view.focus();
       return true;
     },
-    focus() { viewRef.current?.focus(); },
+    applyTextChange(change) {
+      const view = viewRef.current;
+      if (!view) return null;
+      const currentText = view.state.doc.toString();
+      const next = applyWysiwygTextChange(currentText, change);
+      if (next === null) return null;
+      view.dispatch({
+        changes: { from: change.from, to: change.to, insert: change.insert },
+        selection: { anchor: change.from + change.insert.length },
+        userEvent: "input.wysiwyg",
+      });
+      return next;
+    },
+    undo() {
+      const view = viewRef.current;
+      return view ? undo(view) : false;
+    },
+    redo() {
+      const view = viewRef.current;
+      return view ? redo(view) : false;
+    },
+    focus() {
+      viewRef.current?.requestMeasure();
+      viewRef.current?.focus();
+    },
   }));
 
   useEffect(() => {

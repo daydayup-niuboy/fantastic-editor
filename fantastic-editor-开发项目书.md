@@ -1,7 +1,7 @@
 # fantastic-editor 开发项目书
 
 > 文档状态：待冻结  
-> 当前版本：1.0-draft
+> 当前版本：1.1-draft
 > 冻结条件：完成“公众号图片策略”技术验证，并确认本文第二章列出的全部规格决策。
 
 
@@ -26,6 +26,39 @@
 - 同步滚动按钮必须直接显示 `同步滚动 ON` 或 `同步滚动 OFF`，并继续提供 `aria-pressed`、悬停说明和本机持久化。
 - ON 表示编辑区驱动预览区及选区提示；OFF 表示两个区域独立滚动并清除临时提示。显示文字不得取代布尔状态作为业务数据源。
 
+## 源代码 / 所见即所得双编辑模式（首轮已实现）
+
+> 2026-08-26 首轮实现：标题与普通段落支持直接编辑及粗体、斜体、删除线、链接和标题级别命令；图片、公式、Mermaid、列表、表格、引用和代码块通过绑定精确 SourceRange 的源码卡片编辑。CodeMirror 继续常驻并持有 canonical `editorText` 与共享撤销历史。
+
+### 产品形态
+
+- 编辑区提供“源代码”和“所见即所得”两个明确模式；模式选择属于本机 UI 偏好，不写入 Markdown、ParsedDocument、恢复稿或导出文件。
+- 源代码模式继续使用 CodeMirror，并保留当前分栏预览、同步滚动 ON/OFF 和选区提示。
+- 所见即所得模式以与预览区相同的主题、字体和内容样式显示可编辑文档，默认隐藏重复预览；同步滚动设置保持但不参与该模式，切回源代码模式后恢复原状态。
+- 两种模式不是两份文档。canonical `editorText` 与文件会话元数据始终是唯一保存来源，ParsedDocument 只是不可变语义快照。
+
+### 编辑与写回
+
+- 所见即所得视图只能通过结构化编辑命令修改 canonical `editorText`，不得把可编辑 DOM、innerHTML 或整篇 HTML 反向序列化为 Markdown。
+- 每个命令必须绑定 `documentId`、提交前 `sourceHash`、目标 `SourceRange` 和用户意图；主编辑事务管理器校验快照后生成最小文本补丁、提交、重新解析并更新视图。快照过期时必须重新定位或拒绝，不能写到旧偏移。
+- 源代码输入和所见即所得命令共用同一撤销/重做历史。跨模式切换、解析刷新和纯预览渲染不产生历史项；一次用户操作只产生一个可撤销事务。
+- 模式切换前必须提交输入法组合文本和当前编辑事务；切换本身不得改变 `editorText`。光标、主选区和滚动位置以 SourceRange/文本偏移尽可能映射，不能依赖跨解析不稳定的 `nodeId`。
+- 保存直接读取当前 canonical `editorText`，不得等待所见即所得 DOM、ParsedDocument 或资源派生结果完成。
+
+### 首轮支持范围
+
+- 直接编辑标题、段落、粗体、斜体、删除线、链接、引用、普通列表、任务列表和代码块；表格首轮保证预览一致，并至少提供单元格文本编辑，结构调整可引导切回源码模式。
+- 图片显示为真实预览，支持拖入、按钮插入、替换、删除和 alt 文本编辑；所有操作继续走正式资源导入、授权和 Markdown 图片语法管线。
+- 公式显示 KaTeX 结果，选中后通过受控源码编辑器修改 LaTeX；Mermaid 显示流程图，选中后通过受控源码编辑器修改 fenced code block 内容。渲染结果本身不得成为保存来源。
+- 原始 HTML、普通 Wiki 链、Callout、脚注及其他未冻结语法显示为保留原文的只读块，并提供“在源代码模式中编辑”；不得静默删除、降级或重排。
+
+### 验收基线
+
+- 在两种模式间反复切换但不编辑时，canonical `editorText` 必须逐字符不变。
+- 所见即所得修改一个节点时，未触及范围内的列表标记、围栏长度、空白、换行和其他 Markdown 写法保持不变。
+- 中文输入法、emoji、组合字符、撤销/重做、粘贴、多选区降级、解析失败和外部文件修改都有固定测试。
+- 同一 sourceHash 从任一模式发起预览、PDF、DOCX、离线 HTML 和公众号输出时，语义内容与诊断必须一致。
+
 ## 一、项目概述
 
 ### 1. 项目名称
@@ -37,7 +70,7 @@
 
 fantastic-editor 是一款面向 Windows 的本地 Markdown 编辑与内容发布工具。
 
-软件以用户的 Markdown 原文为唯一编辑源，能够打开、编辑和保存包含本地图片、数学公式、代码块、表格等内容的文档，并提供实时预览。用户可以把图片拖到编辑区的指定位置，或通过“插入图片”按钮选择文件；应用把图片导入文档资源目录、插入相对 Markdown 图片引用，并在预览区同步显示。
+软件以用户的 Markdown 原文为唯一编辑源，提供源代码和所见即所得两种编辑模式，能够打开、编辑和保存包含本地图片、数学公式、Mermaid、代码块、表格等内容的文档，并提供实时预览。用户可以把图片拖到编辑区的指定位置，或通过“插入图片”按钮选择文件；应用把图片导入文档资源目录、插入相对 Markdown 图片引用，并在预览区或所见即所得视图同步显示。
 
 完成后的文章可以导出为 PDF、Word 和离线 HTML，也可以使用微信公众号主题进行排版、兼容性检查和富文本复制。公众号接口授权、素材上传、草稿创建和直接发布属于后续独立扩展，不阻塞首版交付。
 
@@ -55,7 +88,6 @@ fantastic-editor 是一款面向 Windows 的本地 Markdown 编辑与内容发�
 - 在线文章数据库
 - 公众号接口授权和直接发布
 - 完整 Obsidian 语法兼容
-- Mermaid
 - 多标签页
 - 插件系统
 - macOS 和 Linux 版本
@@ -110,7 +142,7 @@ fantastic-editor 是一款面向 Windows 的本地 Markdown 编辑与内容发�
 
 ### 决策 4：保存保真
 
-保存只写入 CodeMirror 的原始文本缓冲区。
+保存只写入 canonical `editorText` 缓冲区。源代码模式的 CodeMirror 事务和所见即所得模式的结构化命令只能通过同一主编辑事务管理器更新该缓冲区。
 
 统一文档模型只用于预览、诊断和导出，任何情况下都不得通过文档模型重新序列化 Markdown 并覆盖用户文件。
 
@@ -177,14 +209,14 @@ P0 文件会话必须独立保存以下元数据：
 
 ### 决策 10：图片导入、插入位置和可移植性
 
-- P0 同时提供两种入口：把图片文件拖到 CodeMirror 编辑区指定位置，以及点击“插入图片”后选择文件。
+- P0 同时提供两种入口：把图片文件拖到源代码或所见即所得编辑区的指定位置，以及点击“插入图片”后选择文件。
 - 拖放路由同时按落点和文件类型判断：支持图片落在编辑区时执行插入；`.md`/`.markdown` 落在窗口时执行打开。图片落在编辑区之外不隐式修改文档；Markdown 与图片混合拖入时整批拒绝并提示分开操作，避免同时打开文档和写资源。
-- 拖入编辑区时使用 CodeMirror `posAtCoords` 计算插入位置；按钮插入使用当前选择区或光标位置。异步导入期间，插入锚点必须随编辑事务映射，不能因为用户继续输入而落到旧偏移。
+- 源代码模式拖入时使用 CodeMirror `posAtCoords` 计算插入位置；所见即所得模式把命中块和浏览器选择映射为 canonical editorText 偏移。按钮插入使用当前选择区或光标位置。异步导入期间，插入锚点必须随共享编辑事务映射，不能因为用户继续输入或切换模式而落到旧偏移。
 - 已保存文档的默认资源目录固定为 Markdown 同级的 `assets/`。目标文件名使用清洗后的原文件名与内容哈希短后缀，禁止静默覆盖；相同内容可以复用已有资源。
 - 未命名文档第一次导入图片前必须先完成“另存为”，不使用退出后会失效的临时地址，也不把图片二进制塞入 Markdown data URI。
 - 点击选择由主进程文件对话框完成；拖入图片通过专用、一次性的导入 IPC 传递用户明确拖入的文件内容。该 IPC 不是任意路径读取接口。
 - 主进程校验扩展名、文件签名、MIME、单图大小、文档身份和工作区授权后，在 `assets/` 内使用临时文件加安全替换完成写入，并只向 Renderer 返回正斜杠相对引用、contentHash 和非敏感元数据。
-- 导入成功后，Renderer 以单个 CodeMirror transaction 插入 `![alt](./assets/name.ext)`；多图按拖入顺序插入，默认以空行分隔。撤销只撤销 Markdown 编辑，不自动删除可能已被其他位置引用的资源文件。
+- 导入成功后，Renderer 通过主编辑事务管理器以一个事务插入 `![alt](./assets/name.ext)`；源代码和所见即所得模式共用该路径。多图按拖入顺序插入，默认以空行分隔。撤销只撤销 Markdown 编辑，不自动删除可能已被其他位置引用的资源文件。
 - 资源落盘后更新工作区资源索引和 workspaceRevision，旧 ResolutionSnapshot 失效；新解析继续走标准 ResourceReference、ResolutionSnapshot 和 PreviewSession 管线，不建立图片导入专用预览旁路。
 - 导入图片与手写相对图片在解析、预览、PDF、DOCX、HTML 和公众号输出中语义完全相同。详细模型契约见 [统一文档模型规格](fantastic-editor-统一文档模型规格.md)。
 ## 三、核心工作流程
@@ -236,6 +268,7 @@ P0 支持：
 - GFM 风格表格
 - 分隔线和换行
 - KaTeX 行内公式和块级公式
+- Mermaid fenced code block；语法层保持 codeBlock，预览和输出按已冻结派生资源规则特化
 - 简单双链图片：![[path/image.png]]
 
 P0 不支持或不保证：
@@ -245,7 +278,6 @@ P0 不支持或不保证：
 - ![[image.png|300]] 等尺寸别名
 - Obsidian Callout
 - 脚注
-- Mermaid
 - 任意 Obsidian 插件语法
 - 未经安全清洗的原始 HTML
 - 默认加载远程图片
@@ -363,10 +395,10 @@ P0 对清洗后的原始 HTML 中的 img 标签采取阻止策略，并生成诊
 3. 点击入口由主进程显示图片选择对话框；拖放入口只接收用户本次明确拖入的图片内容和清洗后的显示名。
 4. 主进程完成格式、文件签名、容量、目标目录和会话身份校验，在 Markdown 同级 `assets/` 中安全写入或按 contentHash 复用已有文件。
 5. 主进程返回 `ImportedAssetReceipt`，其中只包含 importRequestId、documentId、sessionId、workspaceRevision、relativeRef、displayName、contentHash、mimeType、byteLength 和 reusedExisting，不返回绝对路径。
-6. Renderer 校验回执仍属于当前文档，把 `![alt](relativeRef)` 作为一次 CodeMirror transaction 插到已映射锚点；随后触发正常解析和资源解析，预览不使用临时 blob、file URL 或 data URI。
+6. Renderer 校验回执仍属于当前文档，通过主编辑事务管理器把 `![alt](relativeRef)` 作为一次共享事务插到已映射锚点；随后触发正常解析和资源解析，预览及所见即所得视图不使用临时 blob、file URL 或 data URI。
 7. 任一步失败均保留原 Markdown；已落盘但未插入的文件登记为未引用资源，只有经过用户确认的资源清理功能才能删除。
 
-- CodeMirror 保存当前编辑缓冲区；BOM、编码和 lineSeparator 由文件会话元数据管理。
+- canonical `editorText` 保存当前编辑缓冲区；CodeMirror 和所见即所得视图只提交事务，BOM、编码和 lineSeparator 由文件会话元数据管理。
 - 键盘输入、粘贴、拖入文本和程序化插入在进入编辑事务前统一把 CRLF 和单独 CR 转成 LF。
 - 文档模型不参与 Markdown 回写。
 - 文件指纹结构包含 byteLength、mtimeNs、ctimeNs，以及平台可获得时的 fileId；读取内容后以 contentHash 作为最终内容身份。
@@ -440,7 +472,7 @@ P0 对清洗后的原始 HTML 中的 img 标签采取阻止策略，并生成诊
 - 正文、标题、列表和表格保持可编辑结构。
 - 图片嵌入文件，不引用本地绝对路径。
 - 数学公式首版允许以清晰图片或兼容对象嵌入，不承诺 Word 原生可编辑公式。
-- P0 不包含 Mermaid，因此 Word 验收不出现 Mermaid 或“图表”承诺。
+- Mermaid 代码块必须由隔离 Chromium 渲染器转换为 PNG 后嵌入 DOCX；Word 不执行 Mermaid 脚本，也不依赖网络或应用临时地址。
 - Word 库在第一阶段通过中文、表格、代码、图片和公式样例后确定。
 
 ### 7. 离线 HTML 导出
@@ -494,7 +526,7 @@ P0 不包含标题、作者、摘要、封面和 Front Matter 发布映射，这
 
 ### 1. 数据原则
 
-- 编辑源：CodeMirror 文本缓冲区加文件会话元数据。
+- 编辑源：canonical `editorText` 缓冲区加文件会话元数据；CodeMirror 和所见即所得视图只是两个编辑入口。
 - 纯语法解析结果：ParsedDocument。
 - 资源解析结果：绑定 workspaceRevision 的 ResolutionSnapshot。
 - 预览输入：不可变的 PreviewSession，由 ParsedDocument、ResolutionSnapshot 和 PreviewDerivedManifest 组成。
@@ -506,8 +538,8 @@ P0 不包含标题、作者、摘要、封面和 Front Matter 发布映射，这
 ### 2. 进程边界
 
     渲染进程
-    ├── CodeMirror 原始文本缓冲区
-    ├── 用户界面和预览容器
+    ├── canonical editorText 与共享编辑事务/撤销历史
+    ├── CodeMirror 源代码视图、所见即所得视图和预览容器
     ├── 提交 ParseCommitRequest 并取得 parseCommitId
     ├── 发送 ResolveRequest、接收 PreviewDerivedUpdate 并组合 PreviewSession
     └── 不拥有任意文件读写能力
@@ -688,7 +720,8 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 
 - 文件和文件夹打开
 - 最小 Markdown 文件列表
-- CodeMirror 编辑
+- CodeMirror 源代码编辑
+- 所见即所得编辑视图、共享事务历史和源码/可视模式切换
 - 图片拖放、按钮选择、`assets/` 安全导入和光标/坐标插入
 - 导入后标准资源解析与同步预览
 - 资源解析
@@ -731,7 +764,6 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 
 - 多标签页和完整文件树
 - 更多 Markdown 扩展
-- Mermaid
 - 文章元数据和 Front Matter
 - 自定义主题
 - 长图和多文件 HTML
@@ -789,7 +821,7 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 - 目标版本 Microsoft Word 打开时不提示修复。
 - 正文、标题、列表和表格保持可编辑。
 - 图片和公式随 DOCX 文件移动后仍显示。
-- 不包含 Mermaid 验收。
+- Mermaid 流程图以清晰 PNG 嵌入，随 DOCX 文件移动后仍可显示；语法错误、超时或派生资源校验失败不得显示为“完整成功”。
 - 已知版本差异有记录。
 
 ### 6. 离线 HTML
@@ -828,6 +860,7 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 
 - UTF-8、UTF-8 BOM、CRLF、LF、混合换行和非 UTF-8 显式转换样例
 - CodeMirror 打开、编辑、撤销、保存和重新打开的换行往返样例
+- 源代码/所见即所得无编辑切换保真、跨模式撤销重做、中文输入法和最小文本补丁样例
 - 中文、空格、括号和 URL 编码路径
 - 当前目录、子目录、父目录和越权路径
 - 同名图片冲突
@@ -837,7 +870,7 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 - “插入图片”按钮、未命名文档先另存为、取消选择、同名不同内容、相同内容复用和写入失败
 - 导入图片即时预览、撤销只撤销 Markdown 引用，以及方案 B 清单顺序与正文 ImageNode 顺序一致
 - ATX 标题、Setext 标题、任务列表、表格、删除线、围栏代码和复杂公式
-- 不支持的 Wiki 链、Callout、脚注和 Mermaid
+- 不支持的 Wiki 链、Callout 和脚注；另包含 Mermaid 有效流程图、语法错误、数量上限、源码长度上限和导出 PNG 样例
 - 超长文章和大量大图
 - 保存失败、文件占用和外部修改
 - PreviewSession、PDF、DOCX、离线 HTML 和公众号固定输出样例
@@ -870,7 +903,7 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 ## 十三、最终实施原则
 
 1. 先冻结 ParsedDocument Core，再通过阶段 0 实验冻结资源和各输出适配器。
-2. CodeMirror 文本缓冲区与文件会话元数据共同构成保存来源。
+2. canonical `editorText` 缓冲区与文件会话元数据共同构成保存来源；CodeMirror 和所见即所得视图不得形成第二数据源。
 3. ParsedDocument 和 ResolutionSnapshot 是预览、检查和导出的共同语义，不是 Markdown 格式化器。
 4. 跨进程引用使用 referenceKey，资源缓存使用 assetCacheKey 和 contentHash；工作区变化使旧解析结果和句柄失效。
 5. 预览、PDF、Word、HTML 和公众号各有独立适配器。

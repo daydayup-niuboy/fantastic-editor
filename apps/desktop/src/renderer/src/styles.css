@@ -263,6 +263,37 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .theme-dark .editor-host .ͼe { color: #c586c0; }
 .theme-dark .editor-host .ͼf { color: #ce9178; }
 
+.editor-mode-switch { display: inline-flex; align-items: center; padding: 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; text-transform: none; }
+.editor-mode-switch button { height: 19px; padding: 0 7px; color: var(--faint); background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-size: 8px; font-weight: 680; }
+.editor-mode-switch button:hover:not(:disabled) { color: var(--text); }
+.editor-mode-switch button.active { color: var(--accent-strong); background: var(--surface-raised); box-shadow: 0 1px 3px rgba(20,30,40,.12); }
+.editor-mode-switch button:disabled { cursor: wait; opacity: .45; }
+.editor-mode-body { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.source-editor-layer, .wysiwyg-editor-layer { position: absolute; inset: 0; display: none; min-width: 0; min-height: 0; }
+.source-editor-layer.active, .wysiwyg-editor-layer.active { display: block; }
+.source-editor-layer .editor-host, .wysiwyg-editor-layer .wysiwyg-editor { width: 100%; height: 100%; }
+
+.wysiwyg-editor { position: relative; background: var(--preview-bg); }
+.wysiwyg-toolbar { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; gap: 4px; min-height: 38px; padding: 5px 12px; background: color-mix(in srgb, var(--surface-raised) 94%, transparent); border-bottom: 1px solid var(--border); backdrop-filter: blur(8px); }
+.wysiwyg-toolbar button { min-width: 27px; height: 26px; padding: 0 7px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 10px; }
+.wysiwyg-toolbar button:hover { color: var(--accent-strong); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); }
+.wysiwyg-toolbar > span { min-width: 0; margin-left: 7px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.wysiwyg-content { min-height: calc(100% - 38px); padding-top: 30px; outline: none; }
+.wysiwyg-content [data-source-from][data-source-to] { border-radius: 5px; transition: background .12s, box-shadow .12s; }
+.wysiwyg-content [data-source-block="true"]:hover, .wysiwyg-content [data-source-kind="image"]:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 5%, transparent); }
+.wysiwyg-content .wysiwyg-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 58%, transparent), 0 0 0 6px color-mix(in srgb, var(--accent) 7%, transparent); }
+.wysiwyg-content .wysiwyg-direct-edit { min-height: 1.4em; cursor: text; caret-color: var(--accent); outline: none; }
+.wysiwyg-content .wysiwyg-direct-edit::selection, .wysiwyg-content .wysiwyg-direct-edit *::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.wysiwyg-source-card { position: sticky; top: 38px; z-index: 11; display: grid; gap: 7px; width: min(900px, calc(100% - 28px)); margin: 10px auto -1px; padding: 10px; background: var(--surface-raised); border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 9px; box-shadow: var(--shadow); }
+.wysiwyg-source-card header { display: flex; align-items: center; justify-content: space-between; color: var(--text-strong); font-size: 10px; }
+.wysiwyg-source-card header span { color: var(--faint); font-size: 8px; font-weight: 500; }
+.wysiwyg-source-card textarea { width: 100%; min-height: 94px; max-height: 240px; padding: 9px 11px; resize: vertical; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 6px; outline: none; font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; line-height: 1.6; }
+.wysiwyg-source-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent); }
+.wysiwyg-source-card > div { display: flex; justify-content: flex-end; gap: 6px; }
+.wysiwyg-source-card button { height: 25px; padding: 0 10px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 9px; }
+.wysiwyg-source-card button:first-child { color: #fff; background: var(--accent); border-color: var(--accent); }
+.wysiwyg-busy { position: sticky; z-index: 15; bottom: 12px; width: max-content; margin: 0 auto 12px; padding: 7px 12px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow); font-size: 10px; }
+
 .markdown-preview { position: relative; min-width: 0; height: 100%; overflow: auto; color: var(--text); font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", sans-serif; font-size: 14px; line-height: 1.82; }
 .preview-content { position: relative; box-sizing: border-box; min-height: 100%; padding: 38px clamp(30px, 5.5vw, 82px) 110px; }
 .preview-content > * { max-width: 820px; margin-right: auto; margin-left: auto; }

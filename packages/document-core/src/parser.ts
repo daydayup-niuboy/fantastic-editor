@@ -106,6 +106,18 @@ if (renderPreviewMathBlock) {
   };
 }
 
+for (const ruleName of ["fence", "code_block"] as const) {
+  const renderCodeBlock = previewMarkdown.renderer.rules[ruleName];
+  if (!renderCodeBlock) continue;
+  previewMarkdown.renderer.rules[ruleName] = (tokens, index, options, environment, renderer) => {
+    const token = tokens[index];
+    const sourceAttributes = token ? renderer.renderAttrs(token) : "";
+    const rendered = renderCodeBlock(tokens, index, options, environment, renderer);
+    return sourceAttributes ? rendered.replace("<pre", `<pre${sourceAttributes}`) : rendered;
+  };
+}
+
+
 interface RawImageMatch {
   from: number;
   to: number;
