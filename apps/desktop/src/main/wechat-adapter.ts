@@ -3,6 +3,7 @@ import { renderParsedDocumentHtml, type Diagnostic, type DocumentNode } from "@f
 import type { OutputContext, OutputResultStatus, WechatReplacementItem } from "@fantastic-editor/shared";
 import { formulaReferenceKey, type OutputFormulaAsset } from "./docx-adapter.js";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
+import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
 
 const WECHAT_HTML_HARD_LIMIT = 5 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -82,6 +83,7 @@ export function generateWechatHtml(
   context: OutputContext,
   assets: readonly OutputResourceAsset[],
   formulaAssets: readonly OutputFormulaAsset[],
+  mermaidAssets: readonly OutputMermaidAsset[] = [],
 ): WechatGeneration {
   if (context.target !== "wechat-html" && context.target !== "wechat-clipboard") {
     return { status: "failed", bytes: null, diagnostics: [diagnostic(context, "OUTPUT_TARGET_MISMATCH", "公众号适配器收到错误目标。")], usedReferenceKeys: [], omittedReferenceKeys: [] };
@@ -118,6 +120,13 @@ export function generateWechatHtml(
       diagnostics.push(diagnostic(context, "FORMULA_DERIVED_ASSET_MISSING", "公众号公式替换图片缺失或无效。", undefined, node));
     }
   }
+  const mermaids = new Map(mermaidAssets.map((asset) => [asset.mermaidReferenceKey, asset]));
+  for (const node of collectMermaidNodes(context.parsedDocument.children)) {
+    const asset = mermaids.get(mermaidReferenceKey(node));
+    if (!asset || asset.mimeType !== "image/png" || asset.width <= 0 || asset.height <= 0 || asset.bytes.byteLength === 0 || sha256(asset.bytes) !== asset.contentHash) {
+      diagnostics.push(diagnostic(context, "MERMAID_DERIVED_ASSET_MISSING", "公众号 Mermaid 流程图替换图片缺失或无效。", undefined, node));
+    }
+  }
   if (diagnostics.some((item) => item.severity === "blocking")) {
     return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };
   }
@@ -125,7 +134,7 @@ export function generateWechatHtml(
   let sequence = 0;
   const replacementItems: WechatReplacementBinding[] = [];
   const placeholder = (
-    kind: "image" | "formula",
+    kind: "image" | "formula" | "diagram",
     description: string,
     node: DocumentNode,
     sourceKey: string,
@@ -135,7 +144,7 @@ export function generateWechatHtml(
   ) => {
     sequence += 1;
     const number = String(sequence).padStart(2, "0");
-    const label = description.slice(0, 80) || (kind === "image" ? "本地图片" : "公式");
+    const label = description.slice(0, 80) || (kind === "image" ? "本地图片" : kind === "formula" ? "公式" : "Mermaid 流程图");
     replacementItems.push({
       itemId: `wechat-item-${number}`,
       sequence,
@@ -147,7 +156,7 @@ export function generateWechatHtml(
       height,
       sourceKey,
     });
-    const kindLabel = kind === "image" ? "图片" : "公式";
+    const kindLabel = kind === "image" ? "图片" : kind === "formula" ? "公式" : "流程图";
     return `<span style="display:block;margin:1em 0;padding:.8em 1em;border:2px dashed #d29a45;background:#fff8e8;color:#8a5718;text-align:center;font-size:15px;line-height:1.6;">【fantastic-editor ${kindLabel} ${number}：${escapeHtml(label)}，请在此处替换】</span>`;
   };
   const fragment = renderParsedDocumentHtml(context.parsedDocument, {
@@ -164,8 +173,15 @@ export function generateWechatHtml(
       const asset = formulas.get(key)!;
       return placeholder("formula", stringAttribute(node, "latex").replace(/\s+/g, " "), node, key, asset.mimeType, asset.width, asset.height);
     },
+    renderCodeBlock: (node) => {
+      if (stringAttribute(node, "language").toLowerCase() !== "mermaid") return undefined;
+      const key = mermaidReferenceKey(node);
+      const asset = mermaids.get(key)!;
+      return placeholder("diagram", "Mermaid 流程图", node, key, asset.mimeType, asset.width, asset.height);
+    },
   });
-  const html = `<section style="box-sizing:border-box;max-width:677px;margin:0 auto;padding:8px 4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;word-break:break-word;">${inlineTheme(fragment)}</section>`;
+  const selectedFont = typeof context.theme.tokens["typography.body.fontFamily"] === "string" ? String(context.theme.tokens["typography.body.fontFamily"]).replace(/[";{}<>]/g, "") : "Microsoft YaHei";
+  const html = `<section style="box-sizing:border-box;max-width:677px;margin:0 auto;padding:8px 4px;font-family:&quot;${escapeHtml(selectedFont)}&quot;,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-break:break-word;">${inlineTheme(fragment)}</section>`;
   const bytes = new TextEncoder().encode(html);
   if (bytes.byteLength > WECHAT_HTML_HARD_LIMIT) {
     diagnostics.push(diagnostic(context, "WECHAT_HTML_LIMIT_EXCEEDED", "公众号富文本超过 5 MiB 安全上限，已阻止写入剪贴板。"));

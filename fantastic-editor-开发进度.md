@@ -68,6 +68,10 @@
 - 第一优先：执行真实公众号方案 B 回归并保存验证记录，这是当前唯一无法由本机代码替代的核心产品决策。
 - 第二优先：固定 PDF/DOCX 样例，在第二台 Windows 与目标 Word 上验收。
 - 第三优先：Windows 安装包、性能和可访问性收尾。
+## 2026-08-26：Mermaid、字体和同步开关显示
 
-
-
+- 加入 Mermaid 11.17.2；`mermaid` fenced code block 在实时预览中以严格安全模式渲染，保留 SourceRange 锚点并设置数量、源码长度和超时上限。
+- 新增无网络 Mermaid 隔离 Chromium 渲染器，导出任务生成受控 PNG；离线 HTML/PDF 内嵌 PNG，DOCX 写入图片，公众号方案 B 生成 `diagram` 编号替换项。
+- 新增预览字体选择器，支持微软雅黑、Segoe UI、等线、宋体、楷体和自定义本机字体；设置本机持久化并通过 OutputTheme 传给全部导出适配器。
+- 同步滚动按钮改为明确的 `同步滚动 ON/OFF`，继续使用 `aria-pressed` 和原有布尔状态。
+- 验证：28 个测试文件、147 项测试通过；类型检查、生产构建、Mermaid PNG 隔离渲染冒烟和真实 Electron UI 冒烟通过。

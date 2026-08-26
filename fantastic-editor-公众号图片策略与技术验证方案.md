@@ -1,9 +1,17 @@
 # fantastic-editor 公众号图片策略与技术验证方案
 
 > 文档状态：待验证、待决策  
-> 版本：0.7-draft  
+> 版本：0.8-draft
 > 关联文档：[fantastic-editor 开发项目书](fantastic-editor-开发项目书.md)  
 > 关联规格：[统一文档模型规格](fantastic-editor-统一文档模型规格.md)
+
+
+## Mermaid 流程图与字体补充策略
+
+- Mermaid 代码块进入公众号方案 B 时，不复制 SVG、脚本、data URI 或临时地址。隔离 Chromium 渲染器先生成 PNG，公众号适配器再输出连续编号占位，替换项 `kind` 为 `diagram`。
+- `diagram` 与本地图片、公式共同使用同一全局序号，逐项复制时只能从当前任务的受控替换清单读取 PNG。任务身份、内容哈希、尺寸和 MIME 必须一致；缺失或不匹配产生 blocking 诊断。
+- 用户选择的正文字体经主进程规范化后写入公众号根 `<section>` 的内联 `font-family`，并保留微信环境后备字体。字体设置不得改变图片顺序、占位编号、`approvedOmittedReferenceKeys` 或完成状态。
+- 同步滚动 ON/OFF、预览 Mermaid SVG、`data-source-*` 和字体选择器均属于应用内部交互，不得进入 CF_HTML。回归测试必须断言公众号 HTML 无 Mermaid 运行时脚本、内部 SourceRange 属性或预览提示层。
 
 ## 一、问题定义
 
@@ -629,8 +637,3 @@ P0 不包含公众号封面上传。封面和文章元数据在 P1 或接口发�
 5. 方案确定后，同步更新主项目书的 P0 文案、验收标准和用户说明。
 
 最终目标不是证明某种技术理论上可行，而是确保用户在真实公众号后台可以稳定完成一篇带图片文章的发布。
-
-
-
-
-

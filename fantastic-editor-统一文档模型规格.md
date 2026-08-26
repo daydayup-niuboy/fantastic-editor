@@ -1,9 +1,34 @@
 # fantastic-editor 统一文档模型规格
 
 > 规格标识：fantastic-editor UDM  
-> 版本：0.7-draft  
+> 版本：0.8-draft
 > 状态：待阶段 0 技术验证后冻结  
 > 关联文档：[fantastic-editor 开发项目书](fantastic-editor-开发项目书.md)
+
+
+## Mermaid 与排版偏好补充规格
+
+### 模型表示
+
+- Mermaid 不新增 `NodeType`。唯一语法来源是 `codeBlock`，且 `attributes.language.toLowerCase() === "mermaid"`；`attributes.value`、`SourceRange`、原始 fence 信息继续由 ParsedDocument 保存。
+- `mermaidReferenceKey = SHA-256(SourceRange.from + SourceRange.to + "mermaid" + source)`，不得依赖易变 `nodeId` 或整篇 `sourceHash`。整篇 `sourceHash` 仅用于输出快照身份校验。
+- 预览期 Mermaid SVG 属于 Renderer 临时 DOM，不进入 UDM。导出期 PNG 属于 `DerivedAssetManifest`，转换配置为 `mermaid-chromium-png-0.1`，`sourceReferenceKey` 与 `sourceContentHash` 为 null，派生键包含 Mermaid 引用键、转换配置与 PNG 内容哈希。
+
+### 预览与导出约束
+
+- 预览渲染使用严格安全模式、禁止外部网络，最多 100 个图、单图源码最多 100,000 字符。渲染失败必须显示稳定错误占位，不得把错误 SVG 或异常 DOM 当作成功结果。
+- 导出隔离窗口必须启用 contextIsolation、sandbox、关闭 Node integration、阻止 HTTP/HTTPS 和导航；单图最大 4096 × 4096，超时 12 秒。缺图、超时、尺寸超限或派生资源哈希不匹配均产生 blocking 诊断，不能显示“完整成功”。
+- `HtmlRenderOptions.renderCodeBlock` 是适配器替换 Mermaid 代码块的唯一扩展点；返回 undefined 时必须保持普通代码块默认渲染。
+
+### 字体偏好
+
+- 字体是用户界面和输出主题偏好，不是 ParsedDocument 字段。Renderer 以本机设置保存字体名称，发起输出时传入 `BeginOutputRequest.fontFamily`；主进程重新规范化后写入 `OutputTheme.tokens["typography.body.fontFamily"]`。
+- 字体名称最大 64 字符，禁止控制字符和 `{ } ; < >`。适配器必须提供后备字体；字体不存在只允许降级，不得改变 Markdown 或使任务失败。
+- `BeginOutputRequest.darkMode` 只用于主题身份和未来输出主题选择，不写入 ParsedDocument。当前白底导出固定使用 Mermaid 浅色主题，避免深色节点在 PDF、Word、离线 HTML 或公众号白底中失去可读性。
+
+### 同步滚动开关视图
+
+- ON/OFF 是 `syncScrollEnabled` 的可视化文本，`aria-pressed` 仍是可访问性真值。按钮文案、样式或图标不得成为同步逻辑的数据源。
 
 ## 一、目的
 
@@ -482,7 +507,7 @@ id 只保证在同一次解析中唯一。P0 不要求在两次解析之间保�
   - raw
   - feature
 
-P1 可以新增 footnote、callout、mermaid 和 wikiLink，但必须提升 UDM 次版本并更新所有相关适配器。
+P1 可以新增 footnote、callout 和 wikiLink，但必须提升 UDM 次版本并更新所有相关适配器。Mermaid 已冻结为 `codeBlock(language="mermaid")` 的输出特化，不新增 NodeType。
 
 ## 八、图片节点、引用身份和资源缓存
 
@@ -1248,12 +1273,3 @@ ParsedDocument Core 0.6 先独立冻结：
 - 完成 ParseRequest、ParseCommitRequest、ResolveRequest、PreviewDerivedUpdate、PreviewSession、manifestRevision、输出预检、批准省略、跨进程 referenceKey 对齐和 assetCacheKey 复用测试。
 
 Preview、PDF BrowserWindow、DOCX 和 HTML 适配器负责人评审 ParsedDocument Core。WechatClipboardAdapter 契约在公众号图片策略验证后单独冻结，不阻塞核心模型。
-
-
-
-
-
-
-
-
-

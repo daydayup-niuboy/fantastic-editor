@@ -2,7 +2,9 @@
 
 fantastic-editor 是面向 Windows 的本地优先 Markdown 编辑器，可打开单文件或文件夹工作区，编辑并预览包含本地图片与 KaTeX 公式的 Markdown，导出 PDF、Word、单文件离线 HTML，并按微信公众号方案 B 复制排版正文和逐项替换图片。
 
-主界面提供“新建”、多文档选项卡和窗口级拖拽打开；可一次拖入多个 `.md` / `.markdown` 文件，并在选项卡间保留各自未保存草稿。图片可拖到 CodeMirror 编辑区的具体位置，或通过“插入图片”按钮放到当前光标/选择区；应用将其安全复制到 Markdown 同级 `assets/`、插入相对引用并同步预览。界面包含资源管理器、欢迎页、可拖动编辑/预览分栏、编辑/分栏/预览三种视图、统一导出菜单，以及可记忆的浅色/深色主题和“同步滚动”开关。开启后编辑区按 SourceRange 语义锚点驱动预览区；框选源码时，预览显示对应的块级范围提示框。
+主界面提供“新建”、多文档选项卡和窗口级拖拽打开；可一次拖入多个 `.md` / `.markdown` 文件，并在选项卡间保留各自未保存草稿。图片可拖到 CodeMirror 编辑区的具体位置，或通过“插入图片”按钮放到当前光标/选择区；应用将其安全复制到 Markdown 同级 `assets/`、插入相对引用并同步预览。界面包含资源管理器、欢迎页、可拖动编辑/预览分栏、编辑/分栏/预览三种视图、统一导出菜单，以及可记忆的浅色/深色主题、预览字体选择器和明确显示 ON/OFF 的“同步滚动”开关。开启后编辑区按 SourceRange 语义锚点驱动预览区；框选源码时，预览显示对应的块级范围提示框。
+
+语言标识为 `mermaid` 的 fenced code block 会在实时预览中渲染为流程图。导出 PDF、Word、离线 HTML 或公众号内容时，应用在无网络的隔离 Chromium 窗口中生成 PNG 派生图，不在输出中携带 Mermaid 运行时脚本。字体选择会保存在本机，并传给各导出适配器。
 
 应用会在本地自动保存打开标签和未保存草稿的恢复快照。再次启动时自动恢复；若原文件已被外部修改，保存仍会触发冲突保护，若原文件已丢失则草稿以未命名文档恢复。
 
@@ -21,6 +23,15 @@ npm start
 npm run dev
 ```
 
+## Mermaid 示例
+
+````markdown
+```mermaid
+graph TD
+  A[编辑 Markdown] --> B[实时预览]
+  B --> C[PDF / Word / HTML / 公众号]
+```
+````
 ## 验证
 
 ```powershell
@@ -31,7 +42,7 @@ npm run dist:win
 npm audit --audit-level=high
 ```
 
-当前基线：25 个测试文件、140 项测试通过；真实 Electron UI 冒烟已验证主界面、文档选项卡、新建文档、资源管理器、可调分栏、无横向溢出、拖拽覆盖层、主题切换、同步滚动按钮和 CodeMirror 选区范围提示，公式 PNG、DOCX Utility Process、Chromium PDF 和系统 HTML 剪贴板生产冒烟均通过。
+当前基线：28 个测试文件、147 项测试通过；真实 Electron UI 冒烟已验证主界面、文档选项卡、新建文档、资源管理器、可调分栏、无横向溢出、拖拽覆盖层、主题切换、同步滚动按钮和 CodeMirror 选区范围提示，公式 PNG、DOCX Utility Process、Chromium PDF 和系统 HTML 剪贴板生产冒烟均通过。
 
 ## 使用边界
 
@@ -52,6 +63,3 @@ npm audit --audit-level=high
 - `apps/desktop`：Electron 主进程、sandboxed Renderer、隔离公式/PDF 窗口和 Utility Process 输出适配器。
 
 详细规格见项目根目录的三份开发文档；当前实现状态见 `fantastic-editor-开发进度.md`。Windows x64 安装包生成于 `release/fantastic-editor-0.1.0-setup.exe`；当前未配置代码签名证书，安装器使用 Electron 默认图标。
-
-
-

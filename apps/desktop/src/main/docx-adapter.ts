@@ -18,6 +18,7 @@ import {
   type ParagraphChild,
 } from "docx";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
+import { collectMermaidNodes, isMermaidNode, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
 
 export interface OutputFormulaAsset {
   formulaReferenceKey: string;
@@ -39,6 +40,8 @@ export interface DocxGeneration {
 interface RenderState {
   resources: ReadonlyMap<string, OutputResourceAsset>;
   formulas: ReadonlyMap<string, OutputFormulaAsset>;
+  mermaids: ReadonlyMap<string, OutputMermaidAsset>;
+  fontFamily: string;
 }
 
 interface TextStyle {
@@ -120,10 +123,22 @@ function formulaImageRun(node: DocumentNode, state: RenderState): ImageRun | und
   });
 }
 
-function textRun(value: string, style: TextStyle): TextRun {
+function diagramImageRun(node: DocumentNode, state: RenderState): ImageRun | undefined {
+  const asset = state.mermaids.get(mermaidReferenceKey(node));
+  if (!asset) return undefined;
+  const dimensions = fit(asset.width, asset.height, 600, 760);
+  return new ImageRun({
+    type: "png",
+    data: asset.bytes,
+    transformation: dimensions,
+    altText: { title: "Mermaid 流程图", description: "由 Mermaid 代码块渲染", name: `fantastic-mermaid-${asset.mermaidReferenceKey.slice(0, 12)}` },
+  });
+}
+
+function textRun(value: string, style: TextStyle, fontFamily: string): TextRun {
   return new TextRun({
     text: value,
-    font: style.code ? "Consolas" : "Microsoft YaHei",
+    font: style.code ? "Consolas" : fontFamily,
     ...(style.bold ? { bold: true } : {}),
     ...(style.italics ? { italics: true } : {}),
     ...(style.strike ? { strike: true } : {}),
@@ -135,13 +150,13 @@ function renderInline(nodes: readonly DocumentNode[], state: RenderState, inheri
   const children: ParagraphChild[] = [];
   for (const node of nodes) {
     switch (node.type) {
-      case "text": children.push(textRun(stringAttribute(node, "value"), inherited)); break;
-      case "softBreak": children.push(textRun(" ", inherited)); break;
+      case "text": children.push(textRun(stringAttribute(node, "value"), inherited, state.fontFamily)); break;
+      case "softBreak": children.push(textRun(" ", inherited, state.fontFamily)); break;
       case "hardBreak": children.push(new TextRun({ break: 1 })); break;
       case "strong": children.push(...renderInline(node.children ?? [], state, { ...inherited, bold: true })); break;
       case "emphasis": children.push(...renderInline(node.children ?? [], state, { ...inherited, italics: true })); break;
       case "strikethrough": children.push(...renderInline(node.children ?? [], state, { ...inherited, strike: true })); break;
-      case "inlineCode": children.push(textRun(stringAttribute(node, "value"), { ...inherited, code: true })); break;
+      case "inlineCode": children.push(textRun(stringAttribute(node, "value"), { ...inherited, code: true }, state.fontFamily)); break;
       case "link": {
         const href = stringAttribute(node, "href");
         const content = renderInline(node.children ?? [], state, inherited);
@@ -237,7 +252,13 @@ function renderBlocks(nodes: readonly DocumentNode[], state: RenderState): Array
       }
       case "bulletList": output.push(...renderList(node, state, false)); break;
       case "orderedList": output.push(...renderList(node, state, true)); break;
-      case "codeBlock": output.push(new Paragraph({ children: [new TextRun({ text: stringAttribute(node, "value"), font: "Consolas", size: 19 })], shading: { fill: "F1F3F0" }, spacing: { before: 80, after: 140 }, indent: { left: 180, right: 180 } })); break;
+      case "codeBlock": {
+        if (isMermaidNode(node)) {
+          const diagram = diagramImageRun(node, state);
+          output.push(new Paragraph({ alignment: AlignmentType.CENTER, children: diagram ? [diagram] : [], spacing: { before: 100, after: 140 } }));
+        } else output.push(new Paragraph({ children: [new TextRun({ text: stringAttribute(node, "value"), font: "Consolas", size: 19 })], shading: { fill: "F1F3F0" }, spacing: { before: 80, after: 140 }, indent: { left: 180, right: 180 } }));
+        break;
+      }
       case "table": output.push(tableFromNode(node, state)); break;
       case "thematicBreak": output.push(new Paragraph({ thematicBreak: true })); break;
       case "formulaBlock": {
@@ -274,6 +295,7 @@ export async function generateDocx(
   context: OutputContext,
   assets: readonly OutputResourceAsset[],
   formulaAssets: readonly OutputFormulaAsset[],
+  mermaidAssets: readonly OutputMermaidAsset[] = [],
 ): Promise<DocxGeneration> {
   const diagnostics: Diagnostic[] = [];
   const usedReferenceKeys: string[] = [];
@@ -313,6 +335,13 @@ export async function generateDocx(
       diagnostics.push(diagnostic(context, "FORMULA_DERIVED_ASSET_MISSING", "DOCX 公式 PNG 派生资源缺失或无效。", undefined, node));
     }
   }
+  const mermaidMap = new Map(mermaidAssets.map((asset) => [asset.mermaidReferenceKey, asset]));
+  for (const node of collectMermaidNodes(context.parsedDocument.children)) {
+    const asset = mermaidMap.get(mermaidReferenceKey(node));
+    if (!asset || asset.mimeType !== "image/png" || asset.width <= 0 || asset.height <= 0 || sha256(asset.bytes) !== asset.contentHash) {
+      diagnostics.push(diagnostic(context, "MERMAID_DERIVED_ASSET_MISSING", "DOCX Mermaid PNG 派生资源缺失或无效。", undefined, node));
+    }
+  }
   const omitted = [...new Set(omittedReferenceKeys)].sort();
   const consumed = [...approved].sort();
   if (omitted.length !== consumed.length || omitted.some((value, index) => value !== consumed[index])) {
@@ -328,7 +357,12 @@ export async function generateDocx(
       description: "由 fantastic-editor 从本地 Markdown 生成",
       sections: [{
         properties: { page: { margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 } } },
-        children: renderBlocks(context.parsedDocument.children, { resources, formulas: formulaMap }),
+        children: renderBlocks(context.parsedDocument.children, {
+          resources,
+          formulas: formulaMap,
+          mermaids: mermaidMap,
+          fontFamily: typeof context.theme.tokens["typography.body.fontFamily"] === "string" ? String(context.theme.tokens["typography.body.fontFamily"]) : "Microsoft YaHei",
+        }),
       }],
     });
     const buffer = await Packer.toBuffer(document);

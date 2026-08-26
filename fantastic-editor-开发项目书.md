@@ -1,8 +1,30 @@
 # fantastic-editor 开发项目书
 
 > 文档状态：待冻结  
-> 当前版本：0.9-draft  
+> 当前版本：1.0-draft
 > 冻结条件：完成“公众号图片策略”技术验证，并确认本文第二章列出的全部规格决策。
+
+
+## 本轮新增规格：Mermaid、字体与开关状态
+
+### Mermaid 流程图
+
+- fenced code block 的语言标识为 `mermaid` 时，实时预览必须渲染为流程图；语言匹配不区分大小写，其他代码块保持原样。
+- 预览使用 Mermaid `securityLevel: strict`，不允许外部网络、窗口跳转或脚本注入。单篇最多预览 100 个 Mermaid 块，单块源码最多 100,000 字符；语法错误显示就地错误提示，不执行源码。
+- Mermaid 预览 SVG 是 Renderer 短生命周期 DOM，不写入 Markdown、ParsedDocument、ResolutionSnapshot 或恢复稿。SourceRange 属性必须从原 `<pre>` 复制到流程图容器，确保同步滚动和选区提示仍然有效。
+- PDF、Word、离线 HTML 和公众号输出不得依赖 Mermaid 运行时脚本。导出任务在无网络的隐藏 Chromium 窗口中渲染 Mermaid，并生成 PNG 派生资源；单图最大 4096 × 4096，单次渲染超时 12 秒，派生资源纳入 200 MiB 输出预算和 `DerivedAssetManifest`。
+- 离线 HTML 与 PDF 内嵌 Mermaid PNG；Word 使用图片段落；公众号方案 B 将其作为 `diagram` 替换项生成连续编号占位，并允许用户逐项复制 PNG。
+
+### 预览与导出字体
+
+- 预览区提供字体选择器，内置微软雅黑、Segoe UI、等线、宋体、楷体，并允许输入本机已安装字体名称。
+- 字体名称需去除首尾空白、合并连续空格，长度不得超过 64，禁止控制字符和 `{ } ; < >`；非法值回退到 `Microsoft YaHei UI`。
+- 用户选择只保存在本机 `localStorage`，不写入 Markdown、文件会话、恢复稿或 ParsedDocument。发起导出时通过 `OutputTheme.tokens["typography.body.fontFamily"]` 传递，使 PDF、Word、离线 HTML 和公众号正文使用同一字体偏好；目标平台缺少该字体时按各适配器后备字体降级。
+
+### 同步滚动开关显示
+
+- 同步滚动按钮必须直接显示 `同步滚动 ON` 或 `同步滚动 OFF`，并继续提供 `aria-pressed`、悬停说明和本机持久化。
+- ON 表示编辑区驱动预览区及选区提示；OFF 表示两个区域独立滚动并清除临时提示。显示文字不得取代布尔状态作为业务数据源。
 
 ## 一、项目概述
 
@@ -855,14 +877,3 @@ OutputResult.status 固定为 completed、completed-with-omissions、failed、ca
 6. 公众号图片能力只承诺经过真实环境验证的结果。
 7. 安全基线从工程第一天启用。
 8. 账号、云同步和接口直发不阻塞首版。
-
-
-
-
-
-
-
-
-
-
-

@@ -6,6 +6,7 @@ import katex from "katex";
 import { renderParsedDocumentHtml } from "@fantastic-editor/document-core";
 import type { Diagnostic, DocumentNode } from "@fantastic-editor/document-core";
 import type { OutputContext, OutputResultStatus } from "@fantastic-editor/shared";
+import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
 
 const SOFT_HTML_BYTES = 20 * 1024 * 1024;
 const HARD_HTML_BYTES = 50 * 1024 * 1024;
@@ -35,7 +36,7 @@ body{margin:0}.document{max-width:860px;margin:0 auto;padding:48px 56px 96px;lin
 h1,h2,h3,h4,h5,h6{color:#18382b;line-height:1.3}h1{padding-bottom:.35em;border-bottom:1px solid #dce2dd}
 pre{overflow:auto;padding:14px 16px;background:#f2f4f1;border-radius:8px}code{font-family:Consolas,"Cascadia Code",monospace}
 blockquote{margin-left:0;padding-left:16px;color:#5f6d64;border-left:4px solid #86a594}table{border-collapse:collapse;max-width:100%}
-th,td{padding:7px 10px;border:1px solid #ccd3ce}img{display:block;max-width:100%;height:auto;margin:16px auto}
+th,td{padding:7px 10px;border:1px solid #ccd3ce}img{display:block;max-width:100%;height:auto;margin:16px auto}.mermaid-export{break-inside:avoid}
 .resource-placeholder,.blocked-raw-html,.unsupported-node{display:inline-block;padding:4px 7px;color:#735c32;background:#faf3df;border:1px dashed #d8c28b;border-radius:4px}
 .task-item{list-style:none}.formula-block{overflow-x:auto;text-align:center}.katex{font-size:1.08em}.katex-display{overflow-x:auto;overflow-y:hidden}
 @media(max-width:700px){.document{padding:28px 20px 64px}}
@@ -93,13 +94,20 @@ function diagnostic(context: OutputContext, code: string, message: string, refer
   };
 }
 
-function htmlDocument(content: string, locale: string, formulaStyle: string): string {
-  return `<!doctype html>\n<html lang="${locale.replace(/[^A-Za-z0-9_-]/g, "") || "zh-CN"}">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">\n<title>fantastic-editor 导出</title>\n<style>${formulaStyle}${BASE_STYLE}</style>\n</head>\n<body><article class="document">${content}</article></body>\n</html>\n`;
+function outputFontStack(context: OutputContext): string {
+  const value = context.theme.tokens["typography.body.fontFamily"];
+  const font = typeof value === "string" && value.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(value) ? value.replaceAll('"', "") : "Microsoft YaHei UI";
+  return `"${font}","Segoe UI",sans-serif`;
+}
+
+function htmlDocument(content: string, locale: string, formulaStyle: string, fontFamily: string): string {
+  return `<!doctype html>\n<html lang="${locale.replace(/[^A-Za-z0-9_-]/g, "") || "zh-CN"}">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">\n<title>fantastic-editor 导出</title>\n<style>${formulaStyle}${BASE_STYLE}:root{font-family:${fontFamily}}</style>\n</head>\n<body><article class="document">${content}</article></body>\n</html>\n`;
 }
 
 export function generateOfflineHtml(
   context: OutputContext,
   assets: readonly OutputResourceAsset[],
+  mermaidAssets: readonly OutputMermaidAsset[] = [],
 ): OfflineHtmlGeneration {
   if (context.target !== "offline-html" && context.target !== "pdf") {
     return { status: "failed", bytes: null, diagnostics: [diagnostic(context, "OUTPUT_TARGET_MISMATCH", "静态 HTML 适配器收到错误目标。")], usedReferenceKeys: [], omittedReferenceKeys: [] };
@@ -138,6 +146,14 @@ export function generateOfflineHtml(
     usedReferenceKeys.push(reference.referenceKey);
   }
 
+  const mermaidMap = new Map(mermaidAssets.map((asset) => [asset.mermaidReferenceKey, asset]));
+  for (const node of collectMermaidNodes(context.parsedDocument.children)) {
+    const asset = mermaidMap.get(mermaidReferenceKey(node));
+    if (!asset || asset.mimeType !== "image/png" || asset.width <= 0 || asset.height <= 0 || asset.bytes.byteLength === 0 || sha256(asset.bytes) !== asset.contentHash) {
+      diagnostics.push({ ...diagnostic(context, "MERMAID_DERIVED_ASSET_MISSING", "Mermaid 流程图 PNG 派生资源缺失或无效。"), source: node.source, nodeId: node.id });
+    }
+  }
+
   if (diagnostics.some((item) => item.severity === "blocking")) {
     return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };
   }
@@ -172,8 +188,15 @@ export function generateOfflineHtml(
       return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };
     }
   }
-  const fragment = renderParsedDocumentHtml(context.parsedDocument, { imageSources });
-  const bytes = new TextEncoder().encode(htmlDocument(fragment, context.locale, formulaStyle));
+  const fragment = renderParsedDocumentHtml(context.parsedDocument, {
+    imageSources,
+    renderCodeBlock: (node) => {
+      if (typeof node.attributes.language !== "string" || node.attributes.language.toLowerCase() !== "mermaid") return undefined;
+      const asset = mermaidMap.get(mermaidReferenceKey(node))!;
+      return `<img class="mermaid-export" src="data:image/png;base64,${Buffer.from(asset.bytes).toString("base64")}" alt="Mermaid 流程图">`;
+    },
+  });
+  const bytes = new TextEncoder().encode(htmlDocument(fragment, context.locale, formulaStyle, outputFontStack(context)));
   if (bytes.byteLength > HARD_HTML_BYTES) {
     diagnostics.push(diagnostic(context, "OFFLINE_HTML_HARD_LIMIT_EXCEEDED", "单文件离线 HTML 超过 50 MiB 硬上限，请压缩图片后重试。"));
     return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };

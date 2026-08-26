@@ -17,6 +17,8 @@ import type { SingleFileResolutionContext } from "./file-sessions.js";
 import type { OutputFormulaAsset } from "./docx-adapter.js";
 import { formulaReferenceKey } from "./docx-adapter.js";
 import type { FormulaRenderResult } from "./formula-render-window.js";
+import type { MermaidRenderResult } from "./mermaid-render-window.js";
+import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
 import type { WechatReplacementBinding } from "./wechat-adapter.js";
 import type { SvgTransformResult } from "./svg-transform.js";
@@ -26,9 +28,9 @@ import { preflightOutput } from "./output-preflight.js";
 import type { AssetHandleRegistry } from "./single-file-resource-resolver.js";
 
 interface OutputGenerator {
-  generateOfflineHtml(context: OutputContext, assets: OutputResourceAsset[]): Promise<GeneratedOutput>;
-  generateDocx(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[]): Promise<GeneratedOutput>;
-  generateWechatHtml(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[]): Promise<GeneratedOutput>;
+  generateOfflineHtml(context: OutputContext, assets: OutputResourceAsset[], mermaidAssets: OutputMermaidAsset[]): Promise<GeneratedOutput>;
+  generateDocx(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[], mermaidAssets: OutputMermaidAsset[]): Promise<GeneratedOutput>;
+  generateWechatHtml(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[], mermaidAssets: OutputMermaidAsset[]): Promise<GeneratedOutput>;
   cancelJob(jobId: string): boolean;
 }
 
@@ -46,8 +48,13 @@ interface FormulaRenderer {
   dispose?(): void;
 }
 
+interface MermaidRenderer {
+  renderDiagram(source: string, darkMode: boolean, fontFamily: string): Promise<MermaidRenderResult>;
+  dispose?(): void;
+}
+
 interface PdfRenderer {
-  generatePdf(context: OutputContext, assets: OutputResourceAsset[]): Promise<GeneratedOutput>;
+  generatePdf(context: OutputContext, assets: OutputResourceAsset[], mermaidAssets: OutputMermaidAsset[]): Promise<GeneratedOutput>;
   cancelJob(jobId: string): boolean;
 }
 
@@ -65,6 +72,7 @@ interface OutputRuntime {
   context: OutputContext;
   assets: OutputResourceAsset[];
   formulaAssets: OutputFormulaAsset[];
+  mermaidAssets: OutputMermaidAsset[];
   startedAt: number;
   isCurrent(): boolean;
 }
@@ -78,7 +86,7 @@ function outputDiagnostic(jobId: string, code: string, message: string, target: 
     id: `diagnostic-${jobId}-${referenceKey ?? "output"}-${code}`,
     code,
     severity: "blocking",
-    category: code.includes("SVG") ? "compatibility" : "resource",
+    category: code.includes("SVG") || code.includes("MERMAID") ? "compatibility" : "resource",
     message,
     outputTarget: target,
     ...(referenceKey ? { referenceKey } : {}),
@@ -102,6 +110,12 @@ function collectFormulaReferences(nodes: readonly DocumentNode[]): string[] {
   return collectFormulaNodes(nodes).map(formulaReferenceKey);
 }
 
+function normalizeOutputFont(value: unknown): string {
+  if (typeof value !== "string") return "Microsoft YaHei UI";
+  const font = value.trim().replace(/\s+/g, " ");
+  return font && font.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(font) ? font : "Microsoft YaHei UI";
+}
+
 function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   const seen = new Set<string>();
   return groups.flat().filter((item) => {
@@ -120,6 +134,7 @@ export class OutputService {
   readonly #svgTransformer: SvgTransformer;
   readonly #generator: OutputGenerator;
   readonly #formulaRenderer: FormulaRenderer | undefined;
+  readonly #mermaidRenderer: MermaidRenderer | undefined;
   readonly #pdfRenderer: PdfRenderer | undefined;
   readonly #saveOutput: (suggestedName: string, bytes: Uint8Array, target: BeginOutputRequest["target"]) => Promise<SaveOutputResult>;
 
@@ -130,12 +145,14 @@ export class OutputService {
     saveOutput: (suggestedName: string, bytes: Uint8Array, target: BeginOutputRequest["target"]) => Promise<SaveOutputResult>,
     formulaRenderer?: FormulaRenderer,
     pdfRenderer?: PdfRenderer,
+    mermaidRenderer?: MermaidRenderer,
   ) {
     this.#handles = handles;
     this.#svgTransformer = svgTransformer;
     this.#generator = generator;
     this.#saveOutput = saveOutput;
     this.#formulaRenderer = formulaRenderer;
+    this.#mermaidRenderer = mermaidRenderer;
     this.#pdfRenderer = pdfRenderer;
   }
 
@@ -192,6 +209,15 @@ export class OutputService {
     const formulaCollection = request.target === "docx" || request.target === "wechat-html" || request.target === "wechat-clipboard"
       ? await this.collectFormulaAssets(job.jobId, request.target, request.parsedDocument.children, isCurrent, reserveOutputBytes)
       : { assets: [] as OutputFormulaAsset[], diagnostics: [] as Diagnostic[], derivedEntries: {} as DerivedAssetManifest["entries"] };
+    const mermaidCollection = await this.collectMermaidAssets(
+      job.jobId,
+      request.target,
+      request.parsedDocument.children,
+      false,
+      normalizeOutputFont(request.fontFamily),
+      isCurrent,
+      reserveOutputBytes,
+    );
     if (!isCurrent()) {
       const cancelled = this.#jobs.cancel(job.jobId)!;
       return { status: "cancelled", job: cancelled, error: "导出期间文档或工作区身份已变化。" };
@@ -203,7 +229,7 @@ export class OutputService {
       jobId: job.jobId,
       sourceHash: request.sourceHash,
       workspaceRevision: request.workspaceRevision,
-      entries: { ...collected.derivedEntries, ...formulaCollection.derivedEntries },
+      entries: { ...collected.derivedEntries, ...formulaCollection.derivedEntries, ...mermaidCollection.derivedEntries },
     };
     const preflightContext: OutputPreflightContext = {
       jobId: job.jobId,
@@ -215,10 +241,10 @@ export class OutputService {
       parsedDocument: request.parsedDocument,
       resolutionSnapshot: {
         ...snapshot,
-        diagnostics: mergeDiagnostics(snapshot.diagnostics, collected.diagnostics, formulaCollection.diagnostics),
+        diagnostics: mergeDiagnostics(snapshot.diagnostics, collected.diagnostics, formulaCollection.diagnostics, mermaidCollection.diagnostics),
       },
       derivedAssetManifest,
-      theme: { id: "default", tokens: {} },
+      theme: { id: "user-preview", tokens: { "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } },
       locale: "zh-CN",
       options: {},
     };
@@ -230,6 +256,7 @@ export class OutputService {
       context: outputContext,
       assets: collected.assets,
       formulaAssets: formulaCollection.assets,
+      mermaidAssets: mermaidCollection.assets,
       startedAt: Date.now(),
       isCurrent,
     });
@@ -281,14 +308,14 @@ export class OutputService {
       return { status: "failed", ...(job ? { job } : {}), error: "导出任务未就绪或身份已过期。" };
     }
     const generated = runtime.context.target === "docx"
-      ? await this.#generator.generateDocx(runtime.context, runtime.assets, runtime.formulaAssets)
+      ? await this.#generator.generateDocx(runtime.context, runtime.assets, runtime.formulaAssets, runtime.mermaidAssets)
       : runtime.context.target === "wechat-html" || runtime.context.target === "wechat-clipboard"
-        ? await this.#generator.generateWechatHtml(runtime.context, runtime.assets, runtime.formulaAssets)
+        ? await this.#generator.generateWechatHtml(runtime.context, runtime.assets, runtime.formulaAssets, runtime.mermaidAssets)
         : runtime.context.target === "pdf"
         ? this.#pdfRenderer
-          ? await this.#pdfRenderer.generatePdf(runtime.context, runtime.assets)
+          ? await this.#pdfRenderer.generatePdf(runtime.context, runtime.assets, runtime.mermaidAssets)
           : { status: "failed" as const, bytes: null, diagnostics: [outputDiagnostic(jobId, "PDF_RENDERER_UNAVAILABLE", "PDF 隔离渲染器不可用。", "pdf")], usedReferenceKeys: [], omittedReferenceKeys: [] }
-        : await this.#generator.generateOfflineHtml(runtime.context, runtime.assets);
+        : await this.#generator.generateOfflineHtml(runtime.context, runtime.assets, runtime.mermaidAssets);
     if (!runtime.isCurrent()) {
       this.#runtimes.delete(jobId);
       const cancelled = this.#jobs.cancel(jobId);
@@ -307,12 +334,13 @@ export class OutputService {
       const metadata: WechatReplacementItem[] = [];
       const resources = new Map(runtime.assets.map((asset) => [asset.referenceKey, asset]));
       const formulas = new Map(runtime.formulaAssets.map((asset) => [asset.formulaReferenceKey, asset]));
+      const mermaids = new Map(runtime.mermaidAssets.map((asset) => [asset.mermaidReferenceKey, asset]));
       if (!bindings) {
         status = "failed";
         diagnostics.push(outputDiagnostic(jobId, "WECHAT_REPLACEMENT_MANIFEST_MISSING", "公众号替换项清单缺失，未写入剪贴板。", runtime.context.target));
       } else {
         for (const binding of bindings) {
-          const source = binding.kind === "image" ? resources.get(binding.sourceKey) : formulas.get(binding.sourceKey);
+          const source = binding.kind === "image" ? resources.get(binding.sourceKey) : binding.kind === "formula" ? formulas.get(binding.sourceKey) : mermaids.get(binding.sourceKey);
           if (!source || source.mimeType !== binding.mimeType || source.bytes.byteLength === 0 || stored.has(binding.itemId)) {
             status = "failed";
             diagnostics.push(outputDiagnostic(jobId, "WECHAT_REPLACEMENT_BINDING_INVALID", "公众号替换项与本次导出资源包不匹配，未写入剪贴板。", runtime.context.target));
@@ -375,6 +403,54 @@ export class OutputService {
       return { status: "failed", ...(job ? { job } : {}), error: "导出结果违反任务终态或省略批准协议。" };
     }
     return { status, job: finalized, result };
+  }
+
+  private async collectMermaidAssets(
+    jobId: string,
+    target: BeginOutputRequest["target"],
+    nodes: readonly DocumentNode[],
+    darkMode: boolean,
+    fontFamily: string,
+    isCurrent: () => boolean,
+    reserveOutputBytes: (contentHash: string, byteLength: number) => boolean,
+  ): Promise<{
+    assets: OutputMermaidAsset[];
+    diagnostics: Diagnostic[];
+    derivedEntries: DerivedAssetManifest["entries"];
+  }> {
+    const assets: OutputMermaidAsset[] = [];
+    const diagnostics: Diagnostic[] = [];
+    const derivedEntries: DerivedAssetManifest["entries"] = {};
+    const profile = "mermaid-chromium-png-0.1";
+    const nodesToRender = collectMermaidNodes(nodes);
+    if (nodesToRender.length > FANTASTIC_EDITOR_LIMITS.maxMermaidRendersPerOutput) {
+      diagnostics.push(outputDiagnostic(jobId, "MERMAID_RENDER_LIMIT_EXCEEDED", `Mermaid 流程图数量超过 ${FANTASTIC_EDITOR_LIMITS.maxMermaidRendersPerOutput} 项导出上限。`, target, undefined, nodesToRender[FANTASTIC_EDITOR_LIMITS.maxMermaidRendersPerOutput]));
+      return { assets, diagnostics, derivedEntries };
+    }
+    for (const node of nodesToRender) {
+      if (!isCurrent()) break;
+      if (!this.#mermaidRenderer) {
+        diagnostics.push(outputDiagnostic(jobId, "MERMAID_RENDERER_UNAVAILABLE", "Mermaid 隔离渲染器不可用。", target, undefined, node));
+        continue;
+      }
+      const source = typeof node.attributes.value === "string" ? node.attributes.value : "";
+      const rendered = await this.#mermaidRenderer.renderDiagram(source, darkMode, fontFamily);
+      if (rendered.status !== "completed") {
+        diagnostics.push(outputDiagnostic(jobId, rendered.code, rendered.message, target, undefined, node));
+        continue;
+      }
+      const contentHash = sha256(rendered.png);
+      if (!reserveOutputBytes(contentHash, rendered.png.byteLength)) {
+        diagnostics.push(outputDiagnostic(jobId, "OUTPUT_RESOURCE_BUDGET_EXCEEDED", "导出图片、公式与 Mermaid 资源超过 200 MiB 总预算。", target, undefined, node));
+        continue;
+      }
+      const reference = mermaidReferenceKey(node);
+      const derivedAssetKey = createHash("sha256").update(`${reference}:${profile}:${contentHash}`).digest("hex");
+      assets.push({ mermaidReferenceKey: reference, contentHash, mimeType: "image/png", width: rendered.width, height: rendered.height, bytes: rendered.png.slice() });
+      derivedEntries[derivedAssetKey] = { derivedAssetKey, sourceReferenceKey: null, sourceContentHash: null, transformProfile: profile, derivedContentHash: contentHash, mimeType: "image/png", width: rendered.width, height: rendered.height };
+    }
+    this.#mermaidRenderer?.dispose?.();
+    return { assets, diagnostics, derivedEntries };
   }
 
   private async collectFormulaAssets(
@@ -531,8 +607,3 @@ export class OutputService {
     return { assets, diagnostics, derivedEntries };
   }
 }
-
-
-
-
-

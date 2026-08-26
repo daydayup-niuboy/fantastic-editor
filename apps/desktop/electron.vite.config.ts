@@ -31,6 +31,7 @@ export default defineConfig({
         input: {
           index: resolve("src/renderer/index.html"),
           formula: resolve("src/renderer/formula.html"),
+          mermaid: resolve("src/renderer/mermaid.html"),
         },
       },
     },

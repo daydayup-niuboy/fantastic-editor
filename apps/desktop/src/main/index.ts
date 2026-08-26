@@ -40,6 +40,7 @@ import { SvgPreviewCoordinator } from "./svg-preview-coordinator.js";
 import { NodeOutputProcess } from "./node-output-process.js";
 import { OutputService } from "./output-service.js";
 import { FormulaRenderWindow } from "./formula-render-window.js";
+import { MermaidRenderWindow } from "./mermaid-render-window.js";
 import { PdfRenderWindow } from "./pdf-render-window.js";
 import { RecoveryStore } from "./recovery-store.js";
 import { ImageImportService } from "./image-import-service.js";
@@ -63,6 +64,7 @@ const previewDerivedCache = new PreviewDerivedAssetCache();
 const imageTransformProcess = new ImageTransformProcess();
 const nodeOutputProcess = new NodeOutputProcess();
 const formulaRenderWindow = new FormulaRenderWindow();
+const mermaidRenderWindow = new MermaidRenderWindow();
 const pdfRenderWindow = new PdfRenderWindow();
 const resourceResolver = new SingleFileResourceResolver(parseCommits, assetHandles);
 const svgPreviewCoordinator = new SvgPreviewCoordinator(assetHandles, previewDerivedCache, imageTransformProcess);
@@ -128,6 +130,7 @@ const outputService = new OutputService(
   },
   formulaRenderWindow,
   pdfRenderWindow,
+  mermaidRenderWindow,
 );
 
 function requireTrustedRenderer(event: IpcMainInvokeEvent): void {
@@ -554,7 +557,36 @@ function createMainWindow(): BrowserWindow {
           hasSyncScrollButton: Boolean(document.querySelector("[data-testid=sync-scroll-toggle]")),
           viewportFits: document.documentElement.scrollWidth === document.documentElement.clientWidth
         })`, true) as { tabText: string; tabCount: number; editorText: string; brandText: string; hasSidebar: boolean; hasSplitHandle: boolean; hasInsertImageButton: boolean; hasSyncScrollButton: boolean; viewportFits: boolean };
-        const syncBefore = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.getAttribute("aria-pressed") ?? "missing"`, true) as string;
+        const fontControl = await window.webContents.executeJavaScript(`(() => {
+          const select = document.querySelector("[data-testid=preview-font-select]");
+          if (!(select instanceof HTMLSelectElement)) return { exists: false, applied: false };
+          select.value = "KaiTi";
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          return { exists: true, applied: true };
+        })()`, true) as { exists: boolean; applied: boolean };
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const fontApplied = await window.webContents.executeJavaScript(`document.querySelector(".markdown-preview")?.getAttribute("style")?.includes("KaiTi") ?? false`, true) as boolean;
+        window.show();
+        window.focus();
+        window.webContents.focus();
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        await window.webContents.insertText("# Mermaid smoke\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const mermaidRendered = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+          const deadline = Date.now() + 8000;
+          const check = () => {
+            if (document.querySelector(".mermaid-diagram svg")) resolve(true);
+            else if (Date.now() >= deadline) resolve(false);
+            else setTimeout(check, 50);
+          };
+          check();
+        })`, true) as boolean;
+        const mermaidEditorText = await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.textContent ?? ""`, true) as string;
+        const mermaidDebug = await window.webContents.executeJavaScript(`({ errorText: document.querySelector(".mermaid-error")?.textContent ?? "", renderError: document.querySelector(".preview-content")?.getAttribute("data-mermaid-error") ?? "", started: document.querySelector(".preview-content")?.getAttribute("data-mermaid-started") ?? "" })`, true) as { errorText: string; renderError: string; started: string };
+        const syncTextBefore = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.textContent ?? ""`, true) as string;        const syncBefore = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.getAttribute("aria-pressed") ?? "missing"`, true) as string;
         await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const syncAfter = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.getAttribute("aria-pressed") ?? "missing"`, true) as string;
@@ -597,8 +629,8 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
-        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText.includes("未命名文档") && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
-        console.log(JSON.stringify({ uiReady, before, drag, after, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
+        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText.includes("未命名文档") && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && fontControl.exists && fontControl.applied && fontApplied && mermaidRendered && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        console.log(JSON.stringify({ uiReady, before, drag, after, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
         app.exit(valid ? 0 : 1);
       })().catch((error: unknown) => { console.error(error); app.exit(1); });
     });
@@ -767,7 +799,20 @@ app.whenReady().then(() => {
       console.error(error);
       app.exit(1);
     });
-  } else if (process.env.FANTASTIC_EDITOR_FORMULA_SMOKE_TEST === "1") {
+  } else if (process.env.FANTASTIC_EDITOR_MERMAID_SMOKE_TEST === "1") {
+    void mermaidRenderWindow.renderDiagram("graph TD\n  A --> B", false, "Microsoft YaHei UI").then((result) => {
+      const validPng = result.status === "completed"
+        && result.png.byteLength > 8
+        && result.png[0] === 0x89
+        && result.png[1] === 0x50
+        && result.width > 32
+        && result.height > 32;
+      if (!validPng) console.error(result.status === "failed" ? `${result.code}: ${result.message}` : "Mermaid PNG validation failed.");
+      app.exit(validPng ? 0 : 1);
+    }).catch((error: unknown) => {
+      console.error(error);
+      app.exit(1);
+    });  } else if (process.env.FANTASTIC_EDITOR_FORMULA_SMOKE_TEST === "1") {
     void formulaRenderWindow.renderFormula("\\frac{1}{2} + \\sqrt{x^2+1}", true).then((result) => {
       const validPng = result.status === "completed"
         && result.png.byteLength > 8
@@ -792,6 +837,7 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   outputService.clear();
   formulaRenderWindow.dispose();
+  mermaidRenderWindow.dispose();
   pdfRenderWindow.dispose();
   nodeOutputProcess.dispose();
   imageTransformProcess.dispose();
@@ -802,11 +848,3 @@ app.on("before-quit", () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
-
-
-
-
-
-
-
-

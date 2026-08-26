@@ -20,11 +20,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
     "jszip": "^3.10.1",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11",
-    "electron": "^43.4.1",
-    "electron-builder": "^26.15.3"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=24.0.0"
@@ -35,7 +35,8 @@
     "@fantastic-editor/shared": "file:packages/shared",
     "@resvg/resvg-js": "^2.6.2",
     "docx": "^9.7.1",
-    "katex": "^0.18.4"
+    "katex": "^0.18.4",
+    "mermaid": "^11.17.2"
   },
   "build": {
     "appId": "com.fantastic.editor",

@@ -7,6 +7,7 @@ import { applyResolutionToPreviewHtml } from "./preview-assets";
 import { applyPreviewDerivedUpdate, createPreviewSession } from "./preview-session";
 import { ParseWorkerClient } from "./workers/parse-worker-client";
 import { WelcomeScreen } from "./WelcomeScreen";
+import { DEFAULT_PREVIEW_FONT, PREVIEW_FONT_PRESETS, normalizePreviewFontName, previewFontStack } from "./preview-font";
 
 interface ActiveDocument {
   sessionId: string;
@@ -57,6 +58,7 @@ export function App() {
   const [splitRatio, setSplitRatio] = useState(50);
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem("fantastic-editor-theme") === "dark");
   const [syncScrollEnabled, setSyncScrollEnabled] = useState(() => window.localStorage.getItem("fantastic-editor-sync-scroll") === "true");
+  const [previewFontName, setPreviewFontName] = useState(() => normalizePreviewFontName(window.localStorage.getItem("fantastic-editor-preview-font") ?? DEFAULT_PREVIEW_FONT));
   const [previewSyncIdentity, setPreviewSyncIdentity] = useState<string | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const recoveryPromiseRef = useRef<ReturnType<typeof window.fantasticEditor.restoreRecoverySession> | null>(null);
@@ -99,6 +101,10 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("fantastic-editor-sync-scroll", String(syncScrollEnabled));
   }, [syncScrollEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem("fantastic-editor-preview-font", previewFontName);
+  }, [previewFontName]);
 
   useEffect(() => {
     const acceptDerivedUpdate = (update: PreviewDerivedUpdate): boolean => {
@@ -387,6 +393,8 @@ export function App() {
         parseCommitId: session.previewDerivedManifest.parseCommitId,
         workspaceRevision: session.workspaceRevision,
         parsedDocument: session.parsedDocument,
+        fontFamily: previewFontName,
+        darkMode,
       });
       if (result.status === "approval-required") {
         const job = result.job;
@@ -425,7 +433,7 @@ export function App() {
     } finally {
       setOutputBusy(false);
     }
-  }, [active, describeOutputResult, outputReady]);
+  }, [active, darkMode, describeOutputResult, outputReady, previewFontName]);
 
   const copyWechatReplacement = useCallback(async (item: WechatReplacementItem) => {
     const task = wechatReplacements;
@@ -433,7 +441,7 @@ export function App() {
     const result = await window.fantasticEditor.copyWechatReplacement({ jobId: task.jobId, itemId: item.itemId });
     if (result.status === "copied") {
       setHandledReplacementIds((current) => new Set(current).add(item.itemId));
-      setStatus(`已复制第 ${item.sequence} 项${item.kind === "formula" ? "公式图片" : "图片"}；请在公众号对应占位处粘贴。`);
+      setStatus(`已复制第 ${item.sequence} 项${item.kind === "formula" ? "公式图片" : item.kind === "diagram" ? "流程图图片" : "图片"}；请在公众号对应占位处粘贴。`);
     } else setStatus(result.error);
   }, [wechatReplacements]);
 
@@ -811,6 +819,28 @@ export function App() {
                 <div className="pane-header">
                   <span><Icon name="eye" size={15} />实时预览</span>
                   <div className="pane-actions">
+                    <label className="preview-font-control" title="设置实时预览和导出的正文字体">
+                      <span>字体</span>
+                      <select
+                        data-testid="preview-font-select"
+                        value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : "__custom__"}
+                        onChange={(event) => {
+                          if (event.target.value !== "__custom__") {
+                            setPreviewFontName(normalizePreviewFontName(event.target.value));
+                            return;
+                          }
+                          const custom = window.prompt("输入本机已安装的字体名称", previewFontName);
+                          if (custom !== null) setPreviewFontName(normalizePreviewFontName(custom));
+                        }}
+                      >
+                        <option value="Microsoft YaHei UI">微软雅黑</option>
+                        <option value="Segoe UI Variable Text">Segoe UI</option>
+                        <option value="DengXian">等线</option>
+                        <option value="SimSun">宋体</option>
+                        <option value="KaiTi">楷体</option>
+                        <option value="__custom__">自定义…</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       className={`sync-scroll-button${syncScrollEnabled ? " active" : ""}`}
@@ -825,7 +855,7 @@ export function App() {
                         });
                       }}
                     >
-                      <Icon name="scrollSync" size={15} />同步滚动
+                      <Icon name="scrollSync" size={15} /><span>同步滚动</span><strong>{syncScrollEnabled ? "ON" : "OFF"}</strong>
                     </button>
                     <small>安全本地渲染</small>
                   </div>
@@ -836,6 +866,11 @@ export function App() {
                   enabled={syncScrollEnabled}
                   active={viewMode !== "editor"}
                   identityKey={previewSyncIdentity}
+                  fontFamily={previewFontStack(previewFontName)}
+                  darkMode={darkMode}
+                  onMermaidRender={(result) => {
+                    if (result.failed > 0 || result.limited > 0) setStatus(`Mermaid：${result.rendered} 个已渲染，${result.failed + result.limited} 个未完成。`);
+                  }}
                   onErrorCapture={handlePreviewImageError}
                   onLoadCapture={handlePreviewImageLoad}
                 />
@@ -854,7 +889,7 @@ export function App() {
             {wechatReplacements.items.map((item) => (
               <div className="replacement-item" key={item.itemId}>
                 <span className="replacement-number">{String(item.sequence).padStart(2, "0")}</span>
-                <span className="replacement-description">{item.kind === "formula" ? "公式" : "图片"}：{item.label}<small>原文字符位置 {item.sourceOffset} · {item.mimeType}{item.width && item.height ? ` · ${item.width}×${item.height}` : ""}</small></span>
+                <span className="replacement-description">{item.kind === "formula" ? "公式" : item.kind === "diagram" ? "流程图" : "图片"}：{item.label}<small>原文字符位置 {item.sourceOffset} · {item.mimeType}{item.width && item.height ? ` · ${item.width}×${item.height}` : ""}</small></span>
                 <button type="button" onClick={() => void copyWechatReplacement(item)}>复制此图片</button>
                 <label><input type="checkbox" checked={handledReplacementIds.has(item.itemId)} onChange={() => toggleReplacementHandled(item.itemId)} />已粘贴</label>
               </div>
@@ -869,12 +904,3 @@ export function App() {
     </main>
   );
 }
-
-
-
-
-
-
-
-
-

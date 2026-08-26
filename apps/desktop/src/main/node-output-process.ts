@@ -6,6 +6,7 @@ import type { OutputContext } from "@fantastic-editor/shared";
 import type { DocxGeneration, OutputFormulaAsset } from "./docx-adapter.js";
 import type { OfflineHtmlGeneration, OutputResourceAsset } from "./offline-html-adapter.js";
 import type { WechatGeneration } from "./wechat-adapter.js";
+import type { OutputMermaidAsset } from "./mermaid-assets.js";
 import type { OutputProcessRequest, OutputProcessResponse } from "./output-process-protocol.js";
 
 const OUTPUT_TIMEOUT_MS = 30_000;
@@ -55,16 +56,16 @@ export class NodeOutputProcess {
   readonly #pending = new Map<string, PendingOutput>();
   #disposed = false;
 
-  generateOfflineHtml(context: OutputContext, assets: OutputResourceAsset[]): Promise<OfflineHtmlGeneration> {
-    return this.start("offline-html", context, assets, []);
+  generateOfflineHtml(context: OutputContext, assets: OutputResourceAsset[], mermaidAssets: OutputMermaidAsset[] = []): Promise<OfflineHtmlGeneration> {
+    return this.start("offline-html", context, assets, [], mermaidAssets);
   }
 
-  generateDocx(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[]): Promise<DocxGeneration> {
-    return this.start("docx", context, assets, formulaAssets);
+  generateDocx(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[], mermaidAssets: OutputMermaidAsset[] = []): Promise<DocxGeneration> {
+    return this.start("docx", context, assets, formulaAssets, mermaidAssets);
   }
 
-  generateWechatHtml(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[]): Promise<WechatGeneration> {
-    return this.start("wechat", context, assets, formulaAssets);
+  generateWechatHtml(context: OutputContext, assets: OutputResourceAsset[], formulaAssets: OutputFormulaAsset[], mermaidAssets: OutputMermaidAsset[] = []): Promise<WechatGeneration> {
+    return this.start("wechat", context, assets, formulaAssets, mermaidAssets);
   }
 
   cancelJob(jobId: string): boolean {
@@ -90,6 +91,7 @@ export class NodeOutputProcess {
     context: OutputContext,
     assets: OutputResourceAsset[],
     formulaAssets: OutputFormulaAsset[],
+    mermaidAssets: OutputMermaidAsset[],
   ): Promise<NodeGeneration> {
     if (this.#disposed) return Promise.resolve(failedGeneration(context, "failed", "OUTPUT_PROCESS_DISPOSED", "Node 导出进程已关闭。"));
     let child: UtilityProcess;
@@ -108,11 +110,12 @@ export class NodeOutputProcess {
       this.#pending.set(taskId, { jobId: context.jobId, kind, context, resolve, timeout });
       const copiedAssets = copyAssetsWithSharedBytes(assets);
       const copiedFormulaAssets = copyAssetsWithSharedBytes(formulaAssets);
+      const copiedMermaidAssets = copyAssetsWithSharedBytes(mermaidAssets);
       const request: OutputProcessRequest = kind === "docx"
-        ? { type: "generate-docx", taskId, context, assets: copiedAssets, formulaAssets: copiedFormulaAssets }
+        ? { type: "generate-docx", taskId, context, assets: copiedAssets, formulaAssets: copiedFormulaAssets, mermaidAssets: copiedMermaidAssets }
         : kind === "wechat"
-          ? { type: "generate-wechat-html", taskId, context, assets: copiedAssets, formulaAssets: copiedFormulaAssets }
-          : { type: "generate-offline-html", taskId, context, assets: copiedAssets };
+          ? { type: "generate-wechat-html", taskId, context, assets: copiedAssets, formulaAssets: copiedFormulaAssets, mermaidAssets: copiedMermaidAssets }
+          : { type: "generate-offline-html", taskId, context, assets: copiedAssets, mermaidAssets: copiedMermaidAssets };
       try {
         child.postMessage(request);
       } catch {

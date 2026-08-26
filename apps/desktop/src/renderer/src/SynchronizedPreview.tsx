@@ -13,12 +13,16 @@ import {
   type EditorViewportAnchor,
   type PreviewSourceAnchor,
 } from "./preview-sync";
+import { renderMermaidPreview } from "./mermaid-preview";
 
 interface SynchronizedPreviewProps {
   html: string;
   enabled: boolean;
   active: boolean;
   identityKey: string | null;
+  fontFamily: string;
+  darkMode: boolean;
+  onMermaidRender?: (result: { rendered: number; failed: number; limited: number }) => void;
   onErrorCapture?: ReactEventHandler<HTMLDivElement>;
   onLoadCapture?: ReactEventHandler<HTMLDivElement>;
 }
@@ -62,7 +66,7 @@ function minimalDomAnchors(anchors: PreviewDomAnchor[]): PreviewDomAnchor[] {
 }
 
 export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, SynchronizedPreviewProps>(function SynchronizedPreview(
-  { html, enabled, active, identityKey, onErrorCapture, onLoadCapture },
+  { html, enabled, active, identityKey, fontFamily, darkMode, onMermaidRender, onErrorCapture, onLoadCapture },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -171,6 +175,26 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
 
   useEffect(() => {
     const content = contentRef.current;
+    if (!content) return;
+    let cancelled = false;
+    delete content.dataset.mermaidError;
+    const frame = window.requestAnimationFrame(() => {
+      content.dataset.mermaidStarted = String(content.querySelectorAll("pre > code.language-mermaid").length);
+      void renderMermaidPreview(content, { darkMode, fontFamily }).then((result) => {
+        if (cancelled) return;
+        onMermaidRender?.(result);
+        scheduleUpdate(true);
+      }).catch((error: unknown) => {
+        if (cancelled) return;
+        content.dataset.mermaidError = error instanceof Error ? error.message.slice(0, 300) : "Mermaid preview failed";
+        onMermaidRender?.({ rendered: 0, failed: 1, limited: 0 });
+      });
+    });
+    return () => { cancelled = true; window.cancelAnimationFrame(frame); };
+  }, [darkMode, fontFamily, html]);
+
+  useEffect(() => {
+    const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => scheduleUpdate(true));
     observer.observe(content);
@@ -183,6 +207,7 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
     <div
       className="markdown-preview"
       ref={containerRef}
+      style={{ fontFamily }}
       onErrorCapture={onErrorCapture}
       onLoadCapture={onLoadCapture}
     >

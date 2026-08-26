@@ -34,6 +34,7 @@ export const FANTASTIC_EDITOR_LIMITS = Object.freeze({
   maxSingleResourceBytes: 50 * 1024 * 1024,
   maxUniqueResolutionBytes: 200 * 1024 * 1024,
   maxFormulaRendersPerOutput: 500,
+  maxMermaidRendersPerOutput: 100,
 });
 
 export interface FileFingerprint {
@@ -376,7 +377,7 @@ export interface OutputArtifact {
 export interface WechatReplacementItem {
   itemId: string;
   sequence: number;
-  kind: "image" | "formula";
+  kind: "image" | "formula" | "diagram";
   label: string;
   sourceOffset: number;
   mimeType: string;
@@ -442,6 +443,8 @@ export interface BeginOutputRequest {
   parseCommitId: string;
   workspaceRevision: number;
   parsedDocument: ParsedDocument;
+  fontFamily?: string;
+  darkMode?: boolean;
 }
 
 export interface OutputCommandResult {
@@ -478,6 +481,3 @@ export interface FantasticEditorApi {
   cancelOutput(request: CancelOutputRequest): Promise<OutputCommandResult>;
   copyWechatReplacement(request: CopyWechatReplacementRequest): Promise<CopyWechatReplacementResult>;
 }
-
-
-

@@ -6,6 +6,7 @@ export interface HtmlRenderOptions {
   imagePlaceholderLabel?: string;
   renderImage?: (node: DocumentNode) => string | undefined;
   renderFormula?: (node: DocumentNode) => string | undefined;
+  renderCodeBlock?: (node: DocumentNode) => string | undefined;
 }
 
 function escapeHtml(value: string): string {
@@ -93,6 +94,8 @@ function renderNode(node: DocumentNode, options: HtmlRenderOptions): string {
       return `<li class="task-item"><input type="checkbox" disabled${checked ? " checked" : ""}>${content()}</li>`;
     }
     case "codeBlock": {
+      const custom = options.renderCodeBlock?.(node);
+      if (custom !== undefined) return custom;
       const language = stringAttribute(node, "language");
       return `<pre><code${language ? ` class="language-${escapeHtml(language)}"` : ""}>${escapeHtml(stringAttribute(node, "value"))}</code></pre>`;
     }

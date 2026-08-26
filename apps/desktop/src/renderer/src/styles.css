@@ -345,4 +345,11 @@ kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border:
   .document-stage.view-split .split-handle span { top: 1px; left: 50%; width: 34px; height: 2px; margin: 0 0 0 -17px; }
   .welcome-screen { padding: 25px; }
 }
-
+.preview-font-control { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding-left: 7px; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; font-size: 9px; font-weight: 650; letter-spacing: .01em; text-transform: none; }
+.preview-font-control select { max-width: 94px; height: 22px; padding: 0 19px 0 4px; color: var(--text); background: var(--surface); border: 0; border-radius: 4px; outline: none; font: inherit; cursor: pointer; }
+.preview-font-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.sync-scroll-button strong { display: inline-grid; place-items: center; min-width: 27px; height: 16px; margin-left: 2px; padding: 0 4px; color: var(--faint); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; font-size: 8px; line-height: 1; }
+.sync-scroll-button.active strong { color: #fff; background: var(--accent); border-color: var(--accent); }
+.mermaid-diagram { box-sizing: border-box; max-width: 920px; margin: 20px auto; padding: 18px; overflow: auto; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--border); border-radius: 9px; }
+.mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.markdown-preview pre.mermaid-error { color: #9a4938; white-space: pre-wrap; border: 1px solid color-mix(in srgb, #c85d48 42%, var(--border)); }

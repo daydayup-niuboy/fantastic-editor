@@ -35,4 +35,18 @@ describe("renderParsedDocumentHtml", () => {
     expect(html).toContain("resource-placeholder");
     expect(html).toContain(parsed.resourceReferences[0]!.referenceKey);
   });
-});
+
+  it("allows output adapters to replace Mermaid code blocks without changing other code", async () => {
+    const parsed = await parseDocument({
+      documentId: "html-mermaid",
+      editorText: "```mermaid\ngraph TD\nA-->B\n```\n\n```ts\nconst x = 1\n```\n",
+    });
+    const html = renderParsedDocumentHtml(parsed, {
+      renderCodeBlock: (node) => node.attributes.language === "mermaid"
+        ? '<img class="diagram" alt="Mermaid">'
+        : undefined,
+    });
+    expect(html).toContain('<img class="diagram" alt="Mermaid">');
+    expect(html).toContain('class="language-ts"');
+    expect(html).not.toContain("graph TD");
+  });});

@@ -14,6 +14,7 @@ parentPort.on("message", (event) => {
     || !/^[a-f\d-]{36}$/i.test(request.taskId)
     || !request.context
     || !Array.isArray(request.assets)
+    || !Array.isArray(request.mermaidAssets)
     || ((request.type === "generate-docx" || request.type === "generate-wechat-html") && !Array.isArray(request.formulaAssets))
   ) return;
   void (async () => {
@@ -23,18 +24,18 @@ parentPort.on("message", (event) => {
         ? {
             type: "docx-generated",
             taskId: request.taskId!,
-            generation: await generateDocx(request.context!, request.assets!, request.formulaAssets!),
+            generation: await generateDocx(request.context!, request.assets!, request.formulaAssets!, request.mermaidAssets!),
           }
         : request.type === "generate-wechat-html"
           ? {
               type: "wechat-html-generated",
               taskId: request.taskId!,
-              generation: generateWechatHtml(request.context!, request.assets!, request.formulaAssets!),
+              generation: generateWechatHtml(request.context!, request.assets!, request.formulaAssets!, request.mermaidAssets!),
             }
           : {
               type: "offline-html-generated",
               taskId: request.taskId!,
-              generation: generateOfflineHtml(request.context!, request.assets!),
+              generation: generateOfflineHtml(request.context!, request.assets!, request.mermaidAssets!),
             };
     } catch {
       response = {

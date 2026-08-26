@@ -6,6 +6,7 @@ import { BrowserWindow, session } from "electron";
 import type { Diagnostic } from "@fantastic-editor/document-core";
 import type { OutputContext } from "@fantastic-editor/shared";
 import { generateOfflineHtml, type OfflineHtmlGeneration, type OutputResourceAsset } from "./offline-html-adapter.js";
+import type { OutputMermaidAsset } from "./mermaid-assets.js";
 
 const PDF_TIMEOUT_MS = 45_000;
 
@@ -38,11 +39,11 @@ function validPdf(bytes: Uint8Array): boolean {
 export class PdfRenderWindow {
   readonly #controllers = new Map<string, PdfController>();
 
-  async generatePdf(context: OutputContext, assets: OutputResourceAsset[]): Promise<OfflineHtmlGeneration> {
+  async generatePdf(context: OutputContext, assets: OutputResourceAsset[], mermaidAssets: OutputMermaidAsset[] = []): Promise<OfflineHtmlGeneration> {
     if (context.target !== "pdf" || this.#controllers.has(context.jobId)) {
       return failed(context, "failed", "PDF_REQUEST_INVALID", "PDF 导出任务身份无效或重复。 ");
     }
-    const htmlGeneration = generateOfflineHtml(context, assets);
+    const htmlGeneration = generateOfflineHtml(context, assets, mermaidAssets);
     if ((htmlGeneration.status !== "completed" && htmlGeneration.status !== "completed-with-omissions") || !htmlGeneration.bytes) {
       return htmlGeneration;
     }
