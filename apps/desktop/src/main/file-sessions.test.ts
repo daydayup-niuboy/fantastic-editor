@@ -74,7 +74,12 @@ describe("FileSessionManager", () => {
     const manager = new FileSessionManager();
     const untitled = await manager.createUntitled();
     expect(untitled.status).toBe("opened");
-    expect(untitled.session).toMatchObject({ displayName: "未命名", isUntitled: true, editorText: "# 未命名文档\n\n" });
+    expect(untitled.session).toMatchObject({
+      displayName: "未命名",
+      isUntitled: true,
+      requiresSave: true,
+      editorText: "",
+    });
     expect((await manager.save({ sessionId: untitled.session!.sessionId, editorText: "# 草稿\n" })).status).toBe("failed");
     const temporaryRoot = manager.getResolutionContext(untitled.session!.documentId)!.authorizationRootRealPath;
     const target = join(directory, "created.md");
@@ -82,6 +87,33 @@ describe("FileSessionManager", () => {
     expect(saved).toMatchObject({ status: "saved", displayName: "created.md" });
     expect(await readFile(target, "utf8")).toBe("# 已保存\n");
     await expect(access(temporaryRoot)).rejects.toBeDefined();
+    expect(await manager.closeSession(untitled.session!.sessionId)).toEqual({ status: "closed" });
+  });
+
+  it("saves a completely blank untitled Markdown document through Save As", async () => {
+    const directory = await createTemporaryDirectory();
+    const manager = new FileSessionManager();
+    const untitled = await manager.createUntitled();
+    expect(untitled.status).toBe("opened");
+    const target = join(directory, "blank.md");
+
+    const saved = await manager.save({ sessionId: untitled.session!.sessionId, editorText: "" }, target);
+
+    expect(saved).toMatchObject({ status: "saved", displayName: "blank.md" });
+    expect(await readFile(target, "utf8")).toBe("");
+  });
+
+  it("creates untitled sessions under an application-provided temporary base", async () => {
+    const directory = await createTemporaryDirectory();
+    const temporaryBase = join(directory, "application-data", "untitled-sessions");
+    const manager = new FileSessionManager();
+    manager.setTemporaryBaseDirectory(temporaryBase);
+
+    const untitled = await manager.createUntitled();
+
+    expect(untitled.status).toBe("opened");
+    const context = manager.getResolutionContext(untitled.session!.documentId);
+    expect(context?.authorizationRootRealPath.startsWith(temporaryBase)).toBe(true);
     expect(await manager.closeSession(untitled.session!.sessionId)).toEqual({ status: "closed" });
   });
   it("requires a line-ending choice and marks normalized mixed files dirty", async () => {

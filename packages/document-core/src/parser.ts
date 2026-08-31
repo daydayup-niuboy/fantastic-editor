@@ -37,6 +37,14 @@ interface PreviewEnvironment extends Record<string, unknown> {
   wikiReferences: ResourceReference[];
   markdownIndex: number;
   wikiIndex: number;
+  inlineFormulas: RawFormulaMatch[];
+  blockFormulas: RawFormulaMatch[];
+  inlineFormulaIndex: number;
+  blockFormulaIndex: number;
+  inlineCodes: RawInlineRange[];
+  inlineLinks: RawInlineRange[];
+  inlineCodeIndex: number;
+  inlineLinkIndex: number;
 }
 
 const PREVIEW_SOURCE_TOKEN_KIND: Readonly<Record<string, string>> = {
@@ -51,9 +59,67 @@ const PREVIEW_SOURCE_TOKEN_KIND: Readonly<Record<string, string>> = {
   math_block: "formula-block",
 };
 
+interface PreviewCellRange {
+  from: number;
+  to: number;
+}
+
+function tableCellRanges(line: string, lineStart: number): PreviewCellRange[] {
+  const pipes: number[] = [];
+  let codeFenceLength = 0;
+  for (let index = 0; index < line.length;) {
+    if (line[index] === "`") {
+      let run = 1;
+      while (line[index + run] === "`") run += 1;
+      if (codeFenceLength === 0) codeFenceLength = run;
+      else if (run === codeFenceLength) codeFenceLength = 0;
+      index += run;
+      continue;
+    }
+    if (line[index] === "|" && codeFenceLength === 0) {
+      let backslashes = 0;
+      for (let before = index - 1; before >= 0 && line[before] === "\\"; before -= 1) backslashes += 1;
+      if (backslashes % 2 === 0) pipes.push(index);
+    }
+    index += 1;
+  }
+  const firstContent = line.search(/\S/);
+  if (firstContent < 0) return [];
+  const lastContent = line.search(/\s*$/) - 1;
+  const boundaries = [-1, ...pipes, line.length];
+  const ranges: PreviewCellRange[] = [];
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    let from = boundaries[index]! + 1;
+    let to = boundaries[index + 1]!;
+    if ((index === 0 && pipes[0] === firstContent) || (index === boundaries.length - 2 && pipes.at(-1) === lastContent)) continue;
+    while (from < to && /\s/.test(line[from]!)) from += 1;
+    while (to > from && /\s/.test(line[to - 1]!)) to -= 1;
+    ranges.push({ from: lineStart + from, to: lineStart + to });
+  }
+  return ranges;
+}
+
 function annotatePreviewSourceRanges(tokens: MarkdownToken[], editorText: string): void {
   const lineStarts = createLineStarts(editorText);
+  let currentCells: PreviewCellRange[] = [];
+  let currentCellIndex = 0;
   for (const token of tokens) {
+    if (token.type === "tr_open" && token.map) {
+      const rowStart = lineStarts[token.map[0]] ?? 0;
+      const nextLineStart = lineStarts[token.map[0] + 1] ?? editorText.length;
+      const rowEnd = nextLineStart > rowStart && editorText[nextLineStart - 1] === "\n" ? nextLineStart - 1 : nextLineStart;
+      currentCells = tableCellRanges(editorText.slice(rowStart, rowEnd), rowStart);
+      currentCellIndex = 0;
+    }
+    if (token.type === "th_open" || token.type === "td_open") {
+      const range = currentCells[currentCellIndex++];
+      if (range) {
+        token.attrSet("data-source-from", String(range.from));
+        token.attrSet("data-source-to", String(range.to));
+        token.attrSet("data-source-kind", "table-cell");
+      }
+    }
+    if (token.type === "tr_close") currentCells = [];
     const kind = PREVIEW_SOURCE_TOKEN_KIND[token.type];
     if (!kind || !token.map || token.hidden) continue;
     const from = lineStarts[token.map[0]] ?? 0;
@@ -97,13 +163,69 @@ previewMarkdown.renderer.rules.wiki_image = (tokens, index, _options, environmen
   return resourcePlaceholder(tokens[index]?.content || "未命名图片", reference);
 };
 
+function previewFormulaSourceAttributes(formula: RawFormulaMatch | undefined, fallback = ""): string {
+  return formula
+    ? ` data-source-from="${formula.from}" data-source-to="${formula.to}" data-source-kind="${formula.displayMode ? "formula-block" : "formula-inline"}" data-source-block="true"`
+    : fallback;
+}
+
 const renderPreviewMathBlock = previewMarkdown.renderer.rules.math_block;
 if (renderPreviewMathBlock) {
   previewMarkdown.renderer.rules.math_block = (tokens, index, options, environment, renderer) => {
+    const preview = environment as unknown as PreviewEnvironment;
+    const formula = preview.blockFormulas[preview.blockFormulaIndex++];
     const token = tokens[index];
-    const sourceAttributes = token ? renderer.renderAttrs(token) : "";
+    const sourceAttributes = previewFormulaSourceAttributes(formula, token ? renderer.renderAttrs(token) : "");
     return `<div class="preview-formula-block"${sourceAttributes}>${renderPreviewMathBlock(tokens, index, options, environment, renderer)}</div>`;
   };
+}
+
+const renderPreviewMathInline = previewMarkdown.renderer.rules.math_inline;
+if (renderPreviewMathInline) {
+  previewMarkdown.renderer.rules.math_inline = (tokens, index, options, environment, renderer) => {
+    const preview = environment as unknown as PreviewEnvironment;
+    const formula = preview.inlineFormulas[preview.inlineFormulaIndex++];
+    const sourceAttributes = previewFormulaSourceAttributes(formula);
+    return `<span class="preview-formula-inline"${sourceAttributes}>${renderPreviewMathInline(tokens, index, options, environment, renderer)}</span>`;
+  };
+}
+
+function previewInlineSourceAttributes(range: RawInlineRange | undefined, kind: "inline-code" | "inline-link"): string {
+  return range ? ` data-source-from="${range.from}" data-source-to="${range.to}" data-source-kind="${kind}"` : "";
+}
+
+const renderPreviewCodeInline = previewMarkdown.renderer.rules.code_inline;
+if (renderPreviewCodeInline) {
+  previewMarkdown.renderer.rules.code_inline = (tokens, index, options, environment, renderer) => {
+    const preview = environment as unknown as PreviewEnvironment;
+    const sourceAttributes = previewInlineSourceAttributes(preview.inlineCodes[preview.inlineCodeIndex++], "inline-code");
+    const rendered = renderPreviewCodeInline(tokens, index, options, environment, renderer);
+    return sourceAttributes ? rendered.replace("<code", `<code${sourceAttributes}`) : rendered;
+  };
+}
+
+previewMarkdown.renderer.rules.link_open = (tokens, index, options, environment, renderer) => {
+  const preview = environment as unknown as PreviewEnvironment;
+  const sourceAttributes = previewInlineSourceAttributes(preview.inlineLinks[preview.inlineLinkIndex++], "inline-link");
+  const token = tokens[index];
+  if (token && sourceAttributes) {
+    const range = preview.inlineLinks[preview.inlineLinkIndex - 1];
+    if (range) {
+      token.attrSet("data-source-from", String(range.from));
+      token.attrSet("data-source-to", String(range.to));
+      token.attrSet("data-source-kind", "inline-link");
+    }
+  }
+  return renderer.renderToken(tokens, index, options);
+};
+
+function countPreviewTokenType(tokens: MarkdownToken[], type: string): number {
+  let count = 0;
+  for (const token of tokens) {
+    if (token.type === type) count += 1;
+    if (token.children) count += countPreviewTokenType(token.children, type);
+  }
+  return count;
 }
 
 for (const ruleName of ["fence", "code_block"] as const) {
@@ -136,25 +258,58 @@ interface RawFormulaMatch {
   delimiter: "$" | "$$" | "\\(" | "\\[";
 }
 
-function createSyntaxScanText(text: string): string {
+interface RawInlineRange {
+  from: number;
+  to: number;
+}
+
+function createBlockScanText(text: string): string {
   const characters = text.split("");
   const lineStarts = createLineStarts(text);
   const mask = (from: number, to: number) => {
-    for (let index = from; index < to; index += 1) {
-      if (characters[index] !== "\n") characters[index] = " ";
-    }
+    for (let index = from; index < to; index += 1) if (characters[index] !== "\n") characters[index] = " ";
   };
   for (const token of markdown.parse(text, {})) {
     if ((token.type === "fence" || token.type === "code_block") && token.map) {
       mask(lineStarts[token.map[0]] ?? 0, lineStarts[token.map[1]] ?? text.length);
     }
   }
-  const blockMasked = characters.join("");
+  return characters.join("");
+}
+
+function createSyntaxScanText(text: string): string {
+  const characters = createBlockScanText(text).split("");
   const codeSpanPattern = /(`+)[\s\S]*?\1/g;
-  for (const match of blockMasked.matchAll(codeSpanPattern)) {
-    if (match.index !== undefined) mask(match.index, match.index + match[0].length);
+  for (const match of characters.join("").matchAll(codeSpanPattern)) {
+    if (match.index === undefined) continue;
+    for (let index = match.index; index < match.index + match[0].length; index += 1) {
+      if (characters[index] !== "\n") characters[index] = " ";
+    }
   }
   return characters.join("");
+}
+
+function scanInlineCodeRanges(text: string): RawInlineRange[] {
+  const ranges: RawInlineRange[] = [];
+  for (const match of createBlockScanText(text).matchAll(/(`+)[\s\S]*?\1/g)) {
+    if (match.index !== undefined && !isEscaped(text, match.index)) ranges.push({ from: match.index, to: match.index + match[0].length });
+  }
+  return ranges;
+}
+
+function scanInlineLinkRanges(text: string): RawInlineRange[] {
+  const scanText = createSyntaxScanText(text);
+  const ranges: RawInlineRange[] = [];
+  const collect = (pattern: RegExp) => {
+    for (const match of scanText.matchAll(pattern)) {
+      if (match.index === undefined || isEscaped(text, match.index) || text[match.index - 1] === "!") continue;
+      const range = { from: match.index, to: match.index + match[0].length };
+      if (!ranges.some((item) => range.from < item.to && range.to > item.from)) ranges.push(range);
+    }
+  };
+  collect(/\[(?:\\.|[^\]\\])+\]\(\s*(?:\\.|[^)])*\)/g);
+  collect(/\[(?:\\.|[^\]\\])+\]\[(?:\\.|[^\]\\])*\]/g);
+  return ranges.sort((left, right) => left.from - right.from);
 }
 
 function isEscaped(text: string, offset: number): boolean {
@@ -671,13 +826,26 @@ export function renderPreviewHtml(
   resourceReferences: readonly ResourceReference[] = [],
 ): string {
   const canonicalText = canonicalizeEditorText(editorText);
+  const formulas = scanFormulas(canonicalText);
   const environment: PreviewEnvironment = {
     markdownReferences: resourceReferences.filter((item) => item.syntax !== "wiki-image"),
     wikiReferences: resourceReferences.filter((item) => item.syntax === "wiki-image"),
     markdownIndex: 0,
     wikiIndex: 0,
+    inlineFormulas: formulas.filter((item) => !item.displayMode),
+    blockFormulas: formulas.filter((item) => item.displayMode),
+    inlineFormulaIndex: 0,
+    blockFormulaIndex: 0,
+    inlineCodes: [],
+    inlineLinks: [],
+    inlineCodeIndex: 0,
+    inlineLinkIndex: 0,
   };
   const tokens = previewMarkdown.parse(canonicalText, environment);
+  const inlineCodes = scanInlineCodeRanges(canonicalText);
+  const inlineLinks = scanInlineLinkRanges(canonicalText);
+  environment.inlineCodes = countPreviewTokenType(tokens, "code_inline") === inlineCodes.length ? inlineCodes : [];
+  environment.inlineLinks = countPreviewTokenType(tokens, "link_open") === inlineLinks.length ? inlineLinks : [];
   annotatePreviewSourceRanges(tokens, canonicalText);
   return previewMarkdown.renderer.render(tokens, previewMarkdown.options, environment);
 }

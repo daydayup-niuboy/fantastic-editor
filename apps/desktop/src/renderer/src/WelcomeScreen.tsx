@@ -1,12 +1,15 @@
 import { Icon } from "./Icon";
+import type { RecentFileEntry } from "@fantastic-editor/shared";
 
 interface WelcomeScreenProps {
   onNew(): void;
   onOpen(): void;
   onOpenFolder(): void;
+  recentFiles: RecentFileEntry[];
+  onOpenRecent(recentId: string): void;
 }
 
-export function WelcomeScreen({ onNew, onOpen, onOpenFolder }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNew, onOpen, onOpenFolder, recentFiles, onOpenRecent }: WelcomeScreenProps) {
   return (
     <section className="welcome-screen">
       <div className="welcome-content">
@@ -20,6 +23,7 @@ export function WelcomeScreen({ onNew, onOpen, onOpenFolder }: WelcomeScreenProp
           <button type="button" className="welcome-action" onClick={onOpenFolder}><Icon name="folderOpen" /><span><strong>打开文件夹</strong><small>浏览一个 Markdown 工作区</small></span></button>
         </div>
         <div className="welcome-drop"><span>或将 Markdown 文件拖到窗口任意位置</span></div>
+        {recentFiles.length > 0 && <section className="welcome-recent" aria-label="最近文件"><h2>最近文件</h2>{recentFiles.map((file) => <button type="button" key={file.recentId} onClick={() => onOpenRecent(file.recentId)}><Icon name="markdown" size={15} /><span><strong>{file.displayName}</strong><small>{new Date(file.lastOpenedAt).toLocaleString()}</small></span></button>)}</section>}
       </div>
     </section>
   );

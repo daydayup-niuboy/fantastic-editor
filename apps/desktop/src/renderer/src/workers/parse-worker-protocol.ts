@@ -18,6 +18,7 @@ interface ParseWorkerIdentity {
 
 export interface ParseWorkerSuccess extends ParseWorkerIdentity {
   type: "parsed";
+  parseDurationMs: number;
   parsedDocument: ParsedDocument;
   diagnostics: Diagnostic[];
   previewHtml: string;

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Diagnostic, DocumentNode } from "@fantastic-editor/document-core";
-import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
+import { FANTASTIC_EDITOR_LIMITS, WECHAT_THEME_OPTIONS } from "@fantastic-editor/shared";
 import type {
   ApproveOmissions,
   BeginOutputRequest,
@@ -12,6 +12,7 @@ import type {
   OutputResult,
   ResolutionSnapshot,
   WechatReplacementItem,
+  WechatThemeId,
 } from "@fantastic-editor/shared";
 import type { SingleFileResolutionContext } from "./file-sessions.js";
 import type { OutputFormulaAsset } from "./docx-adapter.js";
@@ -41,6 +42,7 @@ interface GeneratedOutput {
   usedReferenceKeys: string[];
   omittedReferenceKeys: string[];
   replacementItems?: WechatReplacementBinding[];
+  suggestedTitle?: string;
 }
 
 interface FormulaRenderer {
@@ -66,6 +68,25 @@ export type SaveOutputResult =
   | { status: "saved"; artifact: OutputArtifact }
   | { status: "cancelled" }
   | { status: "failed"; error: string };
+
+export interface WechatAcceptanceSummary {
+  jobId: string;
+  documentId: string;
+  sourceHash: string;
+  status: Extract<OutputResult["status"], "completed" | "completed-with-omissions">;
+  themeId: WechatThemeId;
+  replacementItems: WechatReplacementItem[];
+  omittedReferenceKeys: string[];
+}
+
+export interface WechatDraftPayload {
+  jobId: string;
+  sourceHash: string;
+  title: string;
+  html: string;
+  replacementItems: WechatReplacementItem[];
+  replacements: Map<string, { bytes: Uint8Array; mimeType: string }>;
+}
 
 interface OutputRuntime {
   request: BeginOutputRequest;
@@ -116,6 +137,13 @@ function normalizeOutputFont(value: unknown): string {
   return font && font.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(font) ? font : "Microsoft YaHei UI";
 }
 
+const WECHAT_THEME_IDS = new Set<string>(WECHAT_THEME_OPTIONS.map((theme) => theme.id));
+
+function normalizeWechatThemeId(value: unknown): WechatThemeId | null {
+  if (value === undefined) return "wechat-native-enhanced";
+  return typeof value === "string" && WECHAT_THEME_IDS.has(value) ? value as WechatThemeId : null;
+}
+
 function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   const seen = new Set<string>();
   return groups.flat().filter((item) => {
@@ -130,6 +158,7 @@ export class OutputService {
   readonly #snapshots = new Map<string, ResolutionSnapshot>();
   readonly #runtimes = new Map<string, OutputRuntime>();
   readonly #wechatReplacements = new Map<string, Map<string, { bytes: Uint8Array; mimeType: string }>>();
+  readonly #wechatDraftPayloads = new Map<string, WechatDraftPayload>();
   readonly #handles: AssetHandleRegistry;
   readonly #svgTransformer: SvgTransformer;
   readonly #generator: OutputGenerator;
@@ -162,6 +191,37 @@ export class OutputService {
     return item ? { bytes: item.bytes.slice(), mimeType: item.mimeType } : undefined;
   }
 
+  getWechatAcceptanceSummary(jobId: string): WechatAcceptanceSummary | undefined {
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(jobId)) return undefined;
+    const result = this.#jobs.get(jobId)?.result;
+    if (
+      !result
+      || result.target !== "wechat-clipboard"
+      || (result.status !== "completed" && result.status !== "completed-with-omissions")
+      || !result.wechatReplacementItems
+      || !result.wechatThemeId
+    ) return undefined;
+    return {
+      jobId: result.jobId,
+      documentId: result.documentId,
+      sourceHash: result.sourceHash,
+      status: result.status,
+      themeId: result.wechatThemeId,
+      replacementItems: result.wechatReplacementItems.map((item) => ({ ...item })),
+      omittedReferenceKeys: [...result.omittedReferenceKeys],
+    };
+  }
+
+  getWechatDraftPayload(jobId: string): WechatDraftPayload | undefined {
+    if (!/^[A-Za-z0-9-]{1,80}$/.test(jobId)) return undefined;
+    const payload = this.#wechatDraftPayloads.get(jobId);
+    if (!payload) return undefined;
+    return {
+      ...payload,
+      replacementItems: payload.replacementItems.map((item) => ({ ...item })),
+      replacements: new Map([...payload.replacements.entries()].map(([itemId, value]) => [itemId, { bytes: value.bytes.slice(), mimeType: value.mimeType }])),
+    };
+  }
   rememberResolution(parseCommitId: string, snapshot: ResolutionSnapshot): void {
     this.#snapshots.set(parseCommitId, snapshot);
   }
@@ -171,6 +231,7 @@ export class OutputService {
     context: SingleFileResolutionContext | undefined,
     isCurrent: () => boolean,
   ): Promise<OutputCommandResult> {
+    const wechatThemeId = normalizeWechatThemeId(request.wechatThemeId);
     if (
       (request.target !== "offline-html" && request.target !== "docx" && request.target !== "pdf" && request.target !== "wechat-html" && request.target !== "wechat-clipboard")
       || !context
@@ -181,6 +242,7 @@ export class OutputService {
       || request.workspaceRevision !== context.workspaceRevision
       || request.parsedDocument.sourceLength > FANTASTIC_EDITOR_LIMITS.maxSourceCharacters
       || request.parsedDocument.resourceReferences.length > FANTASTIC_EDITOR_LIMITS.maxResourceReferences
+      || ((request.target === "wechat-html" || request.target === "wechat-clipboard") && wechatThemeId === null)
     ) return { status: "failed", error: "导出请求无效、已过期或目标尚未实现。" };
     const snapshot = this.#snapshots.get(request.parseCommitId);
     if (!snapshot || snapshot.documentId !== request.documentId || snapshot.sourceHash !== request.sourceHash || snapshot.workspaceRevision !== request.workspaceRevision) {
@@ -244,7 +306,7 @@ export class OutputService {
         diagnostics: mergeDiagnostics(snapshot.diagnostics, collected.diagnostics, formulaCollection.diagnostics, mermaidCollection.diagnostics),
       },
       derivedAssetManifest,
-      theme: { id: "user-preview", tokens: { "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } },
+      theme: { id: request.target === "wechat-html" || request.target === "wechat-clipboard" ? wechatThemeId! : "user-preview", tokens: { "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } },
       locale: "zh-CN",
       options: {},
     };
@@ -297,6 +359,7 @@ export class OutputService {
     this.#runtimes.clear();
     this.#snapshots.clear();
     this.#wechatReplacements.clear();
+    this.#wechatDraftPayloads.clear();
     this.#jobs.clear();
   }
 
@@ -355,6 +418,18 @@ export class OutputService {
         this.#wechatReplacements.clear();
         this.#wechatReplacements.set(jobId, stored);
         wechatReplacementItems = metadata;
+        if (runtime.context.target === "wechat-clipboard" && generated.bytes) {
+          const html = new TextDecoder("utf-8", { fatal: true }).decode(generated.bytes);
+          this.#wechatDraftPayloads.clear();
+          this.#wechatDraftPayloads.set(jobId, {
+            jobId,
+            sourceHash: runtime.context.sourceHash,
+            title: generated.suggestedTitle ?? "fantastic-editor 草稿",
+            html,
+            replacementItems: metadata.map((item) => ({ ...item })),
+            replacements: new Map([...stored.entries()].map(([itemId, value]) => [itemId, { bytes: value.bytes.slice(), mimeType: value.mimeType }])),
+          });
+        }
       }
     }
     if ((status === "completed" || status === "completed-with-omissions") && generated.bytes) {
@@ -366,11 +441,15 @@ export class OutputService {
       else if (saved.status === "cancelled") status = "cancelled";
       else {
         status = "failed";
-        diagnostics.push(outputDiagnostic(jobId, "OUTPUT_FILE_WRITE_FAILED", saved.error, runtime.context.target));
+        const writeFailureCode = runtime.context.target === "wechat-clipboard"
+          ? "OUTPUT_CLIPBOARD_WRITE_FAILED"
+          : "OUTPUT_FILE_WRITE_FAILED";
+        diagnostics.push(outputDiagnostic(jobId, writeFailureCode, saved.error, runtime.context.target));
       }
     }
     if ((runtime.context.target === "wechat-html" || runtime.context.target === "wechat-clipboard") && status !== "completed" && status !== "completed-with-omissions") {
       this.#wechatReplacements.delete(jobId);
+      this.#wechatDraftPayloads.delete(jobId);
       wechatReplacementItems = undefined;
     }
     const completedAt = Date.now();
@@ -390,6 +469,8 @@ export class OutputService {
       approvedOmittedReferenceKeys: generated.omittedReferenceKeys,
       derivedAssetManifest: runtime.context.derivedAssetManifest,
       ...(wechatReplacementItems ? { wechatReplacementItems } : {}),
+      ...(generated.suggestedTitle ? { wechatSuggestedTitle: generated.suggestedTitle } : {}),
+      ...((runtime.context.target === "wechat-html" || runtime.context.target === "wechat-clipboard") ? { wechatThemeId: runtime.context.theme.id as WechatThemeId } : {}),
       timing: {
         startedAt: new Date(runtime.startedAt).toISOString(),
         completedAt: new Date(completedAt).toISOString(),

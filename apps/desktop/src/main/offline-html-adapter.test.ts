@@ -82,6 +82,41 @@ describe("generateOfflineHtml", () => {
     expect(html).not.toMatch(/data-source-|PreviewSyncMap|SelectionOverlay|preview-selection/i);
   });
 
+  it("uses the first heading as title and preserves the selected dark theme", async () => {
+    const value = await fixture();
+    const parsedDocument = await parseDocument({ documentId: "document-1", editorText: "# 标题 <测试>\n\n正文与[链接](https://example.com)。" });
+    const context: OutputContext = {
+      ...value.context,
+      sourceHash: parsedDocument.sourceHash,
+      parsedDocument,
+      resolutionSnapshot: { ...value.context.resolutionSnapshot, sourceHash: parsedDocument.sourceHash, records: {} },
+      derivedAssetManifest: { ...value.context.derivedAssetManifest, sourceHash: parsedDocument.sourceHash },
+      theme: { id: "dark", tokens: { colorScheme: "dark", "typography.body.fontFamily": "Arial" } },
+    };
+    const result = generateOfflineHtml(context, []);
+    expect(result.status).toBe("completed");
+    const html = new TextDecoder().decode(result.bytes!);
+    expect(html).toContain("<title>标题 &lt;测试&gt;</title>");
+    expect(html).toContain('<meta name="color-scheme" content="dark">');
+    expect(html).toContain('color-scheme:dark');
+    expect(html).toContain('<main class="document" role="document"');
+    expect(html).toContain('font-family:"Arial"');
+    expect(html).not.toMatch(/<script\b|\son[a-z]+\s*=|(?:file|blob|app|fantastic-asset):/i);
+  });
+
+  it("adds the frozen A4 pagination contract only for PDF", async () => {
+    const value = await fixture();
+    const offlineResult = generateOfflineHtml(value.context, [value.asset]);
+    const pdfResult = generateOfflineHtml({ ...value.context, target: "pdf" }, [value.asset]);
+    const offlineHtml = new TextDecoder().decode(offlineResult.bytes!);
+    const pdfHtml = new TextDecoder().decode(pdfResult.bytes!);
+    expect(offlineHtml).not.toContain("@page{size:A4 portrait");
+    expect(pdfHtml).toContain("@page{size:A4 portrait");
+    expect(pdfHtml).toContain("display:table-header-group");
+    expect(pdfHtml).toContain("white-space:pre-wrap");
+    expect(pdfHtml).toContain("max-height:245mm");
+  });
+
   it("embeds KaTeX CSS and WOFF2 fonts without scripts or external font URLs", async () => {
     const value = await fixture();
     const parsedDocument = await parseDocument({ documentId: "document-1", editorText: "行内公式 $x^2$。\n\n$$\\sum_{i=1}^n i$$" });

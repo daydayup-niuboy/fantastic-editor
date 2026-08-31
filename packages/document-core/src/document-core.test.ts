@@ -36,6 +36,15 @@ describe("resource classification", () => {
 });
 
 describe("ParsedDocument", () => {
+  it("parses a completely blank Markdown document", async () => {
+    const parsed = await parseDocument({ documentId: "blank-document", editorText: "" });
+
+    expect(parsed.sourceLength).toBe(0);
+    expect(parsed.children).toEqual([]);
+    expect(parsed.resourceReferences).toEqual([]);
+    expect(parsed.statistics).toMatchObject({ headings: 0, images: 0, formulas: 0, characters: 0 });
+  });
+
   it("is deterministic for the same source and documentId", async () => {
     const input = { documentId: "doc-1", editorText: "# 标题\r\n\r\n正文" };
     expect(await parseDocument(input)).toEqual(await parseDocument(input));
@@ -68,14 +77,36 @@ describe("ParsedDocument", () => {
     expect(html).not.toContain("<img");
   });
 
-  it("adds internal source anchors to visible preview blocks", async () => {
-    const source = "# 标题\n\n正文段落\n\n$$\nx + y\n$$\n";
+  it("adds internal source anchors to visible preview blocks and protected inline content", async () => {
+    const inlineLink = "[链接](https://example.com)";
+    const inlineCode = "`code`";
+    const source = `# 标题\n\n正文含 ${inlineLink}、${inlineCode} 与 $a+b$ 公式\n\n$$\nx + y\n$$\n`;
     const html = renderPreviewHtml(source);
+    const inlineFormulaFrom = source.indexOf("$a+b$");
+    const inlineLinkFrom = source.indexOf(inlineLink);
+    const inlineCodeFrom = source.indexOf(inlineCode);
+    const blockFormulaFrom = source.indexOf("$$");
     expect(html).toMatch(/<h1[^>]*data-source-from="0"[^>]*data-source-kind="heading"/);
     expect(html).toMatch(/<p[^>]*data-source-kind="paragraph"/);
-    expect(html).toContain('data-source-kind="formula-block"');
+    expect(html).toContain(`data-source-from="${inlineFormulaFrom}" data-source-to="${inlineFormulaFrom + 5}" data-source-kind="formula-inline"`);
+    expect(html).toContain(`data-source-from="${inlineLinkFrom}" data-source-to="${inlineLinkFrom + inlineLink.length}" data-source-kind="inline-link"`);
+    expect(html).toContain(`data-source-from="${inlineCodeFrom}" data-source-to="${inlineCodeFrom + inlineCode.length}" data-source-kind="inline-code"`);
+    expect(html).toMatch(new RegExp(`data-source-from="${blockFormulaFrom}"[^>]*data-source-kind="formula-block"`));
     const fenced = renderPreviewHtml("```mermaid\ngraph TD\n  A --> B\n```\n");
     expect(fenced).toMatch(/<pre[^>]*data-source-from="0"[^>]*data-source-kind="code-block"/);
+  });
+
+  it("adds precise source anchors to table cells without including delimiters", () => {
+    const source = "| 名称 | `a\\|b` |\n| :--- | ---: |\n| A\\|B | **1** |\n";
+    const html = renderPreviewHtml(source);
+    const headerFrom = source.indexOf("名称");
+    const codeFrom = source.indexOf("`a\\|b`");
+    const escapedFrom = source.indexOf("A\\|B");
+    const strongFrom = source.indexOf("**1**");
+    expect(html).toContain(`data-source-from="${headerFrom}" data-source-to="${headerFrom + 2}" data-source-kind="table-cell"`);
+    expect(html).toContain(`data-source-from="${codeFrom}" data-source-to="${codeFrom + 6}" data-source-kind="table-cell"`);
+    expect(html).toContain(`data-source-from="${escapedFrom}" data-source-to="${escapedFrom + 4}" data-source-kind="table-cell"`);
+    expect(html).toContain(`data-source-from="${strongFrom}" data-source-to="${strongFrom + 5}" data-source-kind="table-cell"`);
   });
 
   it("renders wiki images as keyed placeholders and never leaks data URI payloads", async () => {

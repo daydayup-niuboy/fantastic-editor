@@ -109,6 +109,31 @@ function remember(service: OutputService, value: Fixture): void {
 }
 
 describe("OutputService", () => {
+  it("reports a clipboard-specific diagnostic when WeChat clipboard persistence fails", async () => {
+    const value = await fixture("# 公众号标题\n\n正文可以讨论 `data:` 与 `http://localhost/`。\n");
+    value.request = { ...value.request, target: "wechat-clipboard" };
+    const service = new OutputService(
+      new AssetHandleRegistry(),
+      { transformSvg: async () => ({ status: "failed", code: "UNEXPECTED_SVG_TRANSFORM", message: "unexpected SVG transform" } as const) },
+      {
+        generateOfflineHtml: async (context: OutputContext, assets) => generateOfflineHtml(context, assets),
+        generateDocx: async (context: OutputContext, assets, formulaAssets) => generateDocx(context, assets, formulaAssets),
+        generateWechatHtml: async (context: OutputContext, assets, formulaAssets) => generateWechatHtml(context, assets, formulaAssets),
+        cancelJob: () => true,
+      },
+      async () => ({ status: "failed" as const, error: "模拟剪贴板失败。" }),
+    );
+    remember(service, value);
+
+    const result = await service.begin(value.request, value.context, () => true);
+
+    expect(result.status).toBe("failed");
+    expect(result.result?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "OUTPUT_CLIPBOARD_WRITE_FAILED", message: "模拟剪贴板失败。" }),
+    ]));
+    expect(result.result?.diagnostics.some((item) => item.code === "OUTPUT_FILE_WRITE_FAILED")).toBe(false);
+  });
+
   it("exports a current resource-free document as a complete result", async () => {
     const value = await fixture();
     const saved: Uint8Array[] = [];
@@ -120,6 +145,26 @@ describe("OutputService", () => {
     expect(result.result?.status).toBe("completed");
     expect(result.result?.omittedReferenceKeys).toEqual([]);
     expect(saved).toHaveLength(1);
+  });
+
+  it("accepts only known WeChat theme ids and records the effective theme in the result", async () => {
+    const value = await fixture("# 公众号标题\n\n## 小节\n\n正文。");
+    value.request = { ...value.request, target: "wechat-clipboard", wechatThemeId: "deep-blue-tech" };
+    const saved: Uint8Array[] = [];
+    const service = createService(saved, { value: true });
+    remember(service, value);
+    const result = await service.begin(value.request, value.context, () => true);
+    expect(result.status).toBe("completed");
+    expect(result.result?.wechatThemeId).toBe("deep-blue-tech");
+    expect(new TextDecoder().decode(saved[0])).toContain("#3478c7");
+
+    const invalid = await fixture("# 公众号标题\n\n正文。");
+    invalid.request = { ...invalid.request, target: "wechat-clipboard", wechatThemeId: "<style>" as never };
+    const rejected = createService([], { value: true });
+    remember(rejected, invalid);
+    const rejectedResult = await rejected.begin(invalid.request, invalid.context, () => true);
+    expect(rejectedResult.status).toBe("failed");
+    expect(rejectedResult.error).toContain("请求无效");
   });
 
   it("requires exact one-job approval and reports approved omissions as partial completion", async () => {
@@ -315,6 +360,15 @@ describe("OutputService", () => {
       expect(result.status).toBe("completed");
       const item = result.result?.wechatReplacementItems?.[0];
       expect(item).toEqual(expect.objectContaining({ itemId: "wechat-item-01", kind: "image", label: "实验图片" }));
+      expect(service.getWechatAcceptanceSummary(result.result!.jobId)).toEqual(expect.objectContaining({
+        jobId: result.result!.jobId,
+        documentId: result.result!.documentId,
+        sourceHash: result.result!.sourceHash,
+        status: "completed",
+        replacementItems: [expect.objectContaining({ itemId: "wechat-item-01", placement: "block", placeholderText: "【FE图片01｜整段替换】" })],
+        omittedReferenceKeys: [],
+      }));
+      expect(service.getWechatAcceptanceSummary("invalid/job")).toBeUndefined();
       expect([...(service.getWechatReplacement(result.result!.jobId, item!.itemId)?.bytes ?? [])]).toEqual([...imageBytes]);
       expect(service.getWechatReplacement(result.result!.jobId, "wechat-item-99")).toBeUndefined();
       service.clear();

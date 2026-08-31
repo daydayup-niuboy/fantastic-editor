@@ -8,13 +8,18 @@ import {
   ExternalHyperlink,
   HeadingLevel,
   ImageRun,
+  LevelFormat,
   Packer,
+  PageOrientation,
   Paragraph,
   Table,
   TableCell,
+  TableLayoutType,
   TableRow,
   TextRun,
+  VerticalAlign,
   WidthType,
+  type INumberingOptions,
   type ParagraphChild,
 } from "docx";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
@@ -42,6 +47,8 @@ interface RenderState {
   formulas: ReadonlyMap<string, OutputFormulaAsset>;
   mermaids: ReadonlyMap<string, OutputMermaidAsset>;
   fontFamily: string;
+  numberingConfigs: Array<INumberingOptions["config"][number]>;
+  nextListId: number;
 }
 
 interface TextStyle {
@@ -50,6 +57,11 @@ interface TextStyle {
   strike?: boolean;
   code?: boolean;
 }
+
+const DOCX_PAGE_WIDTH_DXA = 11_906;
+const DOCX_PAGE_HEIGHT_DXA = 16_838;
+const DOCX_MARGIN_DXA = 1_134;
+const DOCX_CONTENT_WIDTH_DXA = DOCX_PAGE_WIDTH_DXA - DOCX_MARGIN_DXA * 2;
 
 const DOCX_MIME_TYPES = new Map<string, "png" | "jpg" | "gif">([
   ["image/png", "png"],
@@ -188,25 +200,77 @@ function collectTableRows(nodes: readonly DocumentNode[]): DocumentNode[] {
   return nodes.flatMap((node) => node.type === "tableRow" ? [node] : collectTableRows(node.children ?? []));
 }
 
+function plainText(nodes: readonly DocumentNode[]): string {
+  let value = "";
+  for (const node of nodes) {
+    if (node.type === "text" || node.type === "inlineCode") value += stringAttribute(node, "value");
+    else if (node.type === "image") value += stringAttribute(node, "alt") || "图片";
+    else if (node.type === "formulaInline" || node.type === "formulaBlock") value += stringAttribute(node, "latex");
+    else value += plainText(node.children ?? []);
+  }
+  return value;
+}
+
+function tableColumnWidths(rows: readonly DocumentNode[], columnCount: number): number[] {
+  if (columnCount <= 0) return [];
+  const weights = Array.from({ length: columnCount }, () => 4);
+  for (const row of rows) {
+    const cells = (row.children ?? []).filter((cell) => cell.type === "tableCell");
+    cells.forEach((cell, index) => {
+      if (index >= columnCount) return;
+      const text = plainText(cell.children ?? []);
+      const weightedLength = Array.from(text).reduce((sum, character) => sum + (character.charCodeAt(0) > 0xff ? 2 : 1), 0);
+      weights[index] = Math.max(weights[index]!, Math.min(48, weightedLength || 4));
+    });
+  }
+  const minimum = Math.max(360, Math.floor(DOCX_CONTENT_WIDTH_DXA * 0.35 / columnCount));
+  const distributable = DOCX_CONTENT_WIDTH_DXA - minimum * columnCount;
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  const widths = weights.map((weight) => minimum + Math.floor(distributable * weight / totalWeight));
+  widths[widths.length - 1] = widths[widths.length - 1]! + DOCX_CONTENT_WIDTH_DXA - widths.reduce((sum, value) => sum + value, 0);
+  return widths;
+}
+
+function tableAlignment(value: unknown): (typeof AlignmentType)[keyof typeof AlignmentType] {
+  return value === "center" ? AlignmentType.CENTER : value === "right" ? AlignmentType.RIGHT : AlignmentType.LEFT;
+}
+
 function tableFromNode(node: DocumentNode, state: RenderState): Table {
-  const rows = collectTableRows(node.children ?? []).map((row) => {
+  const sourceRows = collectTableRows(node.children ?? []);
+  const columnCount = Math.max(1, ...sourceRows.map((row) => (row.children ?? []).filter((cell) => cell.type === "tableCell").length));
+  const columnWidths = tableColumnWidths(sourceRows, columnCount);
+  const alignments = Array.isArray(node.attributes.alignments) ? node.attributes.alignments : [];
+  const rows = sourceRows.map((row) => {
     const cellNodes = (row.children ?? []).filter((cell) => cell.type === "tableCell");
     const isHeader = cellNodes.some((cell) => cell.attributes.header === true);
     return new TableRow({
       tableHeader: isHeader,
       cantSplit: true,
-      children: cellNodes.map((cell) => {
-        const blocks = renderBlocks(cell.children ?? [], state);
+      children: Array.from({ length: columnCount }, (_, index) => {
+        const cell = cellNodes[index];
+        const content = cell ? renderInline(cell.children ?? [], state, isHeader ? { bold: true } : {}) : [];
         return new TableCell({
+          width: { size: columnWidths[index]!, type: WidthType.DXA },
+          verticalAlign: VerticalAlign.CENTER,
+          margins: { top: 100, right: 120, bottom: 100, left: 120 },
           ...(isHeader ? { shading: { fill: "E6EEE9" } } : {}),
-          children: blocks.length > 0 ? blocks : [new Paragraph({ children: renderInline(cell.children ?? [], state) })],
+          children: [new Paragraph({
+            children: content,
+            alignment: tableAlignment(alignments[index]),
+            spacing: { after: 0, line: 300 },
+            widowControl: true,
+          })],
         });
       }),
     });
   });
   return new Table({
     rows,
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: DOCX_CONTENT_WIDTH_DXA, type: WidthType.DXA },
+    columnWidths,
+    indent: { size: 0, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
+    margins: { top: 100, right: 120, bottom: 100, left: 120 },
     borders: {
       top: { style: BorderStyle.SINGLE, size: 4, color: "B8C5BC" },
       bottom: { style: BorderStyle.SINGLE, size: 4, color: "B8C5BC" },
@@ -217,68 +281,183 @@ function tableFromNode(node: DocumentNode, state: RenderState): Table {
     },
   });
 }
+
+function addListNumbering(state: RenderState, kind: "ordered" | "bullet" | "task-checked" | "task-unchecked", depth: number, start: number): string {
+  const reference = "fantastic-" + kind + "-" + state.nextListId++;
+  const bulletSymbols = ["•", "◦", "▪"];
+  const levels: INumberingOptions["config"][number]["levels"] = Array.from({ length: 9 }, (_, level) => {
+    const task = kind === "task-checked" || kind === "task-unchecked";
+    const ordered = kind === "ordered";
+    return {
+      level,
+      format: ordered ? LevelFormat.DECIMAL : LevelFormat.BULLET,
+      text: ordered ? "%" + (level + 1) + "." : task ? (kind === "task-checked" ? "☒" : "☐") : bulletSymbols[level % bulletSymbols.length]!,
+      alignment: AlignmentType.LEFT,
+      start: ordered && level === Math.min(depth, 8) ? Math.max(1, start) : 1,
+      style: {
+        run: { font: state.fontFamily },
+        paragraph: { indent: { left: 720 + level * 360, hanging: 360 } },
+      },
+    };
+  });
+  state.numberingConfigs.push({ reference, levels });
+  return reference;
+}
+
 function renderList(node: DocumentNode, state: RenderState, ordered: boolean, depth = 0): Array<Paragraph | Table> {
   const result: Array<Paragraph | Table> = [];
-  let index = Number(node.attributes.start) || 1;
-  for (const item of (node.children ?? []).filter((child) => child.type === "listItem")) {
+  const level = Math.min(depth, 8);
+  const listReference = addListNumbering(state, ordered ? "ordered" : "bullet", level, Number(node.attributes.start) || 1);
+  for (const item of (node.children ?? []).filter((child) => child.type === "listItem" || child.type === "taskItem")) {
     const itemChildren = item.children ?? [];
     const paragraph = itemChildren.find((child) => child.type === "paragraph");
-    const prefix = ordered ? `${index}. ` : "• ";
+    const taskReference = item.type === "taskItem"
+      ? addListNumbering(state, item.attributes.checked === true ? "task-checked" : "task-unchecked", level, 1)
+      : listReference;
     result.push(new Paragraph({
-      children: [new TextRun({ text: prefix, bold: ordered }), ...renderInline(paragraph?.children ?? [], state)],
-      indent: { left: 360 * (depth + 1), hanging: 240 },
-      spacing: { after: 80 },
+      children: renderInline(paragraph?.children ?? [], state),
+      numbering: { reference: taskReference, level },
+      spacing: { after: 80, line: 330 },
+      widowControl: true,
     }));
-    index += 1;
+    for (const extra of itemChildren.filter((child) => child !== paragraph && child.type !== "bulletList" && child.type !== "orderedList")) {
+      result.push(...renderBlocks([extra], state));
+    }
     for (const nested of itemChildren.filter((child) => child.type === "bulletList" || child.type === "orderedList")) {
       result.push(...renderList(nested, state, nested.type === "orderedList", depth + 1));
     }
   }
   return result;
 }
+function codeRuns(value: string): TextRun[] {
+  return value.split("\n").map((line, index) => new TextRun({
+    text: line.length > 0 ? line : " ",
+    font: "Consolas",
+    size: 19,
+    ...(index > 0 ? { break: 1 } : {}),
+  }));
+}
 
 function renderBlocks(nodes: readonly DocumentNode[], state: RenderState): Array<Paragraph | Table> {
   const output: Array<Paragraph | Table> = [];
   for (const node of nodes) {
     switch (node.type) {
-      case "heading": output.push(new Paragraph({ heading: headingLevel(Number(node.attributes.level) || 1), children: renderInline(node.children ?? [], state), spacing: { before: 180, after: 100 } })); break;
-      case "paragraph": output.push(new Paragraph({ children: renderInline(node.children ?? [], state), spacing: { after: 120, line: 360 } })); break;
-      case "blockquote": {
-        for (const block of renderBlocks(node.children ?? [], state)) {
-          if (block instanceof Paragraph) output.push(new Paragraph({ children: [new TextRun({ text: "│ ", color: "6F8B7A" }), ...renderInline(node.children ?? [], state)], indent: { left: 360 }, spacing: { after: 100 } }));
-          else output.push(block);
+      case "heading":
+        output.push(new Paragraph({
+          heading: headingLevel(Number(node.attributes.level) || 1),
+          children: renderInline(node.children ?? [], state),
+          spacing: { before: 220, after: 100 },
+          keepNext: true,
+          keepLines: true,
+          widowControl: true,
+        }));
+        break;
+      case "paragraph":
+        output.push(new Paragraph({
+          children: renderInline(node.children ?? [], state),
+          spacing: { after: 120, line: 360 },
+          widowControl: true,
+        }));
+        break;
+      case "blockquote":
+        for (const child of node.children ?? []) {
+          if (child.type === "paragraph") {
+            output.push(new Paragraph({
+              children: renderInline(child.children ?? [], state),
+              border: { left: { style: BorderStyle.SINGLE, size: 12, color: "86A594", space: 10 } },
+              indent: { left: 360, right: 180 },
+              spacing: { after: 100, line: 340 },
+              widowControl: true,
+            }));
+          } else {
+            output.push(...renderBlocks([child], state));
+          }
         }
         break;
-      }
-      case "bulletList": output.push(...renderList(node, state, false)); break;
-      case "orderedList": output.push(...renderList(node, state, true)); break;
+      case "bulletList":
+        output.push(...renderList(node, state, false));
+        break;
+      case "orderedList":
+        output.push(...renderList(node, state, true));
+        break;
       case "codeBlock": {
         if (isMermaidNode(node)) {
           const diagram = diagramImageRun(node, state);
-          output.push(new Paragraph({ alignment: AlignmentType.CENTER, children: diagram ? [diagram] : [], spacing: { before: 100, after: 140 } }));
-        } else output.push(new Paragraph({ children: [new TextRun({ text: stringAttribute(node, "value"), font: "Consolas", size: 19 })], shading: { fill: "F1F3F0" }, spacing: { before: 80, after: 140 }, indent: { left: 180, right: 180 } }));
+          output.push(new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: diagram ? [diagram] : [],
+            spacing: { before: 100, after: 140 },
+            keepLines: true,
+          }));
+        } else {
+          output.push(new Paragraph({
+            children: codeRuns(stringAttribute(node, "value")),
+            shading: { fill: "F1F3F0" },
+            spacing: { before: 80, after: 140, line: 280 },
+            indent: { left: 180, right: 180 },
+            widowControl: true,
+            wordWrap: true,
+          }));
+        }
         break;
       }
-      case "table": output.push(tableFromNode(node, state)); break;
-      case "thematicBreak": output.push(new Paragraph({ thematicBreak: true })); break;
+      case "table":
+        output.push(tableFromNode(node, state));
+        break;
+      case "thematicBreak":
+        output.push(new Paragraph({ thematicBreak: true, spacing: { before: 100, after: 100 } }));
+        break;
       case "formulaBlock": {
         const formula = formulaImageRun(node, state);
-        output.push(new Paragraph({ alignment: AlignmentType.CENTER, children: formula ? [formula] : [], spacing: { before: 100, after: 140 } }));
+        output.push(new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: formula ? [formula] : [],
+          spacing: { before: 100, after: 140 },
+          keepLines: true,
+        }));
         break;
       }
       case "image": {
         const image = imageRun(node, state);
-        output.push(new Paragraph({ alignment: AlignmentType.CENTER, children: image ? [image] : [] }));
+        output.push(new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: image ? [image] : [],
+          spacing: { before: 80, after: 120 },
+          keepLines: true,
+        }));
         break;
       }
       case "rawHtmlBlock":
-      case "rawHtmlInline": output.push(new Paragraph({ children: [new TextRun({ text: "[原始 HTML 已阻止]", color: "9A5B32" })] })); break;
-      default: output.push(...renderBlocks(node.children ?? [], state));
+      case "rawHtmlInline":
+        output.push(new Paragraph({
+          children: [new TextRun({ text: "[原始 HTML 已阻止]", color: "9A5B32" })],
+          spacing: { after: 100 },
+        }));
+        break;
+      default:
+        output.push(...renderBlocks(node.children ?? [], state));
     }
   }
   return output;
 }
+function docxFontFamily(context: OutputContext): string {
+  const value = context.theme.tokens["typography.body.fontFamily"];
+  return typeof value === "string" && value.length > 0 && value.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(value)
+    ? value.replaceAll('"', "")
+    : "Microsoft YaHei";
+}
 
+function documentTitle(nodes: readonly DocumentNode[]): string {
+  for (const node of nodes) {
+    if (node.type === "heading") {
+      const title = plainText(node.children ?? []).trim();
+      if (title) return title.slice(0, 120);
+    }
+    const nested = documentTitle(node.children ?? []);
+    if (nested !== "fantastic-editor 导出") return nested;
+  }
+  return "fantastic-editor 导出";
+}
 function collectFormulaNodes(nodes: readonly DocumentNode[]): DocumentNode[] {
   const result: DocumentNode[] = [];
   const visit = (items: readonly DocumentNode[]) => {
@@ -351,21 +530,61 @@ export async function generateDocx(
     return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys: omitted };
   }
   try {
+    const fontFamily = docxFontFamily(context);
+    const renderState: RenderState = {
+      resources,
+      formulas: formulaMap,
+      mermaids: mermaidMap,
+      fontFamily,
+      numberingConfigs: [],
+      nextListId: 1,
+    };
+    const children = renderBlocks(context.parsedDocument.children, renderState);
+    const headingStyle = (size: number, color: string) => ({
+      run: { font: fontFamily, size, bold: true, color },
+      paragraph: { keepNext: true, keepLines: true, spacing: { before: 220, after: 100 } },
+    });
     const document = new Document({
       creator: "fantastic-editor",
-      title: "fantastic-editor 导出",
+      title: documentTitle(context.parsedDocument.children),
       description: "由 fantastic-editor 从本地 Markdown 生成",
+      styles: {
+        default: {
+          document: {
+            run: { font: fontFamily, size: 22, color: "242A26" },
+            paragraph: { spacing: { after: 120, line: 360 } },
+          },
+          heading1: headingStyle(34, "18382B"),
+          heading2: headingStyle(30, "24513E"),
+          heading3: headingStyle(27, "315E4B"),
+          heading4: headingStyle(24, "3E6857"),
+          heading5: headingStyle(22, "4A7262"),
+          heading6: headingStyle(22, "567B6C"),
+          listParagraph: {
+            run: { font: fontFamily, size: 22, color: "242A26" },
+            paragraph: { spacing: { after: 80, line: 330 } },
+          },
+        },
+      },
+      ...(renderState.numberingConfigs.length > 0 ? { numbering: { config: renderState.numberingConfigs } } : {}),
       sections: [{
-        properties: { page: { margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 } } },
-        children: renderBlocks(context.parsedDocument.children, {
-          resources,
-          formulas: formulaMap,
-          mermaids: mermaidMap,
-          fontFamily: typeof context.theme.tokens["typography.body.fontFamily"] === "string" ? String(context.theme.tokens["typography.body.fontFamily"]) : "Microsoft YaHei",
-        }),
+        properties: {
+          page: {
+            size: { width: DOCX_PAGE_WIDTH_DXA, height: DOCX_PAGE_HEIGHT_DXA, orientation: PageOrientation.PORTRAIT },
+            margin: {
+              top: DOCX_MARGIN_DXA,
+              right: DOCX_MARGIN_DXA,
+              bottom: DOCX_MARGIN_DXA,
+              left: DOCX_MARGIN_DXA,
+              header: 567,
+              footer: 567,
+              gutter: 0,
+            },
+          },
+        },
+        children,
       }],
-    });
-    const buffer = await Packer.toBuffer(document);
+    });    const buffer = await Packer.toBuffer(document);
     return {
       status: omitted.length > 0 ? "completed-with-omissions" : "completed",
       bytes: new Uint8Array(buffer),

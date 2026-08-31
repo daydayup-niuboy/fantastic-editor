@@ -1,7 +1,12 @@
 import type { Diagnostic, ParsedDocument, ResourceReference } from "@fantastic-editor/document-core";
+export { WECHAT_THEME_OPTIONS, applyWechatThemeToFragment, resolveWechatTheme } from "./wechat-themes.js";
+export type { WechatThemeDefinition, WechatThemeId } from "./wechat-themes.js";
+import type { WechatThemeId } from "./wechat-themes.js";
 
 export const IPC_CHANNELS = {
   openMarkdownFile: "file:open-markdown",
+  listRecentFiles: "file:list-recent",
+  openRecentFile: "file:open-recent",
   createUntitledFile: "file:create-untitled",
   openDroppedMarkdownFile: "file:open-dropped-markdown",
   activateFileSession: "file:activate-session",
@@ -21,6 +26,14 @@ export const IPC_CHANNELS = {
   approveOutputOmissions: "output:approve-omissions",
   cancelOutput: "output:cancel",
   copyWechatReplacement: "output:wechat-copy-replacement",
+  createWechatDraft: "output:wechat-create-draft",
+  publishWechatArticle: "output:wechat-publish-article",
+  getWechatApiConfig: "config:wechat-api-get",
+  testWechatApiConnection: "config:wechat-api-test-connection",
+  saveWechatApiConfig: "config:wechat-api-save",
+  selectWechatCover: "config:wechat-cover-select",
+  clearWechatApiConfig: "config:wechat-api-clear",
+  saveWechatAcceptanceReport: "output:wechat-save-acceptance-report",
 } as const;
 
 export type LineSeparator = "lf" | "crlf" | "mixed";
@@ -67,6 +80,18 @@ export interface OpenFileResult {
 export interface FileSessionRequest {
   sessionId: string;
 }
+
+export interface RecentFileEntry {
+  recentId: string;
+  displayName: string;
+  lastOpenedAt: string;
+}
+
+export type RecentFilesResult =
+  | { status: "listed"; items: RecentFileEntry[] }
+  | { status: "failed"; error: string };
+
+export interface OpenRecentFileRequest { recentId: string; }
 
 export type FileSessionCommandResult =
   | { status: "activated" | "closed" }
@@ -378,7 +403,9 @@ export interface WechatReplacementItem {
   itemId: string;
   sequence: number;
   kind: "image" | "formula" | "diagram";
+  placement: "inline" | "block";
   label: string;
+  placeholderText: string;
   sourceOffset: number;
   mimeType: string;
   width: number | null;
@@ -392,6 +419,78 @@ export interface CopyWechatReplacementRequest {
 
 export type CopyWechatReplacementResult =
   | { status: "copied"; itemId: string }
+  | { status: "failed"; error: string };
+
+export interface CreateWechatDraftRequest {
+  jobId: string;
+}
+
+export type CreateWechatDraftResult =
+  | { status: "created"; draftMediaId: string; uploadedImageCount: number; verified: true }
+  | { status: "failed"; error: string; uploadedImageCount?: number };
+
+export interface PublishWechatArticleRequest {
+  jobId: string;
+}
+
+export type PublishWechatArticleResult =
+  | { status: "published"; draftMediaId: string; publishId: string; articleUrl: string | null; verified: true }
+  | { status: "processing"; draftMediaId: string; publishId: string; message: string }
+  | { status: "failed"; error: string; draftMediaId?: string; publishId?: string };
+
+export interface WechatApiConfigSummary {
+  appId: string;
+  hasAppSecret: boolean;
+  coverPath: string;
+  coverDisplayName: string | null;
+  configured: boolean;
+  source: "stored" | "environment" | "mixed" | "none";
+}
+
+export type GetWechatApiConfigResult =
+  | { status: "loaded"; config: WechatApiConfigSummary }
+  | { status: "failed"; error: string };
+
+export type TestWechatApiConnectionResult =
+  | { status: "ready"; ip: string | null; message: string }
+  | { status: "whitelist-required"; ip: string; message: string }
+  | { status: "failed"; error: string };
+
+export interface SaveWechatApiConfigRequest {
+  appId: string;
+  appSecret?: string;
+  coverPath: string;
+}
+
+export type SaveWechatApiConfigResult =
+  | { status: "saved"; config: WechatApiConfigSummary }
+  | { status: "failed"; error: string };
+
+export type SelectWechatCoverResult =
+  | { status: "selected"; path: string; displayName: string }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
+
+export type ClearWechatApiConfigResult =
+  | { status: "cleared"; config: WechatApiConfigSummary }
+  | { status: "failed"; error: string };
+
+export interface WechatAcceptanceConfirmation {
+  bodyPasted: boolean;
+  draftSaved: boolean;
+  draftReopened: boolean;
+  mobilePreviewed: boolean;
+}
+
+export interface SaveWechatAcceptanceReportRequest {
+  jobId: string;
+  confirmedReplacementItemIds: string[];
+  confirmation: WechatAcceptanceConfirmation;
+}
+
+export type SaveWechatAcceptanceReportResult =
+  | { status: "saved"; displayName: string }
+  | { status: "cancelled" }
   | { status: "failed"; error: string };
 export interface OutputTiming {
   startedAt: string;
@@ -415,6 +514,8 @@ export interface OutputResult {
   approvedOmittedReferenceKeys: string[];
   derivedAssetManifest: DerivedAssetManifest;
   wechatReplacementItems?: WechatReplacementItem[];
+  wechatSuggestedTitle?: string;
+  wechatThemeId?: WechatThemeId;
   timing: OutputTiming;
 }
 
@@ -445,6 +546,7 @@ export interface BeginOutputRequest {
   parsedDocument: ParsedDocument;
   fontFamily?: string;
   darkMode?: boolean;
+  wechatThemeId?: WechatThemeId;
 }
 
 export interface OutputCommandResult {
@@ -461,6 +563,8 @@ export interface CancelOutputRequest {
 
 export interface FantasticEditorApi {
   openMarkdownFile(): Promise<OpenFileResult>;
+  listRecentFiles(): Promise<RecentFilesResult>;
+  openRecentFile(request: OpenRecentFileRequest): Promise<OpenFileResult>;
   createUntitledFile(): Promise<OpenFileResult>;
   openDroppedMarkdownFile(file: unknown): Promise<OpenFileResult>;
   activateFileSession(request: FileSessionRequest): Promise<FileSessionCommandResult>;
@@ -480,4 +584,12 @@ export interface FantasticEditorApi {
   approveOutputOmissions(request: ApproveOmissions): Promise<OutputCommandResult>;
   cancelOutput(request: CancelOutputRequest): Promise<OutputCommandResult>;
   copyWechatReplacement(request: CopyWechatReplacementRequest): Promise<CopyWechatReplacementResult>;
+  createWechatDraft(request: CreateWechatDraftRequest): Promise<CreateWechatDraftResult>;
+  publishWechatArticle(request: PublishWechatArticleRequest): Promise<PublishWechatArticleResult>;
+  getWechatApiConfig(): Promise<GetWechatApiConfigResult>;
+  testWechatApiConnection(): Promise<TestWechatApiConnectionResult>;
+  saveWechatApiConfig(request: SaveWechatApiConfigRequest): Promise<SaveWechatApiConfigResult>;
+  selectWechatCover(): Promise<SelectWechatCoverResult>;
+  clearWechatApiConfig(): Promise<ClearWechatApiConfigResult>;
+  saveWechatAcceptanceReport(request: SaveWechatAcceptanceReportRequest): Promise<SaveWechatAcceptanceReportResult>;
 }

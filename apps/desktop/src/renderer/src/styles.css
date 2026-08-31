@@ -28,7 +28,7 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
 body { overflow: hidden; }
 button, summary { font: inherit; }
 button { color: inherit; }
-button:focus-visible, summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 72%, white); outline-offset: 2px; }
+button:focus-visible, summary:focus-visible, [role="separator"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 72%, white); outline-offset: 2px; }
 
 .app-shell {
   position: relative;
@@ -96,6 +96,11 @@ button:focus-visible, summary:focus-visible { outline: 2px solid color-mix(in sr
 .header-file-actions, .header-tools, .view-switcher { display: flex; align-items: center; }
 .header-file-actions { gap: 2px; padding-right: 12px; border-right: 1px solid var(--border); }
 .header-tools { justify-content: flex-end; gap: 9px; }
+.wechat-header-button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.wechat-header-button:hover { color: var(--text-strong); background: var(--panel-hover); }
+.wechat-header-button.configured { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.wechat-header-button.needs-config { color: #9b5b1d; background: #fff8e9; border-color: #e2c58e; }
+.wechat-header-dot { width: 7px; height: 7px; background: currentColor; border-radius: 50%; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 13%, transparent); }
 .icon-button, .activity-bar button, .explorer-title button {
   display: grid;
   place-items: center;
@@ -176,8 +181,13 @@ button:focus-visible, summary:focus-visible { outline: 2px solid color-mix(in sr
 .format-badge.pdf { background: #d9564d; }
 .format-badge.word { background: #3978c6; font-size: 14px; }
 .format-badge.html { background: #d8793f; }
+.format-badge.mobile { color: #31566f; background: #e7f1f7; border: 1px solid #bdd2df; }
 .format-badge.wechat { background: #2aae67; font-size: 12px; }
 .menu-separator { height: 1px; margin: 5px 6px; background: var(--border); }
+.wechat-theme-control { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; margin: 3px 6px 6px; padding: 8px 9px; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 7px; }
+.wechat-theme-control > span { align-self: center; color: var(--text-strong); font-size: 10px; font-weight: 700; }
+.wechat-theme-control select { max-width: 126px; padding: 4px 22px 4px 7px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: 5px; font: inherit; font-size: 10px; }
+.wechat-theme-control small { grid-column: 1 / -1; color: var(--muted); font-size: 9px; line-height: 1.45; }
 
 .workbench { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .activity-bar { flex: 0 0 46px; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 5px; background: var(--panel); border-right: 1px solid var(--border); }
@@ -213,6 +223,8 @@ button:focus-visible, summary:focus-visible { outline: 2px solid color-mix(in sr
 .document-tabs { flex: 0 0 37px; display: flex; align-items: stretch; justify-content: space-between; min-width: 0; padding-right: 11px; background: var(--surface-subtle); border-bottom: 1px solid var(--border); }
 .tab-strip { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .document-tab { position: relative; display: flex; flex: 0 0 auto; align-items: center; max-width: 210px; color: var(--muted); background: transparent; border-right: 1px solid var(--border); }
+.document-tab[draggable="true"] { cursor: grab; }
+.document-tab[draggable="true"]:active { cursor: grabbing; }
 .document-tab::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; content: ""; background: transparent; }
 .document-tab.active { color: var(--text-strong); background: var(--surface); }
 .document-tab.active::after { background: var(--accent); }
@@ -278,17 +290,56 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .wysiwyg-toolbar button { min-width: 27px; height: 26px; padding: 0 7px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 10px; }
 .wysiwyg-toolbar button:hover { color: var(--accent-strong); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); }
 .wysiwyg-toolbar > span { min-width: 0; margin-left: 7px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.wysiwyg-content { min-height: calc(100% - 38px); padding-top: 30px; outline: none; }
+.wysiwyg-table-toolbar, .wysiwyg-list-toolbar, .wysiwyg-block-toolbar { position: sticky; top: 38px; z-index: 11; display: flex; align-items: center; gap: 4px; min-height: 34px; padding: 4px 12px; overflow-x: auto; background: color-mix(in srgb, var(--surface-raised) 96%, transparent); border-bottom: 1px solid var(--border); box-shadow: 0 3px 10px color-mix(in srgb, #000 5%, transparent); }
+.wysiwyg-table-toolbar > span, .wysiwyg-list-toolbar > span, .wysiwyg-block-toolbar > span { flex: 0 0 auto; margin-right: 5px; color: var(--muted); font-size: 9px; }
+.wysiwyg-table-toolbar button, .wysiwyg-list-toolbar button, .wysiwyg-block-toolbar button { flex: 0 0 auto; height: 24px; padding: 0 7px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 9px; }
+.wysiwyg-table-toolbar button:hover:not(:disabled), .wysiwyg-list-toolbar button:hover:not(:disabled), .wysiwyg-block-toolbar button:hover:not(:disabled) { color: var(--accent-strong); background: var(--accent-soft); border-color: var(--accent); }
+.wysiwyg-table-toolbar button:disabled, .wysiwyg-list-toolbar button:disabled, .wysiwyg-block-toolbar button:disabled { cursor: not-allowed; opacity: .42; }
+.wysiwyg-block-toolbar + .wysiwyg-list-toolbar, .wysiwyg-block-toolbar + .wysiwyg-table-toolbar { top: 72px; }
+.wysiwyg-block-toolbar label { display: inline-flex; align-items: center; }
+.wysiwyg-block-toolbar select { height: 24px; padding: 0 22px 0 7px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; font-size: 9px; }
+.wysiwyg-block-toolbar .wysiwyg-block-grip { cursor: grab; font-size: 14px; letter-spacing: -3px; }
+.wysiwyg-block-toolbar .wysiwyg-block-grip:active { cursor: grabbing; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.wysiwyg-content .wysiwyg-block-active { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent); }
+.wysiwyg-content .wysiwyg-drop-before { box-shadow: inset 0 3px 0 var(--accent), 0 -4px 10px color-mix(in srgb, var(--accent) 20%, transparent) !important; }
+.wysiwyg-content .wysiwyg-drop-after { box-shadow: inset 0 -3px 0 var(--accent), 0 4px 10px color-mix(in srgb, var(--accent) 20%, transparent) !important; }.wysiwyg-content { min-height: calc(100% - 38px); padding-top: 30px; outline: none; }
 .wysiwyg-content [data-source-from][data-source-to] { border-radius: 5px; transition: background .12s, box-shadow .12s; }
+.wysiwyg-content .wysiwyg-inline-atom { display: inline-block; max-width: 100%; margin-inline: 2px; padding-inline: 2px; border-radius: 4px; cursor: pointer; user-select: all; vertical-align: baseline; }
+.wysiwyg-content .wysiwyg-direct-edit .wysiwyg-inline-atom { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
+.wysiwyg-content .wysiwyg-inline-atom[data-source-kind="inline-code"], .wysiwyg-content .wysiwyg-inline-atom[data-source-kind="inline-link"] { cursor: pointer; }
+.wysiwyg-content [data-wysiwyg-editability="direct"] { cursor: text; }
+.wysiwyg-content [data-wysiwyg-editability="source"] { cursor: pointer; }
+.wysiwyg-content [data-wysiwyg-new-block="true"] { min-height: 1.65em; background: transparent; border-radius: 0; outline: none; }
+.wysiwyg-content [data-wysiwyg-new-block="true"].wysiwyg-selected { background: transparent; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.wysiwyg-content [data-wysiwyg-new-block="true"]:empty::before,
+.wysiwyg-content [data-wysiwyg-new-block="true"]:has(> br:only-child)::before { color: var(--faint); content: "开始输入…"; opacity: .72; }
 .wysiwyg-content [data-source-block="true"]:hover, .wysiwyg-content [data-source-kind="image"]:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 5%, transparent); }
 .wysiwyg-content .wysiwyg-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 58%, transparent), 0 0 0 6px color-mix(in srgb, var(--accent) 7%, transparent); }
 .wysiwyg-content .wysiwyg-direct-edit { min-height: 1.4em; cursor: text; caret-color: var(--accent); outline: none; }
+.wysiwyg-content th.wysiwyg-direct-edit, .wysiwyg-content td.wysiwyg-direct-edit { background: color-mix(in srgb, var(--accent) 9%, var(--preview-bg)); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 52%, transparent); }
+.wysiwyg-content li.wysiwyg-direct-edit, .wysiwyg-content blockquote .wysiwyg-direct-edit { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.wysiwyg-content [data-wysiwyg-list-own-content] { display: inline; border-radius: 4px; }
+.wysiwyg-content [data-wysiwyg-list-own-content].wysiwyg-direct-edit { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent); }
 .wysiwyg-content .wysiwyg-direct-edit::selection, .wysiwyg-content .wysiwyg-direct-edit *::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 .wysiwyg-source-card { position: sticky; top: 38px; z-index: 11; display: grid; gap: 7px; width: min(900px, calc(100% - 28px)); margin: 10px auto -1px; padding: 10px; background: var(--surface-raised); border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border)); border-radius: 9px; box-shadow: var(--shadow); }
 .wysiwyg-source-card header { display: flex; align-items: center; justify-content: space-between; color: var(--text-strong); font-size: 10px; }
 .wysiwyg-source-card header span { color: var(--faint); font-size: 8px; font-weight: 500; }
 .wysiwyg-source-card textarea { width: 100%; min-height: 94px; max-height: 240px; padding: 9px 11px; resize: vertical; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 6px; outline: none; font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; line-height: 1.6; }
 .wysiwyg-source-card textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent); }
+.wysiwyg-image-card label { display: grid; gap: 5px; color: var(--muted); font-size: 9px; }
+.wysiwyg-structured-card label { display: grid; gap: 5px; color: var(--muted); font-size: 9px; }
+.wysiwyg-structured-card input { width: 100%; height: 30px; padding: 0 9px; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 6px; outline: none; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
+.wysiwyg-structured-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent); }
+.wysiwyg-structured-card input:disabled { color: var(--muted); background: color-mix(in srgb, var(--editor-bg) 82%, var(--border)); }
+.wysiwyg-source-card > .wysiwyg-structured-preview { display: block; min-height: 54px; max-height: 240px; padding: 10px; overflow: auto; color: var(--text); background: var(--preview-bg); border: 1px solid var(--border); border-radius: 7px; text-align: center; }
+.wysiwyg-structured-preview.formula .katex-display { margin: 0; }
+.wysiwyg-structured-preview.has-error { color: #9a4938; border-color: color-mix(in srgb, #c85d48 42%, var(--border)); text-align: left; }
+.wysiwyg-structured-preview.mermaid .mermaid-diagram { margin: 0; padding: 4px; border: 0; background: transparent; }
+.wysiwyg-structured-preview.mermaid svg { max-height: 210px; }
+.wysiwyg-image-card input { width: 100%; height: 30px; padding: 0 9px; color: var(--text); background: var(--editor-bg); border: 1px solid var(--border); border-radius: 6px; outline: none; font: inherit; }
+.wysiwyg-image-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent); }
+.wysiwyg-source-card button.danger { color: #b42318; background: color-mix(in srgb, #b42318 7%, var(--surface)); border-color: color-mix(in srgb, #b42318 35%, var(--border)); }
 .wysiwyg-source-card > div { display: flex; justify-content: flex-end; gap: 6px; }
 .wysiwyg-source-card button { height: 25px; padding: 0 10px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 9px; }
 .wysiwyg-source-card button:first-child { color: #fff; background: var(--accent); border-color: var(--accent); }
@@ -334,6 +385,13 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; font-family: inherit; font-size: 9px; }
 .welcome-drop { display: flex; align-items: center; gap: 11px; margin-top: 20px; color: var(--faint); font-size: 10px; }
 .welcome-drop::before, .welcome-drop::after { flex: 1; height: 1px; content: ""; background: var(--border); }
+.welcome-recent { display: grid; gap: 5px; margin-top: 18px; }
+.welcome-recent h2 { margin: 0 0 3px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.welcome-recent button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; color: var(--muted); text-align: left; background: transparent; border: 1px solid transparent; border-radius: 7px; cursor: pointer; }
+.welcome-recent button:hover, .welcome-recent button:focus-visible { color: var(--text); background: var(--surface-subtle); border-color: var(--border); }
+.welcome-recent button > span { display: grid; min-width: 0; }
+.welcome-recent strong { overflow: hidden; color: var(--text-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.welcome-recent small { color: var(--faint); font-size: 9px; }
 
 .drop-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; pointer-events: none; background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(5px); }
 .drop-card { display: grid; place-items: center; min-width: 380px; padding: 38px 48px; color: var(--text); background: var(--surface-raised); border: 2px dashed var(--accent); border-radius: 18px; box-shadow: var(--shadow); text-align: center; }
@@ -341,23 +399,139 @@ kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border:
 .drop-card strong { color: var(--text-strong); font-size: 19px; }
 .drop-card > span:last-child { margin-top: 7px; color: var(--muted); font-size: 11px; }
 
-.wechat-replacements { max-height: 248px; overflow: auto; padding: 11px 14px; color: #5b4526; background: #fff9ed; border-top: 1px solid #e7d7b5; }
+.wechat-replacements { max-height: min(430px, 52vh); overflow: auto; padding: 12px 14px; color: #5b4526; background: #fff9ed; border-top: 1px solid #e7d7b5; }
 .replacement-header, .replacement-item { display: flex; align-items: center; gap: 11px; }
-.replacement-header { justify-content: space-between; margin-bottom: 8px; color: #76501f; font-size: 11px; }
-.replacement-list { display: grid; gap: 6px; }
-.replacement-item { padding: 7px 9px; background: #fff; border: 1px solid #e6d6b6; border-radius: 7px; font-size: 11px; }
+.replacement-header { position: sticky; top: -12px; z-index: 2; justify-content: space-between; margin: -12px -14px 10px; padding: 10px 14px; color: #76501f; background: #fff9ed; border-bottom: 1px solid #eadcbc; font-size: 11px; }
+.replacement-header strong { font-size: 12px; }
+.replacement-close { padding: 3px 7px; color: #76501f; background: transparent; border: 1px solid #d9c59a; border-radius: 5px; cursor: pointer; }
+.replacement-warning { margin-bottom: 8px; padding: 7px 9px; color: #8a3428; background: #fff0eb; border: 1px solid #ebc0b8; border-radius: 6px; font-size: 10px; }
+.replacement-auto-draft { display: grid; gap: 5px; margin-bottom: 8px; padding: 9px; background: #eaf7ef; border: 1px solid #a9d3b6; border-radius: 7px; }
+.replacement-auto-draft small { color: #4f705b; font-size: 9px; }
+.auto-draft-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.auto-draft-button { width: fit-content; padding: 7px 11px; color: #fff; background: #218653; border: 0; border-radius: 5px; cursor: pointer; font-size: 10px; font-weight: 700; }
+.auto-draft-button:disabled { color: #8d887e; background: #d7ded9; cursor: not-allowed; }
+.publish-wechat-button { width: fit-content; padding: 7px 11px; color: #fff; background: #c05a2a; border: 0; border-radius: 5px; cursor: pointer; font-size: 10px; font-weight: 700; }
+.publish-wechat-button:disabled { color: #8d887e; background: #d7ded9; cursor: not-allowed; }
+.wechat-draft-feedback { margin: 2px 0 0; padding: 7px 9px; border-radius: 5px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.wechat-draft-feedback.is-working { color: #465f71; background: #eef5fa; border: 1px solid #bfd0dc; }
+.wechat-draft-feedback.is-success { color: #1e6942; background: #f5fcf7; border: 1px solid #95c7a7; }
+.wechat-draft-feedback.is-error { color: #96362c; background: #fff3ef; border: 1px solid #e5afa7; }
+.replacement-notice { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 7px; margin-bottom: 8px; padding: 8px 9px; color: #24553b; background: #eef8f1; border: 1px solid #b8d9c2; border-radius: 6px; font-size: 10px; }
+.replacement-notice code { color: #173f2b; font-family: "Microsoft YaHei UI", sans-serif; font-size: 11px; font-weight: 700; }
+.replacement-notice small { flex-basis: 100%; color: #52705f; font-size: 9px; }
+.replacement-list { display: grid; gap: 6px; margin: 8px 0; }
+.replacement-item { padding: 8px 9px; background: #fff; border: 1px solid #e6d6b6; border-radius: 7px; font-size: 11px; transition: border-color .15s ease, background .15s ease; }
+.replacement-item.is-confirmed { background: #f1faf4; border-color: #9bc9aa; }
 .replacement-number { min-width: 26px; color: #9a651e; font-weight: 700; }
 .replacement-description { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.replacement-description code { display: block; max-width: 100%; margin-top: 3px; overflow: hidden; color: #886226; font-family: Consolas, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .replacement-description small { display: block; margin-top: 2px; color: #7c7469; font-size: 9px; }
 .replacement-item button { padding: 5px 8px; color: #71501f; background: #fff5dd; border: 1px solid #dbc08b; border-radius: 5px; cursor: pointer; }
 .replacement-item label { white-space: nowrap; font-size: 10px; }
-.replacement-check { margin-top: 8px; color: #8a5718; font-size: 10px; }
-.diagnostics { max-height: 80px; overflow: auto; padding: 6px 13px; color: #8a392e; background: #fff1ee; border-top: 1px solid #edc7bf; font-size: 10px; }
+.replacement-item input:disabled, .acceptance-step input:disabled { cursor: not-allowed; opacity: .45; }
+.replacement-empty { margin: 8px 0; padding: 8px 10px; color: #6f685e; background: #fff; border: 1px dashed #d9c9aa; border-radius: 6px; font-size: 10px; }
+.acceptance-checklist { display: grid; gap: 5px; margin-top: 8px; }
+.acceptance-step { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; background: color-mix(in srgb, #fff 75%, transparent); border-radius: 6px; font-size: 10px; }
+.acceptance-step input { margin-top: 2px; }
+.acceptance-step span { display: grid; gap: 1px; }
+.acceptance-step strong { color: #6d4b1e; font-size: 10px; }
+.acceptance-step small { color: #7c7469; font-size: 9px; }
+.replacement-check { margin-top: 8px; padding: 7px 9px; color: #8a5718; background: #fff4d8; border-radius: 6px; font-size: 10px; }
+.replacement-check.is-complete { color: #27643d; background: #e9f7ed; border: 1px solid #add2b7; }
+.acceptance-save { display: block; width: 100%; margin-top: 8px; padding: 7px 10px; color: #fff; background: #2f8f63; border: 0; border-radius: 6px; cursor: pointer; font-size: 10px; font-weight: 700; }
+.acceptance-save:disabled { color: #8d887e; background: #e2ddd3; cursor: not-allowed; }
+.diagnostics { max-height: 112px; overflow: auto; padding: 6px 13px; color: #8a392e; background: #fff1ee; border-top: 1px solid #edc7bf; font-size: 10px; }
+.diagnostics-header { position: sticky; top: -6px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -6px -13px 5px; padding: 6px 13px; background: #fff1ee; border-bottom: 1px solid #edc7bf; }
+.diagnostics-header span { display: flex; gap: 6px; }
+.diagnostics-header button, .status-retry { padding: 2px 7px; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; font: inherit; cursor: pointer; }
+
+.wechat-preview-overlay { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 24px; background: rgba(19,28,34,.52); backdrop-filter: blur(5px); }
+.wechat-config-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: rgba(19,28,34,.58); backdrop-filter: blur(5px); }
+.wechat-config-dialog { display: grid; grid-template-rows: auto minmax(0,1fr) auto; width: min(620px, 94vw); max-height: min(720px, 92vh); overflow: hidden; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 15px; box-shadow: 0 24px 80px rgba(12,20,25,.34); }
+.wechat-config-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px 18px; border-bottom: 1px solid var(--border); }
+.wechat-config-dialog > header > div { display: grid; gap: 3px; }
+.wechat-config-dialog > header strong { color: var(--text-strong); font-size: 15px; }
+.wechat-config-dialog > header small { color: var(--muted); font-size: 10px; }
+.wechat-config-dialog > header button, .wechat-config-dialog > footer button, .wechat-cover-picker button { padding: 7px 11px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font: inherit; }
+.wechat-config-dialog button:disabled { cursor: not-allowed; opacity: .55; }
+.wechat-config-form { display: grid; gap: 15px; padding: 18px; overflow: auto; }
+.wechat-config-form > label { display: grid; gap: 6px; color: var(--text); font-size: 11px; font-weight: 700; }
+.wechat-config-form > label > small { color: var(--muted); font-size: 9px; font-weight: 400; line-height: 1.5; }
+.wechat-whitelist-card { display: grid; gap: 9px; padding: 12px; background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 9px; font-size: 10px; line-height: 1.55; }
+.wechat-whitelist-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wechat-whitelist-heading > span { display: grid; gap: 2px; }
+.wechat-whitelist-heading strong { color: var(--text-strong); font-size: 11px; }
+.wechat-whitelist-heading small, .wechat-whitelist-card > small { color: var(--muted); }
+.wechat-whitelist-heading button, .wechat-whitelist-heading a, .wechat-ip-warning button, .wechat-ready-result button { padding: 6px 9px; color: var(--accent-strong); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.wechat-whitelist-heading a { text-decoration: none; }
+.wechat-whitelist-card p, .wechat-whitelist-card ol { margin: 0; }
+.wechat-whitelist-card ol { padding-left: 18px; color: var(--muted); }
+.wechat-connection-success { color: #21764c; font-weight: 700; }
+.wechat-ready-result { display: grid; gap: 6px; }
+.wechat-ready-result > div { display: flex; align-items: center; gap: 8px; }
+.wechat-ready-result code { padding: 5px 8px; color: var(--accent-strong); background: var(--surface); border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 5px; font-size: 12px; font-weight: 700; user-select: all; }
+.wechat-connection-error { color: #a13f35; }
+.wechat-ip-warning { display: grid; gap: 6px; padding: 9px; color: #804d14; background: #fff5dc; border: 1px solid #dfbe78; border-radius: 7px; }
+.wechat-ip-warning > div { display: flex; align-items: center; gap: 8px; }
+.wechat-ip-warning code { padding: 5px 8px; color: #663b0b; background: #fff; border: 1px solid #e0c58d; border-radius: 5px; font-size: 12px; font-weight: 700; user-select: all; }
+.wechat-config-form input { box-sizing: border-box; width: 100%; height: 36px; padding: 0 10px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; outline: none; font: 11px Consolas, "Microsoft YaHei UI", sans-serif; }
+.wechat-config-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.wechat-cover-picker { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; }
+.wechat-cover-picker input { color: var(--muted); }
+.wechat-config-message { margin: 0; padding: 8px 10px; color: #7d4f16; background: #fff6df; border: 1px solid #e3c98e; border-radius: 6px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.wechat-config-dialog > footer { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; padding: 12px 18px; background: var(--surface-subtle); border-top: 1px solid var(--border); }
+.wechat-config-dialog > footer .wechat-config-clear { color: #a13f35; border-color: #d7aaa5; }
+.wechat-config-dialog > footer .wechat-config-save { color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.wechat-preview-dialog { display: grid; grid-template-rows: auto auto minmax(0,1fr); width: min(1040px, 94vw); height: min(820px, 92vh); overflow: hidden; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 15px; box-shadow: 0 24px 80px rgba(12,20,25,.3); }
+.wechat-preview-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 17px; border-bottom: 1px solid var(--border); }
+.wechat-preview-dialog > header > div { display: grid; gap: 3px; }
+.wechat-preview-dialog > header strong { color: var(--text-strong); font-size: 15px; }
+.wechat-preview-dialog > header small { color: var(--muted); font-size: 10px; }
+.wechat-preview-dialog > header button { padding: 6px 10px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.wechat-preview-controls { display: flex; align-items: center; gap: 13px; padding: 9px 17px; background: var(--surface-subtle); border-bottom: 1px solid var(--border); font-size: 10px; }
+.wechat-preview-controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.wechat-preview-controls select { height: 27px; padding: 0 26px 0 8px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; }
+.viewport-buttons { display: inline-flex; padding: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; }
+.viewport-buttons button { display: inline-flex; align-items: center; gap: 4px; height: 23px; padding: 0 8px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; font-size: 9px; }
+.viewport-buttons button i { width: 5px; height: 5px; background: #a5b0b5; border-radius: 50%; }.viewport-buttons button.passed i { background: #35a66b; }.viewport-buttons button.review i { background: #d39a35; }.viewport-buttons button.warning i { background: #d65a4b; }
+.viewport-buttons button.active { color: #fff; background: var(--accent); }
+.mobile-audit-state { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-weight: 700; }
+.mobile-audit-state i { width: 7px; height: 7px; border-radius: 50%; }
+.mobile-audit-state.passed { color: #26744b; }.mobile-audit-state.passed i { background: #35a66b; }
+.mobile-audit-state.review { color: #8a621f; }.mobile-audit-state.review i { background: #d39a35; }
+.mobile-audit-state.warning { color: #a43d31; }.mobile-audit-state.warning i { background: #d65a4b; }
+.mobile-audit-state.running { color: #60747d; }.mobile-audit-state.running i { background: #8ba0aa; animation: audit-pulse 1s ease-in-out infinite; }
+.wechat-preview-workspace { display: grid; grid-template-columns: minmax(430px,1fr) 280px; gap: 24px; min-height: 0; padding: 21px; overflow: auto; background: #e9edef; }
+.wechat-phone-shell { justify-self: center; align-self: start; padding: 36px 13px 15px; background: #20282c; border-radius: 30px; box-shadow: 0 15px 42px rgba(20,30,35,.22); transition: width .2s ease; }
+.wechat-phone-bar { display: flex; align-items: center; justify-content: space-between; height: 31px; margin: -28px 5px 5px; color: #d7e0e4; font-size: 10px; }
+.wechat-phone-bar small { color: #8fa0a8; }
+.wechat-phone-viewport { box-sizing: content-box; height: min(650px, 70vh); overflow-y: auto; overflow-x: hidden; background: #fff; border-radius: 17px; transition: width .2s ease; }
+.wechat-themed-content { box-sizing: border-box; min-height: 100%; padding: 18px 13px 54px; color: #292929; background: #fff; }
+.wechat-themed-content img, .wechat-themed-content svg { display: block; max-width: 100% !important; height: auto !important; margin-right: auto; margin-left: auto; }
+.wechat-themed-content .mermaid-diagram { max-width: 100%; margin: 16px 0; padding: 8px; }
+.wechat-themed-content .resource-placeholder { display: block; max-width: 100%; padding: 8px; color: #8b632c; background: #fff5de; border: 1px dashed #dfc28d; overflow-wrap: anywhere; }
+.wechat-audit-panel { align-self: start; padding: 15px; color: #34434b; background: #fff; border: 1px solid #d6dee2; border-radius: 11px; box-shadow: 0 7px 22px rgba(40,55,62,.07); }
+.wechat-audit-panel > strong { color: #1e3038; font-size: 13px; }
+.wechat-audit-panel > p { margin: 7px 0 12px; color: #687980; font-size: 10px; line-height: 1.6; }
+.wechat-audit-panel > small { display: block; margin-top: 12px; color: #89979d; font-size: 9px; line-height: 1.55; }
+.wechat-audit-panel ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.wechat-audit-panel li { display: grid; grid-template-columns: 35px minmax(0,1fr); gap: 6px; padding: 7px; border-radius: 6px; font-size: 9px; }
+.wechat-audit-panel li.warning { color: #8d362e; background: #fff0ed; }.wechat-audit-panel li.notice { color: #76551c; background: #fff7e6; }
+.wechat-audit-panel li span { overflow-wrap: anywhere; }
+.audit-empty { padding: 10px; color: #26744b; background: #edf8f1; border: 1px solid #b9ddc7; border-radius: 7px; font-size: 10px; }
+.audit-running { padding: 10px; color: #526a75; background: #eef4f7; border: 1px solid #cad9e0; border-radius: 7px; font-size: 10px; }
+.wechat-audit-probes { position: fixed; top: 0; left: -10000px; visibility: hidden; pointer-events: none; }
+.wechat-audit-probes .wechat-themed-content { min-height: 1px; padding: 18px 13px 54px; }
+@keyframes audit-pulse { 50% { opacity: .35; } }
 
 .statusbar { flex: 0 0 25px; display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 0 9px 0 12px; color: var(--muted); background: var(--surface-subtle); border-top: 1px solid var(--border); font-size: 9px; }
 .status-message { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-message i { flex: 0 0 auto; width: 5px; height: 5px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
+.status-retry { flex: 0 0 auto; margin-left: 8px; }
 .status-meta { display: flex; align-items: center; gap: 15px; padding-left: 14px; white-space: nowrap; }
+.performance-metric { padding: 2px 5px; border-radius: 4px; }
+.performance-metric.is-notice { color: #8a621f; background: color-mix(in srgb, #d39a35 13%, transparent); }
+.performance-metric.is-slow { color: #a33e32; background: color-mix(in srgb, #d65a4b 13%, transparent); font-weight: 700; }
 
 @media (max-width: 1050px) {
   .app-header { grid-template-columns: 190px auto minmax(80px,1fr) auto; }
@@ -375,6 +549,8 @@ kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border:
   .document-stage.view-split .split-handle { width: auto; height: 6px; cursor: row-resize; }
   .document-stage.view-split .split-handle span { top: 1px; left: 50%; width: 34px; height: 2px; margin: 0 0 0 -17px; }
   .welcome-screen { padding: 25px; }
+  .wechat-preview-workspace { grid-template-columns: 1fr; }
+  .wechat-audit-panel { width: min(414px, 100%); justify-self: center; }
 }
 .preview-font-control { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding-left: 7px; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; font-size: 9px; font-weight: 650; letter-spacing: .01em; text-transform: none; }
 .preview-font-control select { max-width: 94px; height: 22px; padding: 0 19px 0 4px; color: var(--text); background: var(--surface); border: 0; border-radius: 4px; outline: none; font: inherit; cursor: pointer; }

@@ -7,6 +7,7 @@ import type { Diagnostic } from "@fantastic-editor/document-core";
 import type { OutputContext } from "@fantastic-editor/shared";
 import { generateOfflineHtml, type OfflineHtmlGeneration, type OutputResourceAsset } from "./offline-html-adapter.js";
 import type { OutputMermaidAsset } from "./mermaid-assets.js";
+import { isPdfLayoutAudit, PDF_PREPARE_SCRIPT } from "./pdf-layout.js";
 
 const PDF_TIMEOUT_MS = 45_000;
 
@@ -77,15 +78,13 @@ export class PdfRenderWindow {
       await writeFile(htmlPath, htmlGeneration.bytes);
       const operation = (async () => {
         await window.loadFile(htmlPath);
-        await window.webContents.executeJavaScript(`Promise.all([
-          document.fonts ? document.fonts.ready : Promise.resolve(),
-          Promise.all(Array.from(document.images).map((image) => image.complete
-            ? Promise.resolve()
-            : new Promise((resolve, reject) => {
-                image.addEventListener("load", resolve, { once: true });
-                image.addEventListener("error", () => reject(new Error("image-load-failed")), { once: true });
-              })))
-        ]).then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))`, true);
+        const layoutAudit: unknown = await window.webContents.executeJavaScript(PDF_PREPARE_SCRIPT, true);
+        if (!isPdfLayoutAudit(layoutAudit)) {
+          return failed(context, "failed", "PDF_LAYOUT_AUDIT_INVALID", "PDF 打印布局检查返回了无效结果。");
+        }
+        if (layoutAudit.unresolvedOverflowElements > 0) {
+          return failed(context, "failed", "PDF_CONTENT_TOO_WIDE", "有 " + layoutAudit.unresolvedOverflowElements + " 个表格或公式过宽，缩放后仍无法安全放入页面。");
+        }
         if (controller.cancelled) return failed(context, "cancelled", "PDF_CANCELLED", "PDF 导出任务已取消。");
         const buffer = await window.webContents.printToPDF({
           printBackground: true,
@@ -96,7 +95,18 @@ export class PdfRenderWindow {
         });
         const bytes = new Uint8Array(buffer);
         if (!validPdf(bytes)) return failed(context, "failed", "PDF_RESULT_INVALID", "Chromium 返回了无效 PDF 数据。");
-        return { ...htmlGeneration, bytes };
+        const diagnostics = [...htmlGeneration.diagnostics];
+        if (layoutAudit.scaledElements > 0) {
+          diagnostics.push({
+            id: "diagnostic-" + context.jobId + "-PDF_WIDE_CONTENT_SCALED",
+            code: "PDF_WIDE_CONTENT_SCALED",
+            severity: "warning",
+            category: "compatibility",
+            message: "为避免页面裁切，已缩放 " + layoutAudit.scaledElements + " 个过宽表格或公式。",
+            outputTarget: "pdf",
+          });
+        }
+        return { ...htmlGeneration, bytes, diagnostics, pageCount: layoutAudit.pageEstimate, scaledElements: layoutAudit.scaledElements };
       })();
       const timedOut = new Promise<OfflineHtmlGeneration>((resolve) => {
         timeout = setTimeout(() => {

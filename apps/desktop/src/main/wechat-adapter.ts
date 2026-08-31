@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { renderParsedDocumentHtml, type Diagnostic, type DocumentNode } from "@fantastic-editor/document-core";
-import type { OutputContext, OutputResultStatus, WechatReplacementItem } from "@fantastic-editor/shared";
+import { renderParsedDocumentHtml, type Diagnostic, type DocumentNode, type ParsedDocument } from "@fantastic-editor/document-core";
+import { applyWechatThemeToFragment, resolveWechatTheme, type OutputContext, type OutputResultStatus, type WechatReplacementItem } from "@fantastic-editor/shared";
 import { formulaReferenceKey, type OutputFormulaAsset } from "./docx-adapter.js";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
 import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
+import { auditWechatHtmlMarkup } from "./wechat-html-security.js";
 
 const WECHAT_HTML_HARD_LIMIT = 5 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -19,6 +20,7 @@ export interface WechatGeneration {
   usedReferenceKeys: string[];
   omittedReferenceKeys: string[];
   replacementItems?: WechatReplacementBinding[];
+  suggestedTitle?: string;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -59,24 +61,24 @@ function stringAttribute(node: DocumentNode, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function inlineTheme(fragment: string): string {
-  const replacements: Array<[RegExp, string]> = [
-    [/<h1>/g, '<h1 style="margin:1.6em 0 .8em;padding-bottom:.35em;border-bottom:2px solid #2f8f63;color:#163c2b;font-size:1.7em;line-height:1.35;font-weight:700;">'],
-    [/<h2>/g, '<h2 style="margin:1.5em 0 .7em;padding-left:.55em;border-left:4px solid #2f8f63;color:#1e563d;font-size:1.4em;line-height:1.4;font-weight:700;">'],
-    [/<h([3-6])>/g, '<h$1 style="margin:1.35em 0 .65em;color:#245b43;font-size:1.15em;line-height:1.45;font-weight:700;">'],
-    [/<p>/g, '<p style="margin:.85em 0;color:#2b2f2c;font-size:16px;line-height:1.8;letter-spacing:.02em;">'],
-    [/<blockquote>/g, '<blockquote style="margin:1em 0;padding:.8em 1em;border-left:4px solid #79ad91;background:#f3f8f5;color:#526158;">'],
-    [/<ul>/g, '<ul style="margin:.8em 0;padding-left:1.5em;color:#2b2f2c;line-height:1.8;">'],
-    [/<ol([^>]*)>/g, '<ol$1 style="margin:.8em 0;padding-left:1.6em;color:#2b2f2c;line-height:1.8;">'],
-    [/<pre>/g, '<pre style="margin:1em 0;padding:14px 16px;overflow:auto;border-radius:6px;background:#f1f4f2;color:#27352e;font-size:14px;line-height:1.65;white-space:pre-wrap;">'],
-    [/<code>/g, '<code style="padding:.1em .3em;border-radius:3px;background:#eef2ef;color:#b54a3a;font-family:Consolas,monospace;">'],
-    [/<table>/g, '<table style="width:100%;margin:1em 0;border-collapse:collapse;font-size:14px;">'],
-    [/<th>/g, '<th style="padding:7px 9px;border:1px solid #b9c9c0;background:#eaf3ee;color:#214b37;font-weight:700;">'],
-    [/<td>/g, '<td style="padding:7px 9px;border:1px solid #cbd6d0;color:#2b2f2c;">'],
-    [/<hr>/g, '<hr style="margin:1.5em auto;border:0;border-top:1px solid #cfd9d3;">'],
-    [/<a /g, '<a style="color:#237a52;text-decoration:none;" '],
-  ];
-  return replacements.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), fragment);
+function plainText(node: DocumentNode): string {
+  if (node.type === "text" || node.type === "inlineCode") return stringAttribute(node, "value");
+  if (node.type === "formulaInline") return stringAttribute(node, "latex");
+  return (node.children ?? []).map(plainText).join("");
+}
+
+function withoutLeadingTitle(document: ParsedDocument): { document: ParsedDocument; suggestedTitle?: string } {
+  const first = document.children[0];
+  if (!first || first.type !== "heading" || Number(first.attributes.level) !== 1) return { document };
+  const suggestedTitle = plainText(first).replace(/\s+/g, " ").trim().slice(0, 120);
+  return {
+    document: { ...document, children: document.children.slice(1) },
+    ...(suggestedTitle ? { suggestedTitle } : {}),
+  };
+}
+
+function stripUnsupportedPresentationAttributes(fragment: string): string {
+  return fragment.replace(/\s+(?:class|id|data-[a-z0-9_-]+)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
 }
 
 export function generateWechatHtml(
@@ -144,22 +146,31 @@ export function generateWechatHtml(
   ) => {
     sequence += 1;
     const number = String(sequence).padStart(2, "0");
-    const label = description.slice(0, 80) || (kind === "image" ? "本地图片" : kind === "formula" ? "公式" : "Mermaid 流程图");
+    const label = description.replace(/\s+/g, " ").trim().slice(0, 80) || (kind === "image" ? "本地图片" : kind === "formula" ? "公式" : "Mermaid 流程图");
+    const kindLabel = kind === "image" ? "图片" : kind === "formula" ? "公式" : "流程图";
+    const placement = node.type === "formulaInline" ? "inline" : "block";
+    const placeholderText = placement === "inline"
+      ? `【FE${kindLabel}${number}｜行内替换】`
+      : `【FE${kindLabel}${number}｜整段替换】`;
     replacementItems.push({
       itemId: `wechat-item-${number}`,
       sequence,
       kind,
+      placement,
       label,
+      placeholderText,
       sourceOffset: node.source.from,
       mimeType,
       width,
       height,
       sourceKey,
     });
-    const kindLabel = kind === "image" ? "图片" : kind === "formula" ? "公式" : "流程图";
-    return `<span style="display:block;margin:1em 0;padding:.8em 1em;border:2px dashed #d29a45;background:#fff8e8;color:#8a5718;text-align:center;font-size:15px;line-height:1.6;">【fantastic-editor ${kindLabel} ${number}：${escapeHtml(label)}，请在此处替换】</span>`;
+    return placement === "inline"
+      ? `<span style="color:#9a5b00;font-weight:700;white-space:nowrap;">${escapeHtml(placeholderText)}</span>`
+      : `<span style="display:block;margin:.9em 0;color:#9a5b00;text-align:center;font-size:15px;line-height:1.7;font-weight:700;">${escapeHtml(placeholderText)}</span>`;
   };
-  const fragment = renderParsedDocumentHtml(context.parsedDocument, {
+  const titleResult = withoutLeadingTitle(context.parsedDocument);
+  const fragment = renderParsedDocumentHtml(titleResult.document, {
     renderImage: (node) => {
       const referenceKey = stringAttribute(node, "referenceKey");
       if (approved.has(referenceKey)) {
@@ -181,7 +192,13 @@ export function generateWechatHtml(
     },
   });
   const selectedFont = typeof context.theme.tokens["typography.body.fontFamily"] === "string" ? String(context.theme.tokens["typography.body.fontFamily"]).replace(/[";{}<>]/g, "") : "Microsoft YaHei";
-  const html = `<section style="box-sizing:border-box;max-width:677px;margin:0 auto;padding:8px 4px;font-family:&quot;${escapeHtml(selectedFont)}&quot;,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;word-break:break-word;">${inlineTheme(fragment)}</section>`;
+  const selectedTheme = resolveWechatTheme(context.theme.id);
+  const html = `<section style="${selectedTheme.wrapperStyle}font-family:&quot;${escapeHtml(selectedFont)}&quot;,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${applyWechatThemeToFragment(stripUnsupportedPresentationAttributes(fragment), selectedTheme.id)}</section>`;
+  const securityIssues = auditWechatHtmlMarkup(html);
+  if (securityIssues.length > 0) {
+    diagnostics.push(diagnostic(context, "WECHAT_HTML_SECURITY_AUDIT_FAILED", `公众号富文本安全审计失败（${securityIssues.join("、")}），未写入剪贴板。`));
+    return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };
+  }
   const bytes = new TextEncoder().encode(html);
   if (bytes.byteLength > WECHAT_HTML_HARD_LIMIT) {
     diagnostics.push(diagnostic(context, "WECHAT_HTML_LIMIT_EXCEEDED", "公众号富文本超过 5 MiB 安全上限，已阻止写入剪贴板。"));
@@ -200,5 +217,6 @@ export function generateWechatHtml(
     usedReferenceKeys: [...new Set(usedReferenceKeys)].sort(),
     omittedReferenceKeys: omitted,
     replacementItems,
+    ...(titleResult.suggestedTitle ? { suggestedTitle: titleResult.suggestedTitle } : {}),
   };
 }

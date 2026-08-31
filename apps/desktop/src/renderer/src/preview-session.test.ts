@@ -14,6 +14,7 @@ async function fixture(): Promise<{ parse: ParseWorkerSuccess; resolved: Resolve
   const reference = parsedDocument.resourceReferences[0]!;
   const parse: ParseWorkerSuccess = {
     type: "parsed",
+    parseDurationMs: 1,
     documentId: parsedDocument.documentId,
     sourceHash: parsedDocument.sourceHash,
     parserProfile: parsedDocument.parserProfile,

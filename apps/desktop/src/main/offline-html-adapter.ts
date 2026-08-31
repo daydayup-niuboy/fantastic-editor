@@ -7,6 +7,7 @@ import { renderParsedDocumentHtml } from "@fantastic-editor/document-core";
 import type { Diagnostic, DocumentNode } from "@fantastic-editor/document-core";
 import type { OutputContext, OutputResultStatus } from "@fantastic-editor/shared";
 import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
+import { PDF_PRINT_STYLE } from "./pdf-layout.js";
 
 const SOFT_HTML_BYTES = 20 * 1024 * 1024;
 const HARD_HTML_BYTES = 50 * 1024 * 1024;
@@ -28,6 +29,8 @@ export interface OfflineHtmlGeneration {
   diagnostics: Diagnostic[];
   usedReferenceKeys: string[];
   omittedReferenceKeys: string[];
+  pageCount?: number;
+  scaledElements?: number;
 }
 
 const BASE_STYLE = `
@@ -43,6 +46,15 @@ th,td{padding:7px 10px;border:1px solid #ccd3ce}img{display:block;max-width:100%
 @media print{.document{max-width:none;padding:0}.resource-placeholder{break-inside:avoid}}
 `;
 
+const OFFLINE_HTML_STYLE = [
+  "html,body{min-height:100%}",
+  ".document{box-sizing:border-box}",
+  "table{width:100%;table-layout:auto}",
+  "th,td{overflow-wrap:anywhere;word-break:break-word}",
+  "pre{max-width:100%;box-sizing:border-box}",
+  "@media(max-width:700px){table{font-size:.94em}th,td{padding:6px 7px}}",
+  "@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}a{color:inherit}}",
+].join("");
 const require = createRequire(import.meta.url);
 let cachedEmbeddedKatexStyle: string | undefined;
 
@@ -100,10 +112,74 @@ function outputFontStack(context: OutputContext): string {
   return `"${font}","Segoe UI",sans-serif`;
 }
 
-function htmlDocument(content: string, locale: string, formulaStyle: string, fontFamily: string): string {
-  return `<!doctype html>\n<html lang="${locale.replace(/[^A-Za-z0-9_-]/g, "") || "zh-CN"}">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">\n<title>fantastic-editor 导出</title>\n<style>${formulaStyle}${BASE_STYLE}:root{font-family:${fontFamily}}</style>\n</head>\n<body><article class="document">${content}</article></body>\n</html>\n`;
+function escapeHtmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
+function nodePlainText(nodes: readonly DocumentNode[]): string {
+  let value = "";
+  for (const node of nodes) {
+    if (node.type === "text" || node.type === "inlineCode") {
+      const text = node.attributes.value;
+      if (typeof text === "string") value += text;
+    } else {
+      value += nodePlainText(node.children ?? []);
+    }
+  }
+  return value;
+}
+
+function outputDocumentTitle(nodes: readonly DocumentNode[]): string {
+  for (const node of nodes) {
+    if (node.type === "heading") {
+      const title = nodePlainText(node.children ?? []).trim();
+      if (title) return title.slice(0, 120);
+    }
+    const nested = outputDocumentTitle(node.children ?? []);
+    if (nested !== "fantastic-editor 导出") return nested;
+  }
+  return "fantastic-editor 导出";
+}
+
+function outputColorScheme(context: OutputContext): "light" | "dark" {
+  return context.target === "offline-html" && context.theme.tokens.colorScheme === "dark" ? "dark" : "light";
+}
+
+function outputThemeStyle(scheme: "light" | "dark"): string {
+  if (scheme === "dark") {
+    return ':root{color-scheme:dark;color:#e8eee9;background:#151a17}body{background:#151a17}.document{color:#e8eee9}h1,h2,h3,h4,h5,h6{color:#a9d8c3}h1{border-color:#405148}pre{background:#232a26}blockquote{color:#b7c5bd;border-color:#6f9a84}th,td{border-color:#46534c}th{background:#26332c}.resource-placeholder,.blocked-raw-html,.unsupported-node{color:#ead9ae;background:#3a3323;border-color:#756444}';
+  }
+  return ":root{color-scheme:light}";
+}
+
+function htmlDocument(
+  content: string,
+  locale: string,
+  formulaStyle: string,
+  fontFamily: string,
+  target: OutputContext["target"],
+  title: string,
+  scheme: "light" | "dark",
+): string {
+  const safeLocale = locale.replace(/[^A-Za-z0-9_-]/g, "") || "zh-CN";
+  const safeTitle = escapeHtmlText(title);
+  const style = formulaStyle + BASE_STYLE + OFFLINE_HTML_STYLE + (target === "pdf" ? PDF_PRINT_STYLE : "") + outputThemeStyle(scheme) + ":root{font-family:" + fontFamily + "}";
+  return "<!doctype html>\n"
+    + '<html lang="' + safeLocale + '">\n<head>\n'
+    + '<meta charset="utf-8">\n'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+    + '<meta name="color-scheme" content="' + scheme + '">\n'
+    + '<meta name="referrer" content="no-referrer">\n'
+    + '<meta name="generator" content="fantastic-editor">\n'
+    + '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; form-action \'none\'; object-src \'none\'; img-src data:; style-src \'unsafe-inline\'; font-src data:">\n'
+    + "<title>" + safeTitle + "</title>\n"
+    + "<style>" + style + "</style>\n"
+    + '</head>\n<body><main class="document" role="document" aria-label="' + safeTitle + '">' + content + "</main></body>\n</html>\n";
+}
+
+function passesOfflineHtmlSecurityAudit(html: string): boolean {
+  return !/<script\b|<iframe\b|<object\b|<embed\b|\son[a-z]+\s*=|(?:file|blob|app|fantastic-asset):|https?:\/\/localhost\b/i.test(html);
+}
 export function generateOfflineHtml(
   context: OutputContext,
   assets: readonly OutputResourceAsset[],
@@ -196,7 +272,20 @@ export function generateOfflineHtml(
       return `<img class="mermaid-export" src="data:image/png;base64,${Buffer.from(asset.bytes).toString("base64")}" alt="Mermaid 流程图">`;
     },
   });
-  const bytes = new TextEncoder().encode(htmlDocument(fragment, context.locale, formulaStyle, outputFontStack(context)));
+  const html = htmlDocument(
+    fragment,
+    context.locale,
+    formulaStyle,
+    outputFontStack(context),
+    context.target,
+    outputDocumentTitle(context.parsedDocument.children),
+    outputColorScheme(context),
+  );
+  if (!passesOfflineHtmlSecurityAudit(html)) {
+    diagnostics.push(diagnostic(context, "OFFLINE_HTML_SECURITY_AUDIT_FAILED", "离线 HTML 最终安全审计发现脚本、事件属性或本地/临时地址。"));
+    return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };
+  }
+  const bytes = new TextEncoder().encode(html);
   if (bytes.byteLength > HARD_HTML_BYTES) {
     diagnostics.push(diagnostic(context, "OFFLINE_HTML_HARD_LIMIT_EXCEEDED", "单文件离线 HTML 超过 50 MiB 硬上限，请压缩图片后重试。"));
     return { status: "failed", bytes: null, diagnostics, usedReferenceKeys, omittedReferenceKeys };

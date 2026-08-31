@@ -3,6 +3,7 @@ export const DEFAULT_PREVIEW_FONT = "Microsoft YaHei UI";
 export const PREVIEW_FONT_PRESETS = [
   "Microsoft YaHei UI",
   "Segoe UI Variable Text",
+  "Arial",
   "DengXian",
   "SimSun",
   "KaiTi",

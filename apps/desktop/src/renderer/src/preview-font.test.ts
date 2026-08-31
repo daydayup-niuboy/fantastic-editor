@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PREVIEW_FONT, normalizePreviewFontName, previewFontStack } from "./preview-font";
+import { DEFAULT_PREVIEW_FONT, PREVIEW_FONT_PRESETS, normalizePreviewFontName, previewFontStack } from "./preview-font";
 
 describe("preview font preference", () => {
   it("accepts a local font name and builds a safe fallback stack", () => {
     expect(normalizePreviewFontName("  Microsoft   YaHei UI  ")).toBe("Microsoft YaHei UI");
+    expect(PREVIEW_FONT_PRESETS).toContain("Arial");
+    expect(previewFontStack("Arial")).toBe('"Arial", "Segoe UI", sans-serif');
     expect(previewFontStack("KaiTi")).toBe('"KaiTi", "Segoe UI", sans-serif');
   });
 

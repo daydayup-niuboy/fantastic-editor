@@ -7,5 +7,14 @@ coverage/
 .DS_Store
 Thumbs.db
 .fantastic-editor/
-release/
+/release/
 build-tmp/
+%LOCAL~1/
+
+# Code-signing secrets must never enter source control.
+*.pfx
+*.p12
+*.pvk
+*.key
+.env
+.env.*

@@ -1,9 +1,13 @@
 {
   "name": "fantastic-editor",
-  "version": "0.1.0",
+  "version": "0.3.0-rc.1",
   "private": true,
   "type": "module",
   "description": "Local-first Markdown editor for Windows",
+  "author": {
+    "name": "Tbin",
+    "email": "niuboy5188@gmail.com"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -15,8 +19,21 @@
     "build:packages": "npm run build --workspace @fantastic-editor/document-core && npm run build --workspace @fantastic-editor/shared",
     "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
+    "test:signing": "node --test scripts/signing-config.test.mjs",
     "test:watch": "vitest",
-    "dist:win": "npm run build && electron-builder --win nsis --x64"
+    "icons:generate": "node scripts/generate-app-icons.mjs",
+    "dist:win": "npm run icons:generate && npm run build && node scripts/build-windows.mjs nsis && npm run verify:privacy",
+    "dist:portable": "npm run icons:generate && npm run build && node scripts/build-windows.mjs portable && npm run verify:privacy && npm run verify:portable && npm run verify:production",
+    "dist:rc": "npm run icons:generate && npm run build && node scripts/build-windows.mjs nsis portable && npm run verify:privacy && npm run verify:release && npm run verify:production && npm run verify:installer",
+    "signing:check": "node scripts/signing-preflight.mjs",
+    "dist:signed": "npm run signing:check && npm run icons:generate && npm run build && node scripts/build-windows.mjs --signed nsis portable && npm run verify:privacy && npm run verify:signed && npm run verify:production && npm run verify:installer",
+    "verify:release": "node scripts/verify-release.mjs --smoke",
+    "verify:portable": "node scripts/verify-release.mjs --portable-only --smoke",
+    "verify:privacy": "node scripts/verify-release-privacy.mjs",
+    "verify:signed": "node scripts/verify-release.mjs --require-signed --smoke",
+    "verify:production": "node scripts/verify-production-smokes.mjs",
+    "verify:installer": "node scripts/verify-installer.mjs",
+    "release:gate": "npm test -- --run && npm run test:signing && npm run typecheck && npm run dist:rc"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
@@ -43,7 +60,8 @@
     "productName": "fantastic-editor",
     "asar": true,
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "apps/desktop/out/**/*",
@@ -64,9 +82,13 @@
       "!node_modules/electron-vite/**/*",
       "!node_modules/esbuild/**/*",
       "!node_modules/@esbuild/**/*",
-      "!node_modules/rollup/**/*"
+      "!node_modules/rollup/**/*",
+      "!**/wechat-api-config-v1.json",
+      "!**/.env*",
+      "!**/*.{pfx,p12,pvk,key}"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -74,16 +96,23 @@
             "x64"
           ]
         }
-      ],
-      "artifactName": "fantastic-editor-${version}-setup.${ext}"
+      ]
     },
     "nsis": {
+      "artifactName": "fantastic-editor-${version}-setup.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "include": "build/nsis-custom.nsh",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "fantastic-editor"
+    },
+    "portable": {
+      "artifactName": "fantastic-editor-${version}-portable.${ext}"
     }
   }
 }

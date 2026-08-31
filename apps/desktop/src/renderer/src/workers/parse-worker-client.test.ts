@@ -23,6 +23,7 @@ class FakeWorker implements ParseWorkerLike {
 function parsedResponse(request: ParseWorkerRequest): ParseWorkerResponse {
   return {
     type: "parsed",
+    parseDurationMs: 1,
     documentId: request.documentId,
     sourceHash: request.sourceHash,
     parserProfile: request.parserProfile,

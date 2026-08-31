@@ -5,7 +5,10 @@ import type {
   BeginOutputRequest,
   CancelOutputRequest,
   CopyWechatReplacementRequest,
+  CreateWechatDraftRequest,
+  PublishWechatArticleRequest,
   OpenWorkspaceFileRequest,
+  OpenRecentFileRequest,
   FantasticEditorApi,
   FileSessionRequest,
   ImageImportSessionRequest,
@@ -15,10 +18,14 @@ import type {
   PreviewDerivedUpdate,
   ResolveRequest,
   SaveFileRequest,
+  SaveWechatApiConfigRequest,
+  SaveWechatAcceptanceReportRequest,
 } from "@fantastic-editor/shared";
 
 const api: FantasticEditorApi = {
   openMarkdownFile: () => ipcRenderer.invoke(IPC_CHANNELS.openMarkdownFile),
+  listRecentFiles: () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles),
+  openRecentFile: (request: OpenRecentFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.openRecentFile, request),
   createUntitledFile: () => ipcRenderer.invoke(IPC_CHANNELS.createUntitledFile),
   openDroppedMarkdownFile: (file: unknown) => {
     try {
@@ -76,6 +83,14 @@ const api: FantasticEditorApi = {
   approveOutputOmissions: (request: ApproveOmissions) => ipcRenderer.invoke(IPC_CHANNELS.approveOutputOmissions, request),
   cancelOutput: (request: CancelOutputRequest) => ipcRenderer.invoke(IPC_CHANNELS.cancelOutput, request),
   copyWechatReplacement: (request: CopyWechatReplacementRequest) => ipcRenderer.invoke(IPC_CHANNELS.copyWechatReplacement, request),
+  createWechatDraft: (request: CreateWechatDraftRequest) => ipcRenderer.invoke(IPC_CHANNELS.createWechatDraft, request),
+  publishWechatArticle: (request: PublishWechatArticleRequest) => ipcRenderer.invoke(IPC_CHANNELS.publishWechatArticle, request),
+  getWechatApiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getWechatApiConfig),
+  testWechatApiConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testWechatApiConnection),
+  saveWechatApiConfig: (request: SaveWechatApiConfigRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveWechatApiConfig, request),
+  selectWechatCover: () => ipcRenderer.invoke(IPC_CHANNELS.selectWechatCover),
+  clearWechatApiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearWechatApiConfig),
+  saveWechatAcceptanceReport: (request: SaveWechatAcceptanceReportRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveWechatAcceptanceReport, request),
 };
 
 contextBridge.exposeInMainWorld("fantasticEditor", Object.freeze(api));

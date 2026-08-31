@@ -1,9 +1,18 @@
 # fantastic-editor 统一文档模型规格
 
+> 软件作者：Tbin · 联系邮箱：niuboy5188@gmail.com
 > 规格标识：fantastic-editor UDM  
-> 版本：0.9-draft
-> 状态：待阶段 0 技术验证后冻结  
+> 版本：1.3-draft
+> 状态：核心模型已随 `0.2.0-rc.3` 冻结；`0.3.0-rc.1` 仅收口公众号草稿连接器与凭据/白名单边界，不改变 canonical 文档模型
 > 关联文档：[fantastic-editor 开发项目书](fantastic-editor-开发项目书.md)
+
+## 当前规格结论（2026-08-31）
+
+- canonical `editorText` 仍是唯一保存来源；ParsedDocument、ResolutionSnapshot、PreviewSession、预览派生缓存和导出 DerivedAssetManifest 的分层保持不变。
+- 源代码与所见即所得共用同一 Markdown、SourceRange 事务和撤销历史；可编辑 DOM、预览 SVG、选择框、同步滚动状态和临时资源句柄均不得成为文档数据。
+- PDF 继续由隐藏 Chromium 窗口生成；DOCX、离线 HTML 和公众号 HTML 走隔离 Node/Utility 输出；公式和 Mermaid 导出为受控 PNG 派生资源。
+- `0.3.0-rc.1` 的公众号自动草稿仍是输出侧连接器：Renderer 发送 `jobId`，主进程从已完成任务、加密凭据和受控资源中组装上传，不把 AppSecret、token、路径、HTML 或图片字节扩大到普通 IPC。
+- 真实账号已经验证自动上传、草稿创建和回读链路，未发现需要修改 UDM schema 的问题。后续多账号如实施，应扩展凭据选择层，不得复制 ParsedDocument 或建立第二套附件模型。
 
 
 ## Mermaid 与排版偏好补充规格
@@ -22,7 +31,7 @@
 
 ### 字体偏好
 
-- 字体是用户界面和输出主题偏好，不是 ParsedDocument 字段。Renderer 以本机设置保存字体名称，发起输出时传入 `BeginOutputRequest.fontFamily`；主进程重新规范化后写入 `OutputTheme.tokens["typography.body.fontFamily"]`。
+- 字体是用户界面和输出主题偏好，不是 ParsedDocument 字段。Renderer 以本机设置保存字体名称，发起输出时传入 `BeginOutputRequest.fontFamily`；主进程重新规范化后写入 `OutputTheme.tokens["typography.body.fontFamily"]`。 Renderer 的内置预设为微软雅黑、Segoe UI、Arial、等线、宋体和楷体，并保留自定义本机字体入口。
 - 字体名称最大 64 字符，禁止控制字符和 `{ } ; < >`。适配器必须提供后备字体；字体不存在只允许降级，不得改变 Markdown 或使任务失败。
 - `BeginOutputRequest.darkMode` 只用于主题身份和未来输出主题选择，不写入 ParsedDocument。当前白底导出固定使用 Mermaid 浅色主题，避免深色节点在 PDF、Word、离线 HTML 或公众号白底中失去可读性。
 
@@ -33,6 +42,24 @@
 ## 源代码 / 所见即所得双编辑模式补充规格（首轮已实现）
 
 > 首轮实现已使用 `WysiwygTextChange { from, to, insert, expectedText }` 做快照校验和最小文本补丁，并把事务提交到常驻 CodeMirror 历史。复杂块暂用 SourceRange 源码卡片，后续结构化命令仍必须遵守本节模型。
+>
+> 当前直接编辑以单个标题/段落块为提交边界：失焦、保存或切换模式时序列化该块并提交最小 TextChange；IME composition 未结束时不得提交。新段落和相邻块合并使用独立的插入/合并事务，粘贴文本在进入事务前规范化为 LF。浏览器 DOM 只负责当前块的短生命周期交互，仍不得作为历史或保存来源。
+>
+> 第二轮把非嵌套 `listItem`、`blockquote` 内 `paragraph` 和 `tableCell` 纳入相同事务模型。`tableCell` 的预览 SourceRange 精确覆盖单元格原始内容，不含管道分隔符和外围对齐空格；转义管道与代码跨度必须正确分词。列表/引用事务保存 marker、序号、checkbox 与引用前缀，只替换内容。事务成功后，尚未被新 ParsedDocument 替换的可视 DOM 必须用同一 TextChange 映射全部 SourceRange，并拒绝与当前 `editorText` 不一致的旧 HTML 重绘。
+>
+> 第三轮为标准 Markdown `ImageNode` 增加结构化图片属性事务：`editImageAlt` 只替换图片语法中的 alt 范围并保留 destination/title，`replaceImage` 复用受控资源导入回执并原子替换完整图片 SourceRange，`deleteBlock` 只删除 Markdown 引用。替换沿用原 alt；删除不隐式删除资源文件。Wiki 图片嵌入不按标准图片反向解释。图片 SourceRange 与当前 editorText 不匹配时必须拒绝并等待重解析。
+>
+> 第四轮增加列表层级事务和预览身份门控。Tab / Shift+Tab 只对当前安全可编辑列表项生成一个原子 TextChange：缩进增加一个冻结层级，退格移除一个冻结层级；首个同级项不得无父项缩进，顶层退格为无修改结果。Ctrl/Cmd+B、Ctrl/Cmd+I、Ctrl/Cmd+K 仍通过既有行内格式事务提交。`editorText` 变化时当前 HTML 投影立即标记为 not-ready；只有当前 documentId 的最新解析响应可将其标记为 ready。旧 HTML 即使仍在 React state 中也不得重绘、绑定新 SourceRange 或接受编辑命令。
+>
+> 第五轮把 `editFormulaSource`、`editMermaidSource` 和 fenced `codeBlock` 编辑落到结构化面板。公式事务只接收 LaTeX 内容，基于原始完整公式切片保留 `$`、`$$`、`\(`、`\[` 分隔符和内部边界空白；行内公式预览必须获得精确 UTF-16 SourceRange。围栏事务分别接收语言和内容，保留 fence 字符、meta 与尾随换行；若内容形成同字符闭合 fence，事务必须增长开闭 fence，不能产生截断代码块。Mermaid 语言在专用面板中固定，实时 SVG 与 KaTeX 即时 DOM 仍是临时投影。面板不得提交 DOM 或渲染结果，只提交一个校验 documentId、baseSourceHash、expectedText 和完整节点 SourceRange 的 TextChange。
+>
+> 第六轮把混合行内内容纳入直接编辑。预览解析器为行内公式、标准 Markdown 图片、链接和行内代码输出精确 UTF-16 SourceRange 与稳定 `data-source-kind`；链接和代码扫描结果只有在数量与解析 token 完全一致时才绑定，否则安全降级。Renderer 把这些范围包装为 `contenteditable=false` 的原子节点，并用仅存在于当前投影生命周期的 WeakMap 保存对应原始 Markdown 切片。序列化直接编辑块时，原子节点逐字符回填原切片，普通文本才按用户修改生成 TextChange。WeakMap、DOM 元素及原子选中态不进入 UDM、IPC、恢复稿或输出。跨原子选择的删除、粘贴和格式命令必须拒绝；图片和公式仍走专用事务，链接或行内代码内部修改暂切换源代码模式。
+>
+> 第七轮新增 `editInlineLink` 与 `editInlineCode` 结构化意图。标准内联链接事务分别接收纯文本 label、destination 和 nullable title；只重写明确修改的字段，其他字段保留原始 token、尖括号、引号类型、空白与转义。参考式链接、自动链接或解析数量不一致的范围不得按标准内联链接解释。行内代码事务接收不含 CR/LF 的内容，保留现有反引号 fence；若内容包含冲突反引号串，fence 长度至少为最长串加一，并按 CommonMark 需要保留或增加边界空格。两类事务继续校验 documentId、baseSourceHash、expectedText 和完整节点 SourceRange，结果写回 WeakMap 后仍以 canonical Markdown 为唯一来源。
+>
+> 第八轮新增 `editTableStructure` 结构化意图。载荷固定为 `insertRowBefore | insertRowAfter | deleteRow | insertColumnBefore | insertColumnAfter | deleteColumn | setColumnAlignment`，并携带当前 rowIndex、columnIndex；对齐操作另携带 `left | center | right | null`。事务目标是完整表格 SourceRange，而不是当前 DOM 行或单元格；解析原始表格时必须忽略转义管道和代码跨度内的管道。表头行与唯一列不得删除，末格 Tab 等价于 `insertRowAfter`。结构修改以一次 TextChange 重写该表格，保留单元格文本、首尾管道风格、首行缩进、分隔行最小宽度、对齐和尾随换行；允许仅在被结构修改的表格内规范化分隔空格，不得波及表外文本。提交后旧表格 DOM 立即失效并清空，当前解析投影 ready 前不得再次接受命令。新插入空单元格的内容范围允许 `from === to`，其他块级可编辑范围仍要求非空。
+>
+> 第九轮新增 `editCrossBlockSelection` 意图。Renderer 先把单个非折叠 DOM Range 映射为按文档顺序排列的 `MarkdownBlockSelectionFragment { range, source, selectionFrom, selectionTo }`；fragment 只允许标题、普通段落、引用段落和安全叶级列表项，range 使用当前 canonical editorText 的 UTF-16 SourceRange，selectionFrom/To 是该受控 Markdown 片段内偏移。删除、替换、Enter、剪切和 `setMark(bold | italic | strike)` 最终都折叠为一个外层 TextChange；复制没有编辑事务，只写规范化 text/plain。多段纯文本粘贴统一 LF、单行换行为段落边界，并转义反斜杠、行内标记及行首标题/引用/列表触发符。选区端点位于已有 strong/em/del/link/code/受保护原子内部，或 Range 与图片、公式、链接、行内代码、代码块、Mermaid、表格、源码卡片相交时，映射失败。失败检查必须发生在 commitDirectEdit 之前，因此拒绝不得顺带规范化首块或产生历史项。DOM、Range、Selection 和 ClipboardEvent 均不得进入 UDM、IPC、恢复稿或输出。
 
 ### 唯一数据源与视图
 
@@ -52,7 +79,7 @@
 - 有界操作载荷
 - `createdAt`
 
-允许的首轮 intent 包括 `replaceText`、`setInlineMark`、`setHeadingLevel`、`setLink`、`toggleTask`、`insertBlock`、`deleteBlock`、`replaceImage`、`editImageAlt`、`editFormulaSource`、`editMermaidSource` 和 `editTableCellText`。结构化事务不是 IPC 文件写入请求，也不得携带 DOM、HTML、绝对路径或资源二进制。
+允许的 intent 包括 `replaceText`、`setInlineMark`、`setHeadingLevel`、`setLink`、`toggleTask`、`insertBlock`、`deleteBlock`、`replaceImage`、`editImageAlt`、`editFormulaSource`、`editMermaidSource`、`editTableCellText`、`editTableStructure` 和 `editCrossBlockSelection`。结构化事务不是 IPC 文件写入请求，也不得携带 DOM、HTML、绝对路径或资源二进制。
 
 主编辑事务管理器必须校验 documentId 与 baseSourceHash，基于 SourceRange 生成最小 `TextChangeSet`，原子更新 canonical editorText，再触发正常解析和资源解析。旧快照事务只能重新定位后重试或明确拒绝；禁止对旧偏移盲写。
 
@@ -1317,3 +1344,209 @@ ParsedDocument Core 0.6 先独立冻结：
 - 完成 ParseRequest、ParseCommitRequest、ResolveRequest、PreviewDerivedUpdate、PreviewSession、manifestRevision、输出预检、批准省略、跨进程 referenceKey 对齐和 assetCacheKey 复用测试。
 
 Preview、PDF BrowserWindow、DOCX 和 HTML 适配器负责人评审 ParsedDocument Core。WechatClipboardAdapter 契约在公众号图片策略验证后单独冻结，不阻塞核心模型。
+## 二十一、嵌套列表编辑投影与事务契约
+
+`ParsedDocument` 的 `listItem` / `taskItem` 节点及完整 SourceRange 仍是列表结构的唯一语义来源。本轮不新增第二份列表模型，也不把 Renderer 创建的正文包装元素写入 ParsedDocument。
+
+Renderer 可从一个安全列表项派生短寿命的 `ListOwnContentProjection`，它仅用于编辑该项首行正文，并携带所属完整列表项范围。正文提交只替换 marker/checkbox 后的自身内容；后代源码切片原样拼回。结构命令则必须忽略该投影的局部 DOM，直接对完整列表项源码范围生成一个 `WysiwygEditTransaction`。
+
+契约要求：
+
+- indent/outdent 对范围内每个非空源码行施加相同层级差，保持后代相对缩进。
+- move-up/move-down 只交换相邻同级完整子树源码切片，不重建 AST、不重排 marker、不全表重编号。
+- task toggle 只改变所属项首行 checkbox；后代 SourceRange 内容不变。
+- 新有序同级项使用当前显式序号加一；移动既有项保留原显式序号。这是 P0 的确定性编号策略。
+- 空项退出、父项正文编辑和所有结构命令均带 expectedText 快照；旧范围必须拒绝，成功时各自产生一个共享撤销历史项。
+- 深层纯列表可递归执行结构命令；包含代码、表格、块级公式、Mermaid 或不可安全拆分节点的子树必须在事务生成前拒绝。
+- `ListOwnContentProjection`、可视工具栏状态和 DOM 包装不得进入 sourceHash、保存、PDF、DOCX、离线 HTML或公众号输出。
+## 二十二、块级操作事务契约
+
+块工具栏和内部拖放不扩展 ParsedDocument。Renderer 只从当前投影派生短寿命 BlockEditContext，其中保存节点类型、完整 SourceRange 和 expectedText；它不是 UDM 字段，也不得跨解析提交复用。
+
+- move 使用移动块与目标块的精确源码范围重排两个范围之间的原始切片，不重新生成中间节点，也不改变未触及空白。
+- duplicate 在原始块源码后生成独立块边界；delete 只删除确认过的完整范围；preset insert 只插入冻结的确定性 Markdown 模板。
+- 拖动载荷只携带应用内部类型；Renderer 同时保存 expectedText 快照。投放时文本或范围不匹配即拒绝，不能信任 DataTransfer 中的源码或绝对路径。
+- 自身范围内投放、目标失效、解析身份变化和不可安全定位的块均返回无事务结果。成功结果仍是一个最小 WysiwygEditTransaction，由 CodeMirror 共享历史提交。
+- BlockEditContext、落点、焦点和选中状态不进入 sourceHash、ParsedDocument、ResolutionSnapshot、PreviewSession、保存或导出。
+
+## 二十三、P0 所见即所得冻结约束
+
+- canonical editorText 继续是唯一真实数据；第十二轮不引入可持久化 DOM、第二份文档树或独立撤销栈。
+- 直接编辑取消、模式切换、保存和全局撤销的提交顺序必须确定；旧快照只能被拒绝，不能自动覆盖新文本。
+- 大文档与连续操作测试必须证明块事务仅处理相关源码区间，且一次用户动作只产生一个撤销项。
+- Renderer 的全部编辑投影和辅助 UI 继续执行输出隔离回归。完成类型检查、测试、生产构建及真实 Electron 冒烟后，ParsedDocument Core 的 P0 所见即所得扩展面冻结。
+## 二十四、PDF 打印投影与布局审计契约
+
+PDF 分页属于 PdfAdapter 的短寿命输出投影，不扩展 ParsedDocument、ResolutionSnapshot 或 canonical editorText。
+
+- PDF HTML 继续由最新 ParsedDocument、ResolutionSnapshot、输出主题和派生资源清单生成；分页 CSS、缩放标记和布局审计数据不得回写 UDM。
+- PdfLayoutAudit 只包含 scaledElements、unresolvedOverflowElements、imageCount 和 pageEstimate 四个非负整数；pageEstimate 至少为 1。隔离窗口返回值必须通过结构校验。
+- 表格与公式缩放只修改本次隐藏窗口 DOM。scaledElements 大于 0 生成 PDF_WIDE_CONTENT_SCALED 警告；unresolvedOverflowElements 大于 0 生成阻断诊断且不调用 printToPDF。
+- pageCount 和 scaledElements 仅是主进程内部生成元数据，不参与 sourceHash、任务批准、省略集合或资源身份。
+- OfflineHtmlAdapter 不注入 A4 分页规则；只有 target 为 pdf 的输出 HTML 包含 PDF_PRINT_STYLE，防止离线 HTML 浏览体验被打印契约改变。
+
+## 二十五、DOCX 与离线 HTML 输出投影契约
+
+Word 排版结构和离线 HTML 文档外壳都属于适配器短寿命输出投影，不扩展 ParsedDocument、ResolutionSnapshot、DerivedAssetManifest 或 canonical editorText。
+
+- DocxAdapter 从相同的 ParsedDocument 节点生成 Word 原生段落、编号、表格和内嵌资源。numbering reference、表格列宽、A4 页面尺寸、Word 样式 ID 和核心属性仅存在于本次 DOCX 包，不参与 sourceHash、referenceKey 或缓存身份。
+- 列表编号由 listItem / taskItem 的 type、depth、start 与 checked 字段确定；表格对齐只读取 table.alignments。适配器不得从 Renderer DOM 或 Markdown 字符串二次猜测这些语义。
+- DocxAdapter 对标题、列表、引用、代码和表格的布局增强不得重复、删除或改写 ParsedDocument 节点；未知或不可表示节点继续产生诊断并服从既有省略批准契约。
+- OfflineHtmlAdapter 生成独立的 HTML 外壳、title、主题和响应式样式；title 来源于首个 heading 的纯文本投影并转义。深浅主题只影响输出 CSS，不回写 ThemeTokens 或文档模型。
+- 离线 HTML 仅允许已重新校验并内嵌的数据资源。安全审计必须拒绝脚本、事件处理器、嵌套浏览上下文、对象载入和任何应用内部、本地或临时地址。
+- DOCX/HTML Utility Process 重解析时继续复用任务 documentId、sourceHash、parserProfile 与 workspaceRevision；输出投影不得接收 PreviewSession 句柄或 Renderer-only 的 SourceRange 属性。
+- 固定契约测试校验 OOXML 页面/编号/表格/样式结构和 HTML 自包含/主题/CSP/地址隔离，同时验证两个适配器不修改输入模型。
+
+## 二十六、公众号替换清单与人工验收状态契约
+
+第十五轮不改变 ParsedDocument、ResolutionSnapshot、DerivedAssetManifest 或 canonical editorText。WechatReplacementItem 是输出结果元数据，公众号验收进度是 Renderer-only 的短寿命状态。
+
+- placeholderText 必须与 WechatClipboardAdapter 写入正文的可见占位文字逐字符一致；它由适配器根据最终 sequence、kind 和 placement 生成，详细说明单独保存在 label 中，不由 Renderer 再拼接。
+- itemId、sequence、placement、sourceOffset、mimeType、width、height 和 placeholderText 只描述当前 jobId 的替换项。复制 IPC 仍只接受 jobId 与 itemId，不接收路径、图片字节、sourceKey 或任意剪贴板载荷。
+- copiedReplacementIds 表示系统剪贴板位图已写入并读回；confirmedReplacementIds 表示用户声明已经在公众号正文完成替换。两个集合语义不可合并，也不得由同一事件同时更新。
+- WechatAcceptanceProgress 只含 bodyPasted、draftSaved、draftReopened、mobilePreviewed 四个布尔值。draftSaved 仅在正文已粘贴且全部替换项已确认时可用，后续按保存、重开、移动端预览顺序解锁。
+- 任一前置状态回退必须清除其全部下游状态；替换项确认数量必须与当前任务清单长度严格相等，不能以大于、旧任务残留或部分确认视为完成。
+- completed-with-omissions 不改变门控算法，但输出界面必须携带 omittedReferenceKeys 数量并持续呈现部分完成语义。
+- 验收状态不进入 OutputResult、IPC、sourceHash、恢复存储或任何适配器输入；文档/任务身份变化后旧状态不可复用。
+
+## 二十七、公众号人工验收记录边界
+
+WechatAcceptanceReport 是任务完成后的审计投影，不属于 ParsedDocument、ResolutionSnapshot、OutputResult 或恢复模型。
+
+- SaveWechatAcceptanceReportRequest 只携带 jobId、confirmedReplacementItemIds 和四项人工确认布尔值，不携带正文、路径、资源字节、账号或浏览器状态。
+- 主进程从 OutputJobRegistry 的终态结果恢复 documentId、sourceHash、status、replacementItems 和 omittedReferenceKeys；Renderer 提供的身份信息不可作为记录来源。
+- 只有 target 为 wechat-clipboard 且 status 为 completed 或 completed-with-omissions 的任务可生成记录。
+- confirmedReplacementItemIds 必须去重前后数量一致，并与 OutputResult.wechatReplacementItems 的 itemId 集合完全相等；顺序差异允许规范化，缺失、多余、重复或旧任务项目均拒绝。
+- 报告时间、应用版本、平台和架构由主进程生成。报告生成器是确定性纯函数，除 generatedAt 外相同输入产生相同文本。
+- 报告不进入 sourceHash、批准省略状态机或任务终态，也不能把人工声明升级为平台验证、发布或群发状态。
+
+## 二十八、公众号标题投影与替换布局契约
+
+- `wechatSuggestedTitle` 是 WechatClipboardAdapter 从第一个顶层 `heading(level=1)` 派生的纯文本输出元数据，最长 120 字符。对应标题节点只从本次公众号正文投影中省略，不从 ParsedDocument、canonical editorText 或其他输出目标中删除。
+- WechatReplacementItem 的 `placement` 只有 `inline` 和 `block`。仅 `formulaInline` 为 inline；普通图片、formulaBlock 和 Mermaid codeBlock 均为 block。Renderer 不得根据图片尺寸或当前 DOM 猜测该字段。
+- `placeholderText` 继续由适配器生成并与 CF_HTML 逐字符一致，但冻结为无资源描述的短唯一标记：`【FE类型NN｜行内替换】` 或 `【FE类型NN｜整段替换】`。资源描述继续保存在 label 中，避免长占位影响正文和选择操作。
+- 占位标记可以带文字颜色和字重，但不得依赖 border、固定高度、空背景框或应用内部属性表达身份。用户替换全部文字后，即使公众号保留外层 span，也不得留下可见空框。
+- copiedReplacementIds 与 confirmedReplacementIds 的语义不变；confirmed 现在同时声明对应图片已出现且 placeholderText 已消失。draftReopened 进一步声明重开后资源仍在、全部 FE 标记仍不存在。
+- Mermaid 高清像素比例属于派生资源转换配置，不进入 ParsedDocument。隔离渲染器可以在 4096 像素上限内把 SVG 按最高 2 倍比例栅格化；OutputMermaidAsset.width/height 记录实际 PNG 像素。
+
+## 二十九、空白会话与临时编辑投影契约
+
+### 1. 空白文档是合法模型输入
+
+- 空字符串是合法的 canonical `editorText`。解析结果必须为有效 `ParsedDocument`，其块节点、资源引用和诊断集合均可为空；`sourceHash` 仍按空 UTF-8 字节确定性计算。
+- 未命名空白会话的 `requiresSave` 为 true，该状态属于文件会话元数据，不从 `editorText.length` 或 ParsedDocument 节点数推导。空白内容首次另存为允许写出 0 字节 Markdown。
+- 首次另存为只改变文件路径、编码/换行元数据和保存基线，不更换当前 documentId。用户取消时不得改变 editorText、documentId、恢复键或脏状态。
+- 未命名会话的临时目录由主进程提供的已创建、已授权绝对路径派生；解析 Worker、Renderer 和 Utility Process 不得自行调用环境变量或 `os.tmpdir()` 推导会话根。
+
+### 2. 临时空段落不属于 UDM
+
+- 所见即所得空白画布产生的临时空段落是 Renderer-only 的编辑投影；在用户输入实际内容前，不生成 Node、SourceRange、TextChange、revision、sourceHash 变化或恢复记录。
+- 每个文档的编辑投影同时最多保留一个临时空段落。重复点击只改变焦点；失焦、Backspace、Delete、模式切换或输出前 `commitPending` 均可无事务地丢弃空投影。
+- 提示文字“开始输入…”只能通过 placeholder 或伪元素呈现，不得进入 DOM 可编辑文本、剪贴板正文、序列化输入或可访问名称之外的数据通道。
+- 临时段落出现非空输入后，编辑器必须生成一个经过 `expectedText` 校验的最小插入 TextChange，并通过共享事务管理器更新 canonical editorText；成功前不得提前生成正式 ParsedDocument 节点。
+- 安装版、便携版和开发运行使用完全相同的本节契约。分发形态不得改变 documentId、sourceHash、恢复格式或输出任务语义。
+
+## 三十、公众号主题与封面对输出契约
+
+### 1. WechatThemeDefinition
+
+- 正文主题属于输出配置，不属于 ParsedDocument、ResolutionSnapshot、DerivedAssetManifest 或 canonical editorText。最小身份由 `themeId`、`schemaVersion`、`compatibilityProfile` 和规范化后的令牌集合组成。
+- 受控令牌至少覆盖背景、次级背景、正文、弱化文字、强调色、弱强调色、边线、强调色上的文字、标题/正文/代码字体、正文字号、行高、段落间距，以及 heading、blockquote、codeBlock、table、link 和 callout 的结构样式。
+- Renderer 只能选择已注册 themeId 或提交经过主进程结构校验的主题设置；适配器不得接受任意 CSS、HTML、脚本、URL、字体文件或模板路径作为主题令牌。
+- 输出 sourceHash 不包含主题偏好；同一正文使用不同主题仍是相同文档快照，但 OutputContext.theme.id 和规范化令牌必须参与输出缓存键、产物元数据和验收记录。
+
+### 2. 主题编译边界
+
+- WechatCompatTransformer 从 ParsedDocument 生成结构化公众号投影，再把主题令牌编译为绝对行内样式。最终 CF_HTML 不保留 CSS 变量、class、id、伪元素、外部样式表、运行时脚本或预览 SourceRange 属性。
+- 主题编译不能新增、删除或重排语义节点；仅允许公众号标题投影、资源占位和已冻结兼容变换。主题切换不得改变 replacementItems、approvedOmittedReferenceKeys、诊断集合的资源身份或任务五种终态。
+- 主题定义和编译结果必须经过颜色格式、字号、行高、长度、危险字符、地址协议、HTML 安全和体积上限校验。外部 IPC 的非法主题必须失败；只有受信任内部解析器可回退到内置安全主题，不得部分应用后显示完整成功。
+
+### 2.1 当前 P1 第一、二阶段契约
+
+- `WechatThemeId = "wechat-native-enhanced" | "minimal-ink" | "deep-blue-tech"`；共享包提供只读展示元数据、受控 `WechatThemeDefinition`、`resolveWechatTheme` 和 `applyWechatThemeToFragment`。Renderer 只能用这些内置定义生成本地预览，不能提交或持久化任意 CSS。
+- `BeginOutputRequest.wechatThemeId` 可省略，省略时使用 `wechat-native-enhanced`。主进程收到未知值必须在创建输出任务前拒绝；不得把未知字符串回退后继续显示完整成功。
+- 主进程把已验证 ID 写入 `OutputContext.theme.id`；用户字体继续单独进入 `OutputTheme.tokens["typography.body.fontFamily"]`。最终输出和 Renderer 手机预览加载共享包内同一份受信任主题定义，只有主进程可创建输出任务。
+- 成功的公众号任务必须在 `OutputResult.wechatThemeId` 中返回有效 ID，人工验收摘要和报告必须沿用该终态结果，不接受 Renderer 再次声明主题。
+- 主题 ID、名称和强调色不进入 sourceHash、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest、资源键或 replacement itemId。三套主题对同一快照的资源与省略集合必须相同。
+- `WechatThemePreview` 读取当前已解析且完成本地资源映射的预览 HTML，只用于可视化；它不产生 OutputResult、不写剪贴板、不改变 replacementItems，也不构成公众号平台验收。手机宽度审计结果是短寿命 Renderer 状态，不进入 UDM、sourceHash、恢复快照或输出任务。
+- 手机审计基线为 320px / 375px / 414px，三档探针必须在一次预览会话中并行完成并分别保留短寿命结果。检测项至少包含元素 scrollWidth/clientWidth、允许局部滚动的代码块、12px 最小提示阈值、WCAG 普通/大字号对比度阈值，以及标题前后基于实际几何位置和字号比例的最小间距；任何本地通过结果都不得自动设置 `WechatAcceptanceProgress.mobilePreviewed`。
+- `0.2.0-rc.1` 只提升应用与内部包的发行版本，不改变 UDM schema、ParsedDocument schema、ResolutionSnapshot schema、资源键或输出五种终态；旧文档和恢复快照继续按现有版本化解析规则读取。便携包版本、哈希和签名状态属于发行元数据，不得写入 canonical Markdown 或 UDM。
+
+### 3. 封面对输出
+
+- `WechatCoverArtifact` 是独立输出 artifact，可包含 wide 21:9 和 square 1:1 两个 PNG 项及其 width、height、contentHash、mimeType、themeId 和可选来源清单。它不作为 ImageNode 回写正文，也不进入公众号方案 B replacementItems。
+- 封面对生成只读取不可变标题/摘要投影和用户明确授权的图片资源；自动裁切位置、版式骨架、渲染临时 HTML 和视觉校验结果都是输出期短寿命数据，不进入 UDM。
+- 使用外部 skill 或第三方模板时，产物元数据必须记录 generatorId、generatorVersion、licenseProfile 和 sourceAttribution 状态。未确认许可证或图源授权时不得进入正式发布产物。
+
+## 三十一、公众号 HTML 安全审计投影契约
+
+- `auditWechatHtmlMarkup` 是公众号 HTML 生成层、主进程剪贴板持久化层和生产冒烟的统一最终审计函数。它只读取短寿命输出 HTML，不进入 ParsedDocument、ResolutionSnapshot、DerivedAssetManifest、OutputContext、OutputResult 或 sourceHash。
+- 审计对象是生成 HTML 的标签和属性；正文 text node、转义后的行内代码和代码块可以包含协议名称或 localhost 说明文字。安全审计不得把普通文章内容解释为资源引用，也不得据此改变 resourceReferences 或批准省略集合。
+- 禁止标签、class/id、事件处理器和危险资源地址仍是阻断项。受控主题、字体令牌、链接投影或兼容变换只要把危险值写入真实标签属性或内联样式，任务必须 failed 且不得写剪贴板。
+- 两层审计必须使用同一实现和问题枚举，不允许适配器先放行而主进程用另一套正则再次误判。该一致性属于输出边界契约，不改变 UDM schema。
+- `OUTPUT_CLIPBOARD_WRITE_FAILED` 表示系统 HTML 剪贴板写入或读回失败；`OUTPUT_FILE_WRITE_FAILED` 只用于文件 artifact。两者均属于输出诊断，不改变五种终态枚举。
+- 用户本机复测只证明相应不可变输出快照能够写入剪贴板，不构成公众号平台保存、重开、移动端或发布状态，不得写入 WechatAcceptanceProgress 的后续布尔值。
+- `0.2.0-rc.2` 仅是包含本审计修复的应用发行版本；它不改变 UDM、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest、OutputResult 或资源键 schema。便携包哈希、签名与启动结果继续只作为发行元数据保存。
+- 自动生成的 portable/release manifest 属于发行元数据，不能进入 canonical Markdown、恢复快照、UDM 或 OutputResult。manifest 只保存可公开复核的相对产物名与校验结果，不保存工作区、临时目录或 userData 的绝对路径。
+
+## 三十二、生产态发布验证投影契约
+
+- `FANTASTIC_EDITOR_SMOKE_RESULT` 只存在于发行验证进程环境。应用完成一个生产态场景后写出 `fantastic-editor-smoke-result-v1`，字段限于 scenario、valid、pid 和 completedAt；该标记不是 OutputResult，不进入 IPC、UDM、恢复存储、文档缓存或用户数据。
+- Windows GUI 外层启动器可能先于真实 Electron 子进程返回，因此 release gate 必须等待应用内部完成标记。基础启动、PDF、DOCX、离线 HTML、公式、Mermaid 与 UI 场景均不得只依据 launcher exit code 判定通过。
+- 隐藏导出或渲染窗口的销毁不能在完成标记落盘前触发应用自动退出。正式用户会话仍保持“全部窗口关闭则退出”的 Windows 行为；仅带发行验证完成标记路径的进程由 `finishSmoke` 统一收尾。
+- 生产态固定 PDF/DOCX/HTML 和 UI 截图属于短寿命验证 artifact，不进入 canonical Markdown、sourceHash、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest 或任何正式导出历史。
+- installer smoke 报告与 production smoke 报告属于本机发行证据，只允许记录相对路径、版本、场景终态、字节数和结构断言。它们不能被解释为第二台机器兼容性、公众号平台状态、代码签名或发布成功证明。
+- 2026-08-29 `0.2.0-rc.2` 的本机发布加固已通过。第二台 Windows 不再是本候选的阻断条件；这一项目决策不改变 UDM 或输出 schema，也不把跨机器兼容性从未知推断为通过。
+
+## 三十三、可访问性状态与解析重试边界
+
+- live status、tablist/tab、aria-selected、aria-pressed、separator value 和焦点样式都是 Renderer 可访问性投影，不得进入 ParsedDocument、ResolutionSnapshot、PreviewSession、OutputContext、OutputResult、sourceHash 或恢复快照。
+- “重新解析”只使当前 Renderer 的 previewRefreshVersion 单调增加，并由既有 ParseWorkerClient 使用同一 documentId、workspaceRevision、parserProfile 与 canonical editorText 创建新任务。它不是文档编辑，不创建撤销项，不改变 dirty 状态。
+- 清除诊断只清空当前 Renderer 展示数组；下一次解析或资源更新必须从真实 Diagnostic 集合重新投影。不得通过清除按钮删除主进程诊断、改变阻断状态或绕过输出预检。
+- 分栏比例是本机 UI 状态，冻结范围为 28–72。键盘和指针操作必须共用同一 clamp 规则，不能产生超范围布局；该比例不进入文档模型或导出主题。
+- 解析失败后的可恢复入口不得复用旧 PreviewSession 冒充成功。只有身份一致的新解析、提交、资源解析和组合全部完成后，outputReady 才能恢复为 true。
+
+## 三十四、键盘导航与模态焦点边界
+
+- active tab index、roving tabindex、当前焦点元素和快捷键方向都是 Renderer 瞬时 UI 状态，不进入 canonical Markdown、ParsedDocument、ResolutionSnapshot、恢复快照或 OutputContext。
+- `Ctrl+Tab`、`Ctrl+Shift+Tab` 和标签上的 Left/Right 必须按当前标签数组循环计算，Home/End 返回首尾。标签数组为空时返回无操作；切换标签只改变当前会话投影，不修改任一文档正文或 dirty 状态。
+- `Ctrl+W` 必须调用统一关闭事务，沿用未保存确认、恢复快照和最后标签边界；不得另行直接删除标签状态。主题预览等模态层存在时，全局标签切换与关闭不得响应。
+- 模态窗口的 priorFocus、dialogRef 和焦点圈都不参与结构化克隆。打开后初始焦点必须位于弹窗内，Tab/Shift+Tab 不能落到背景页面；Escape 或显式关闭后，焦点返回仍存在的触发控件或安全后备控件。
+- 公众号主题预览中的手机宽度选择只改变预览 UI 的当前档位与审计明细；其 `aria-pressed` 是可访问性投影，不改变 themeId、DerivedAssetManifest、replacementItems 或 WechatAcceptanceProgress。
+
+## 三十五、性能观测与最近文件身份边界
+
+- `parseDurationMs` 是 Worker 对本次解析和预览 HTML 生成的短寿命测量；资源耗时由 Renderer 围绕当前 resolveResources 调用测量。二者不是 ParsedDocument 字段，不进入 sourceHash、ResolutionSnapshot、PreviewSession、OutputContext 或恢复快照。
+- Renderer 性能快照只能绑定当前已接受的完整身份。正文变化或解析失效后先清除旧值，不能把上一版本耗时显示为当前版本结果。normal/notice/slow 是 UI 分级，不改变诊断严重级别或 outputReady。
+- 标签排序只改变 Renderer tabs 数组的顺序；sessionId、documentId、workspaceRevision、savedText 和 draft 不变。恢复快照沿用数组顺序，不引入 tabOrder 字段或修改 UDM schema。
+- `RecentFileEntry` 只含 recentId、displayName、lastOpenedAt。路径只保存在主进程 RecentFileStore；Renderer 的 `openRecentFile` 请求只含 recentId，主进程解析后仍必须执行普通文件打开、编码确认、大小限制和授权初始化流程。
+- 最近文件持久化是非关键辅助状态，失败不得回滚已成功的打开或保存事务。失效 recentId 不提供路径回显，不尝试相似路径猜测，也不把父目录升级为 folder-workspace。
+
+## 三十六、所见即所得旧投影结构校验
+
+- DOM 元素的 SourceRange 即使仍位于当前文本长度内，也不能单独证明范围有效。打开结构化面板前必须把当前 canonical editorText 对应切片重新解析为预期的局部结构类型。
+- Mermaid 元素只接受 language 为 mermaid 的完整 fence；普通代码块只接受完整合法 fence；公式元素同时校验公式语法和 displayMode。类型不匹配时不得创建 SourceEditState、不得提交事务，只提示投影正在更新。
+- `data-projection-ready` 是 Renderer 冒烟和交互门控投影，不进入 UDM、IPC、恢复快照或输出。它只在父级确认当前 Markdown 已完成匹配解析时为 true。
+- 本规则不改变 SourceRange、ParsedDocument 或 UDM schema，只补强“旧投影不得猜测性写回”的既有不变量。
+
+## 三十七、公众号自动草稿同步边界（0.3.0 开发线）
+
+- `0.2.0-rc.3` 的 `wechat-clipboard` 仍是方案 B：生成带短标记的正文并提供人工替换兜底；它不代表多图自动复制成功。`0.3.0` 新增的是按既有 `jobId` 发起的主进程草稿同步操作，不新增第二份 ParsedDocument、ResolutionSnapshot 或编辑器附件模型。
+- 草稿执行 IPC 只能发送 `CreateWechatDraftRequest { jobId }`，不得夹带 HTML、图片字节、路径、AppID、AppSecret、access_token 或任意远程 URL。应用内凭据录入使用单独的窄配置 IPC：AppSecret 只在密码输入控件中短暂存在，提交后立即交给主进程加密，配置查询只返回 `hasAppSecret`，不得返回明文。主进程从已完成的公众号任务和加密凭据存储中组装输入，再交给 `WechatDraftConnector`。
+- 自动同步必须一次处理全部普通图片、公式 PNG 和 Mermaid PNG。每个 replacement item 先上传到微信正文图片接口，得到通过协议和 loopback 校验的远程 URL；仅在全部上传成功后替换 HTML 中精确匹配的占位标记。任何未替换标记、本地地址、临时地址、Data URI 或安全审计失败都阻止草稿创建。
+- 封面属于草稿元数据，不回写 `ParsedDocument`、`ResolutionSnapshot` 或正文 HTML。封面必须由用户明确配置/选择并经主进程读取和格式校验；没有有效封面时不得伪装草稿创建成功。
+- 草稿创建成功后必须用返回的草稿 ID 回读校验，并只报告“已创建草稿”；本操作永不隐式发布、群发或删除草稿。上传失败、取消、超时和回读失败必须保留可追溯诊断，并区分已上传数量与草稿创建状态。
+- AppSecret 明文仅允许在用户输入期间短暂存在于隔离 Renderer 和主进程调用栈，保存时必须使用 Electron `safeStorage` 的系统加密；查询和重新打开配置时只暴露“已保存”状态，不回显明文。AppSecret/access_token 不能进入 localStorage、Markdown、恢复快照、导出 HTML、普通日志或 `OutputResult`。环境变量只作为开发兼容入口；正式多账号产品需迁移到自托管连接器或微信公众号第三方平台授权。
+- 公众号凭据配置入口必须在主界面常驻可见。白名单检测使用独立无参数 IPC，由主进程读取加密凭据并请求微信 token 接口；Renderer 不得传入或取回 AppSecret。检测结果仅允许返回 `ready { ip | null, message }`、`whitelist-required { ip, message }` 或清洗后的 `failed`。`40164` 中的 `invalid ip` IPv4 可以显示和复制，`::ffff:` 映射值不得重复呈现；连接成功后允许主进程通过 `api.ipify.org` 的只读 HTTPS 查询补充 IP，查询失败只返回 `ip: null`，不能改变微信连接成功状态。该 IP 仅用于本次界面提示，不进入文档模型、恢复稿或导出结果。
+- Renderer 只能呈现一个公众号配置入口，即主界面顶部常驻入口。发布验收助手不重复呈现配置按钮；当自动草稿动作发现配置缺失时，可以打开同一个配置对话框，但不得创建第二套配置状态或 IPC。
+- 一键发布 IPC 只接收当前任务的 `jobId`；主进程按该任务重新组装并上传资源、创建草稿，再在用户明确二次确认后调用 `freepublish/submit`，不得由 Renderer 传入 HTML、图片字节、草稿 ID 或 access_token。`freepublish/get` 返回成功前，任务只能显示为处理中；轮询最多持续 90 秒，超时返回 `processing`，不得伪装为已发布。发布失败必须保留草稿 ID/发布任务 ID（如已获得）供用户到公众号后台处理。
+- 方案 B 的剪贴板队列和浏览器辅助批量替换只能作为无 API 权限或 API 失败时的降级评估，不得在产品文案中称为全自动同步，也不得改变 `OutputResult.status` 五种终态。
+
+## 三十八、代码签名与文档模型隔离
+
+- Authenticode 证书身份、时间戳、签名状态和发布哈希只属于发行元数据，不进入 canonical Markdown、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest、OutputContext、OutputResult 或恢复快照。
+- 签名失败只能使发行门禁失败，不能把任何文档导出任务改写为 `failed`，也不能改变公众号草稿、批准省略或人工验收状态。
+- PFX、私钥、证书密码和证书存储指纹不得经 Renderer IPC、日志、Markdown 或导出内容传播。构建脚本只接收进程环境或本机证书存储中的签名身份。
+- 当前公益免费项目允许发行元数据保持 `NotSigned`；未签名状态只影响 Windows 发布提示与发行说明，不阻断 canonical Markdown、解析、导出或公众号草稿任务。商业代码签名证书不属于 `0.3.0-rc.1` 的完成条件。
+- 未签名发行必须在 release manifest、Release 页面和 README 中记录 `NotSigned`，并提供官方来源及 SHA-256 校验值；不得使用自签名证书冒充受信任发布者。现有签名流水线仅作为未来可选能力保留。
+- 当前公众号范围固定为单账号；支持显式确认后发布单篇文章，但不支持多账号、群发或定时群发。

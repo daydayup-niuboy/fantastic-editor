@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">fantastic-editor 公众号验收测试图</title>
+  <desc id="desc">绿色与米白色的静态信息图，用于验证本地 SVG 转换和公众号图片替换。</desc>
+  <rect width="960" height="540" rx="28" fill="#f4f7f2"/>
+  <rect x="48" y="48" width="864" height="444" rx="22" fill="#ffffff" stroke="#9fc5ad" stroke-width="4"/>
+  <circle cx="168" cy="190" r="74" fill="#2f8f63"/>
+  <path d="M132 190l25 25 50-58" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="280" y="158" font-family="Arial, Microsoft YaHei, sans-serif" font-size="42" font-weight="700" fill="#173d2b">公众号真实验收测试图</text>
+  <text x="280" y="220" font-family="Arial, Microsoft YaHei, sans-serif" font-size="26" fill="#496457">本地 SVG → 隔离转换 → PNG 剪贴板</text>
+  <line x1="108" y1="322" x2="852" y2="322" stroke="#d7e5dc" stroke-width="3"/>
+  <text x="108" y="382" font-family="Arial, Microsoft YaHei, sans-serif" font-size="25" fill="#2b4437">检查：清晰度、顺序、保存重开、移动端宽度</text>
+  <text x="108" y="432" font-family="Arial, Microsoft YaHei, sans-serif" font-size="21" fill="#6a7b72">fantastic-editor · wechat-image-strategy/1-B</text>
+</svg>

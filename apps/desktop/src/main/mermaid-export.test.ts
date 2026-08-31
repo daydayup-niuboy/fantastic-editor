@@ -82,6 +82,7 @@ describe("Mermaid exports", () => {
     expect(wechat.status, JSON.stringify(wechat.diagnostics)).toBe("completed");
     expect(wechat.replacementItems).toHaveLength(1);
     expect(wechat.replacementItems?.[0]?.kind).toBe("diagram");
+    expect(wechat.replacementItems?.[0]?.placement).toBe("block");
   });
 
   it("fails closed when the derived Mermaid asset is missing", async () => {

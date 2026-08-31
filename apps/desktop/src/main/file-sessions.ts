@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, type Dirent, type Stats } from "node:fs";
-import { access, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
@@ -288,6 +288,13 @@ export class FileSessionManager {
   readonly #sessions = new Map<string, FileSession>();
   #folderWorkspace: FolderWorkspace | undefined;
   #activeSessionId: string | undefined;
+  #temporaryBaseDirectory = tmpdir();
+
+  setTemporaryBaseDirectory(path: string): void {
+    if (this.#sessions.size > 0) throw new Error("已有文件会话时不能更改临时目录。");
+    if (!isAbsolute(path) || path.length > 32_768) throw new Error("未命名文档临时目录无效。");
+    this.#temporaryBaseDirectory = path;
+  }
 
   getActiveResolutionContext(): SingleFileResolutionContext | undefined {
     const active = this.#activeSessionId ? this.#sessions.get(this.#activeSessionId) : undefined;
@@ -300,7 +307,8 @@ export class FileSessionManager {
         await this.clearSessions();
         this.#folderWorkspace = undefined;
       }
-      const temporaryRoot = await mkdtemp(join(tmpdir(), "fantastic-editor-untitled-"));
+      await mkdir(this.#temporaryBaseDirectory, { recursive: true });
+      const temporaryRoot = await mkdtemp(join(this.#temporaryBaseDirectory, "fantastic-editor-untitled-"));
       const session: FileSession = {
         sessionId: randomUUID(),
         documentId: randomUUID(),
@@ -315,12 +323,12 @@ export class FileSessionManager {
         lineSeparator: "lf",
         fingerprint: { byteLength: 0, mtimeMs: 0, ctimeMs: 0 },
         isUntitled: true,
-        requiresSave: false,
+        requiresSave: true,
         temporaryRoot,
       };
       this.#sessions.set(session.sessionId, session);
       this.#activeSessionId = session.sessionId;
-      return this.openResult(session, "# 未命名文档\n\n");
+      return this.openResult(session, "");
     } catch (error) {
       return { status: "failed", error: error instanceof Error ? error.message : "无法创建新文档。" };
     }

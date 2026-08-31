@@ -117,6 +117,58 @@ describe("generateDocx", () => {
     expect(Object.keys(archive.files).filter((name) => name.startsWith("word/media/"))).toHaveLength(2);
   });
 
+  it("creates real numbering, fixed table geometry and A4 page styles", async () => {
+    const source = [
+      "# 结构化 Word",
+      "",
+      "- 普通项目",
+      "- [x] 已完成任务",
+      "- [ ] 未完成任务",
+      "",
+      "1. 第一项",
+      "2. 第二项",
+      "",
+      "> 引用第一段",
+      ">",
+      "> 引用第二段",
+      "",
+      "| 左列 | 中列 | 右列 |",
+      "| :--- | :---: | ---: |",
+      "| 很长的中文说明内容 | 中 | 100 |",
+      "",
+      "[安全链接](https://example.com)",
+      "",
+      "~~~text",
+      "第一行",
+      "第二行",
+      "~~~",
+    ].join("\n");
+    const value = await fixture(source);
+    const result = await generateDocx(value.context, [], []);
+    expect(result.status, JSON.stringify(result.diagnostics)).toBe("completed");
+    const archive = await JSZip.loadAsync(result.bytes!);
+    const documentXml = await archive.file("word/document.xml")!.async("string");
+    const numberingXml = await archive.file("word/numbering.xml")!.async("string");
+    const stylesXml = await archive.file("word/styles.xml")!.async("string");
+    const coreXml = await archive.file("docProps/core.xml")!.async("string");
+    expect(documentXml).toContain('<w:pgSz w:w="11906" w:h="16838" w:orient="portrait"/>');
+    expect(documentXml).toContain('<w:tblLayout w:type="fixed"/>');
+    expect(documentXml).toContain('<w:tblW w:type="dxa" w:w="9638"/>');
+    expect(documentXml).toContain("<w:tblGrid>");
+    expect(documentXml).toContain("<w:tblHeader/>");
+    expect(documentXml).toContain("<w:cantSplit/>");
+    expect(documentXml).toContain("<w:br/>");
+    expect((documentXml.match(/引用第一段/g) ?? [])).toHaveLength(1);
+    expect((documentXml.match(/引用第二段/g) ?? [])).toHaveLength(1);
+    expect(numberingXml).toContain('<w:numFmt w:val="bullet"/>');
+    expect(numberingXml).toContain('<w:numFmt w:val="decimal"/>');
+    expect(numberingXml).toContain("☒");
+    expect(numberingXml).toContain("☐");
+    expect(stylesXml).toContain("Microsoft YaHei");
+    expect(coreXml).toContain("<dc:title>结构化 Word</dc:title>");
+    expect(documentXml).not.toContain("<w:t>• ");
+  });
+
   it("fails when a formula derived asset is missing", async () => {
     const value = await fixture("公式：$x^2$");
     const result = await generateDocx(value.context, [], []);

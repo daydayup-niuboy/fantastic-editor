@@ -1,4 +1,4 @@
 :root { color: #17231d; background: transparent; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; }
 html, body { margin: 0; min-width: 1px; min-height: 1px; overflow: hidden; background: transparent; }
-#mermaid-root { display: inline-block; box-sizing: border-box; padding: 16px; width: max-content; max-width: 4096px; background: transparent; }
-#mermaid-root svg { display: block; max-width: 4064px; height: auto; }
+#mermaid-root { display: inline-block; box-sizing: border-box; padding: 16px; width: max-content; background: transparent; }
+#mermaid-root svg { display: block; max-width: none; height: auto; }

@@ -10,6 +10,7 @@ const workerScope = self as unknown as WorkerScope;
 workerScope.onmessage = (event) => {
   const request = event.data;
   if (request.type !== "parse") return;
+  const startedAt = performance.now();
   void parseDocument({
     documentId: request.documentId,
     editorText: request.editorText,
@@ -29,6 +30,7 @@ workerScope.onmessage = (event) => {
     }
     workerScope.postMessage({
       type: "parsed",
+      parseDurationMs: performance.now() - startedAt,
       documentId: request.documentId,
       sourceHash: parsedDocument.sourceHash,
       parserProfile: request.parserProfile,
