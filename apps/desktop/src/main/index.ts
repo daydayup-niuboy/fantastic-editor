@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import {
   app,
@@ -25,6 +26,8 @@ import {
   type ImageImportSessionRequest,
   type ImportDroppedImagesRequest,
   type OpenWorkspaceFileRequest,
+  type RenameWorkspaceFileRequest,
+  type RenameOpenFileRequest,
   type OpenRecentFileRequest,
   type OpenFileResult,
   type OutputContext,
@@ -36,6 +39,12 @@ import {
   type SaveWechatAcceptanceReportRequest,
   type PublishWechatArticleRequest,
   type WechatApiConfigSummary,
+  type ListWechatThemesRequest,
+  type ResolveWechatThemeForPreviewRequest,
+  type SaveWechatThemeAsCustomRequest,
+  type DeleteWechatThemeRequest,
+  type ExportWechatThemeRequest,
+  type ImportWechatThemeRequest,
 } from "@fantastic-editor/shared";
 import { atomicWriteCandidate, FileSessionManager, type FileOpenAttempt, type MarkdownOpenOptions } from "./file-sessions.js";
 import { ParseCommitRegistry } from "./parse-commit-registry.js";
@@ -56,6 +65,8 @@ import { generateWechatAcceptanceReport } from "./wechat-acceptance-report.js";
 import { RecentFileStore } from "./recent-files.js";
 import { WechatDraftConnector, configFromEnvironment } from "./wechat-draft-connector.js";
 import { WechatApiConfigStore } from "./wechat-api-config-store.js";
+import { parseMarkdownOpenArgs } from "./external-open.js";
+import { WechatThemeRepository } from "./wechat-theme-repository.js";
 
 
 // Some Windows graphics drivers crash Chromium during startup with a native
@@ -96,6 +107,30 @@ let recentFileStore: RecentFileStore | undefined;
 let wechatApiConfigStore: WechatApiConfigStore | undefined;
 const wechatDraftConnector = new WechatDraftConnector();
 const wechatPublishRecords = new Map<string, { status: "processing" | "published"; draftMediaId: string; publishId: string }>();
+const pendingExternalOpens = new Map<string, { path: string; displayName: string; announced: boolean; queuedAt: number }>();
+const EXTERNAL_OPEN_TTL_MS = 60_000;
+const singleInstanceAcquired = app.requestSingleInstanceLock();
+
+function queueExternalOpenArgs(args: readonly string[]): void {
+  for (const item of parseMarkdownOpenArgs(args)) {
+    const exists = [...pendingExternalOpens.values()].some((entry) => entry.path.toLocaleLowerCase() === item.path.toLocaleLowerCase());
+    if (exists || pendingExternalOpens.size >= 20) continue;
+    pendingExternalOpens.set(randomUUID(), { ...item, announced: false, queuedAt: Date.now() });
+  }
+}
+
+if (singleInstanceAcquired) {
+  queueExternalOpenArgs(process.argv.slice(1));
+  app.on("second-instance", (_event, commandLine) => {
+    queueExternalOpenArgs(commandLine.slice(1));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+} else {
+  app.quit();
+}
 
 async function resolvedWechatApiConfig() {
   const stored = await wechatApiConfigStore?.connectorConfig() ?? null;
@@ -152,7 +187,7 @@ async function rememberRecentFile(path: string): Promise<void> {
   }
 }
 
-async function finishSmoke(scenario: string, valid: boolean): Promise<void> {
+async function finishSmoke(scenario: string, valid: boolean, diagnostics?: unknown): Promise<void> {
   const resultPath = process.env.FANTASTIC_EDITOR_SMOKE_RESULT;
   if (resultPath) {
     try {
@@ -160,6 +195,7 @@ async function finishSmoke(scenario: string, valid: boolean): Promise<void> {
         schema: "fantastic-editor-smoke-result-v1",
         scenario,
         valid,
+        ...(diagnostics === undefined ? {} : { diagnostics }),
         pid: process.pid,
         completedAt: new Date().toISOString(),
       }));
@@ -239,12 +275,22 @@ const outputService = new OutputService(
   formulaRenderWindow,
   pdfRenderWindow,
   mermaidRenderWindow,
+  async (themeId, workspaceRoot) => new WechatThemeRepository({ globalRoot: join(app.getPath("userData"), "wechat-themes"), workspaceRoot }).resolveWechatThemeForOutput(themeId),
 );
 
 function requireTrustedRenderer(event: IpcMainInvokeEvent): void {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
     throw new Error("IPC request did not originate from the active main frame.");
   }
+}
+
+function wechatThemeRepositoryForDocument(documentId: string): WechatThemeRepository {
+  const context = fileSessions.getResolutionContext(documentId);
+  if (!context) throw new Error("当前文档会话不存在或已过期。");
+  return new WechatThemeRepository({
+    globalRoot: join(app.getPath("userData"), "wechat-themes"),
+    workspaceRoot: context.authorizationRootRealPath,
+  });
 }
 
 function registerSecurityPolicy(): void {
@@ -389,6 +435,44 @@ function registerIpc(): void {
     return opened;
   });
 
+  ipcMain.handle(IPC_CHANNELS.listExternalOpenRequests, (event) => {
+    requireTrustedRenderer(event);
+    const now = Date.now();
+    for (const [requestId, entry] of pendingExternalOpens) {
+      if (now - entry.queuedAt > EXTERNAL_OPEN_TTL_MS) pendingExternalOpens.delete(requestId);
+    }
+    const requests = [...pendingExternalOpens.entries()]
+      .filter(([, entry]) => !entry.announced)
+      .map(([requestId, entry]) => {
+        entry.announced = true;
+        return { requestId, displayName: entry.displayName };
+      });
+    return requests;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.discardExternalOpenRequest, (event, request: { requestId?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.requestId !== "string") return { status: "missing" } as const;
+    return { status: pendingExternalOpens.delete(request.requestId) ? "discarded" : "missing" } as const;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.openExternalFile, async (event, request: { requestId?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.requestId !== "string" || request.requestId.length > 100) return { status: "failed", error: "外部 Markdown 打开请求无效。" } as const;
+    const pending = pendingExternalOpens.get(request.requestId);
+    if (!pending) return { status: "failed", error: "外部文件打开请求已过期。" } as const;
+    pendingExternalOpens.delete(request.requestId);
+    const opened = await openWithConversionConfirmation((options) => fileSessions.openPath(pending.path, options));
+    if (opened.status === "opened") {
+      await rememberRecentFile(pending.path);
+      parseCommits.clear();
+      resourceResolver.revokeAllHandles();
+      previewDerivedCache.revokeAll();
+      outputService.clear();
+    }
+    return opened;
+  });
+
   ipcMain.handle(IPC_CHANNELS.activateFileSession, (event, request: FileSessionRequest) => {
     requireTrustedRenderer(event);
     const result = fileSessions.activateSession(request.sessionId);
@@ -496,6 +580,30 @@ function registerIpc(): void {
     return opened;
   });
 
+  ipcMain.handle(IPC_CHANNELS.renameWorkspaceFile, async (event, request: RenameWorkspaceFileRequest) => {
+    requireTrustedRenderer(event);
+    const result = await fileSessions.renameWorkspaceFile(request);
+    if (result.status === "renamed") {
+      parseCommits.clear();
+      resourceResolver.revokeAllHandles();
+      previewDerivedCache.revokeAll();
+      outputService.clear();
+    }
+    return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.renameOpenFile, async (event, request: RenameOpenFileRequest) => {
+    requireTrustedRenderer(event);
+    const result = await fileSessions.renameOpenFile(request);
+    if (result.status === "renamed") {
+      parseCommits.clear();
+      resourceResolver.revokeAllHandles();
+      previewDerivedCache.revokeAll();
+      outputService.clear();
+    }
+    return result;
+  });
+
   ipcMain.handle(IPC_CHANNELS.saveCurrentFile, (event, request: SaveFileRequest) => {
     requireTrustedRenderer(event);
     return fileSessions.save(request);
@@ -577,6 +685,87 @@ function registerIpc(): void {
       ).catch(() => undefined);
     }
     return result;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.listWechatThemes, async (event, request: ListWechatThemesRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string" || request.documentId.length > 200) return { status: "failed", error: "主题列表请求无效。" } as const;
+    try {
+      return { status: "listed", themes: await wechatThemeRepositoryForDocument(request.documentId).list() } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "读取公众号主题失败。" } as const;
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.resolveWechatThemeForPreview, async (event, request: ResolveWechatThemeForPreviewRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string" || typeof request.themeId !== "string" || request.themeId.length > 200) return { status: "failed", error: "主题预览请求无效。" } as const;
+    try {
+      return { status: "resolved", theme: await wechatThemeRepositoryForDocument(request.documentId).resolveWechatThemeForOutput(request.themeId) } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "解析公众号主题失败。" } as const;
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.saveWechatThemeAsCustom, async (event, request: SaveWechatThemeAsCustomRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string" || !request.input || typeof request.input !== "object") return { status: "failed", error: "自定义主题请求无效。" } as const;
+    try {
+      const repository = wechatThemeRepositoryForDocument(request.documentId);
+      return { status: "saved", theme: await repository.save(request.input, "workspace") } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "保存自定义主题失败。" } as const;
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.deleteWechatTheme, async (event, request: DeleteWechatThemeRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string" || typeof request.themeId !== "string") return { status: "failed", error: "删除主题请求无效。" } as const;
+    try {
+      await wechatThemeRepositoryForDocument(request.documentId).delete(request.themeId, request.currentThemeId);
+      return { status: "deleted" } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "删除自定义主题失败。" } as const;
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.exportWechatTheme, async (event, request: ExportWechatThemeRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string" || typeof request.themeId !== "string") return { status: "failed", error: "导出主题请求无效。" } as const;
+    try {
+      const file = await wechatThemeRepositoryForDocument(request.documentId).export(request.themeId);
+      const window = mainWindow;
+      if (!window || window.isDestroyed()) return { status: "failed", error: "主窗口已关闭。" } as const;
+      const selection = await dialog.showSaveDialog(window, {
+        title: "导出公众号自定义主题",
+        defaultPath: `${request.themeId.split("+")[0]}-theme.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (selection.canceled || !selection.filePath) return { status: "cancelled" } as const;
+      await atomicWriteCandidate(selection.filePath, new TextEncoder().encode(JSON.stringify(file, null, 2) + "\n"));
+      return { status: "exported", file } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "导出自定义主题失败。" } as const;
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.importWechatTheme, async (event, request: ImportWechatThemeRequest) => {
+    requireTrustedRenderer(event);
+    if (!request || typeof request.documentId !== "string") return { status: "failed", error: "导入主题请求无效。" } as const;
+    const window = mainWindow;
+    if (!window || window.isDestroyed()) return { status: "failed", error: "主窗口已关闭。" } as const;
+    const selection = await dialog.showOpenDialog(window, {
+      title: "导入公众号自定义主题",
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (selection.canceled || !selection.filePaths[0]) return { status: "cancelled" } as const;
+    try {
+      const storage = request.storage === "global" ? "global" : "workspace";
+      return { status: "imported", theme: await wechatThemeRepositoryForDocument(request.documentId).importFile(selection.filePaths[0]!, storage) } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "导入自定义主题失败。" } as const;
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.beginOutput, (event, request: BeginOutputRequest) => {
@@ -905,11 +1094,14 @@ function createMainWindow(): BrowserWindow {
           return { created, reorderedLeft, reorderedRight, previous, next, closed };
         })()`, true) as { created: boolean; reorderedLeft: boolean; reorderedRight: boolean; previous: boolean; next: boolean; closed: boolean };
         const fontControl = await window.webContents.executeJavaScript(`(() => {
-          const select = document.querySelector("[data-testid=preview-font-select]");
-          if (!(select instanceof HTMLSelectElement)) return { exists: false, applied: false, hasArial: false };
-          const hasArial = Array.from(select.options).some((option) => option.value === "Arial");
-          select.value = "KaiTi";
-          select.dispatchEvent(new Event("change", { bubbles: true }));
+          const input = document.querySelector("[data-testid=preview-font-select]");
+          if (!(input instanceof HTMLInputElement)) return { exists: false, applied: false, hasArial: false };
+          const presets = document.querySelector("#preview-font-presets");
+          const hasArial = presets instanceof HTMLDataListElement && Array.from(presets.options).some((option) => option.value === "Arial");
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          setter?.call(input, "KaiTi");
+          input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+          input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
           return { exists: true, applied: true, hasArial };
         })()`, true) as { exists: boolean; applied: boolean; hasArial: boolean };
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -921,7 +1113,7 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 120));
-        await window.webContents.insertText("# Mermaid smoke\n\n跨块格式甲\n\n跨块格式乙\n\n跨块粘贴甲\n\n跨块粘贴乙\n\n混合前 [链接](https://example.com) 与 `代码`、$a+b$、![inline image](missing.png) 混合后\n\n下表为**中性情景**下的工作假设：\n\n| 期间 | 情景 |\n| --- | --- |\n| 2026Q3 | 预测 |\n\n> 引用原文\n\n- 列表原项\n- [ ] 待完成\n- 嵌套父项\n  - 嵌套子项\n  - [ ] 嵌套任务\n- 嵌套后项\n\n![smoke image](missing.png)\n\n$$\nx + y\n$$\n\n```ts\nconst value = 1;\n```\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
+        await window.webContents.insertText("# Mermaid smoke\n\n剪贴板 HTML 测试\n\n跨块格式甲\n\n跨块格式乙\n\n跨块粘贴甲\n\n跨块粘贴乙\n\n混合前 [链接](https://example.com) 与 `代码`、$a+b$、![inline image](missing.png) 混合后\n\n下表为**中性情景**下的工作假设：\n\n| 期间 | 情景 |\n| --- | --- |\n| 2026Q3 | 预测 |\n\n> 引用原文\n\n- 列表原项\n- [ ] 待完成\n- 嵌套父项\n  - 嵌套子项\n  - [ ] 嵌套任务\n- 嵌套后项\n\n![smoke image](missing.png)\n\n$$\nx + y\n$$\n\n```ts\nconst value = 1;\n```\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
         await new Promise((resolve) => setTimeout(resolve, 250));
         const mermaidRendered = await window.webContents.executeJavaScript(`new Promise((resolve) => {
           const deadline = Date.now() + 8000;
@@ -951,13 +1143,10 @@ function createMainWindow(): BrowserWindow {
             }
             return false;
           };
-          const exportMenu = document.querySelector(".export-menu");
-          if (!(exportMenu instanceof HTMLDetailsElement)) return { opened: false, completed: false, widthCount: 0, hasHeadingAuditCopy: false, keyboardDialog: false, focusRestored: false };
-          const ready = await waitFor(() => !exportMenu.classList.contains("disabled"));
-          if (!ready) return { opened: false, completed: false, widthCount: 0, hasHeadingAuditCopy: false, keyboardDialog: false, focusRestored: false };
-          exportMenu.open = true;
-          const button = [...document.querySelectorAll(".export-popover button")].find((candidate) => candidate.textContent?.includes("主题与手机预览"));
+          const button = document.querySelector(".wechat-layout-entry");
           if (!(button instanceof HTMLButtonElement)) return { opened: false, completed: false, widthCount: 0, hasHeadingAuditCopy: false, keyboardDialog: false, focusRestored: false };
+          const ready = await waitFor(() => !button.disabled);
+          if (!ready) return { opened: false, completed: false, widthCount: 0, hasHeadingAuditCopy: false, keyboardDialog: false, focusRestored: false };
           button.click();
           const opened = await waitFor(() => Boolean(document.querySelector(".wechat-preview-dialog")));
           const completed = opened && await waitFor(() => document.querySelectorAll(".viewport-buttons button:not(.running)").length === 3);
@@ -971,7 +1160,7 @@ function createMainWindow(): BrowserWindow {
           window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
           const closed = await waitFor(() => !document.querySelector('.wechat-preview-dialog'));
           await new Promise((resolve) => setTimeout(resolve, 50));
-          const focusRestored = closed && document.activeElement?.matches('.export-menu > summary');
+          const focusRestored = closed && document.activeElement === button;
           return { opened, completed, widthCount, hasHeadingAuditCopy, keyboardDialog, focusRestored };
         })()`, true) as { opened: boolean; completed: boolean; widthCount: number; hasHeadingAuditCopy: boolean; keyboardDialog: boolean; focusRestored: boolean };
         const syncTextBefore = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.textContent ?? ""`, true) as string;        const syncBefore = await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.getAttribute("aria-pressed") ?? "missing"`, true) as string;
@@ -1042,6 +1231,11 @@ function createMainWindow(): BrowserWindow {
           let crossBlockFormatted = false;
           let crossBlockPasted = false;
           let crossBlockProtectedRejected = false;
+          let dualFormatCopy = false;
+          let selectAllCopy = false;
+          let externalHtmlPaste = false;
+          let imaRichPaste = false;
+          let imaPasteSnapshot = "";
           let blockInserted = false;
           let blockDragged = false;
           let blockDuplicated = false;
@@ -1071,6 +1265,35 @@ function createMainWindow(): BrowserWindow {
             selection?.addRange(range);
             return first;
           };
+          const copyParagraph = [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")]
+            .find((element) => (element.textContent ?? "").trim().length > 0);
+          if (copyParagraph instanceof HTMLElement) {
+            const copyRange = document.createRange();
+            copyRange.selectNodeContents(copyParagraph);
+            const copySelection = window.getSelection();
+            copySelection?.removeAllRanges();
+            copySelection?.addRange(copyRange);
+            const copyData = new DataTransfer();
+            const copyEvent = new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: copyData });
+            copyParagraph.dispatchEvent(copyEvent);
+            const copiedPlain = copyData.getData("text/plain");
+            const copiedHtml = copyData.getData("text/html");
+            dualFormatCopy = copiedPlain.length > 0
+              && copiedHtml.includes('data-fantastic-clipboard="v1"')
+              && copiedHtml.includes('data-fantastic-plain-length="' + copiedPlain.length + '"')
+              && copiedHtml.includes('data-fantastic-plain-hash="fnv1a32:');
+            const selectAllEvent = new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true, cancelable: true });
+            copyParagraph.dispatchEvent(selectAllEvent);
+            const allSelection = window.getSelection();
+            const allCopyData = new DataTransfer();
+            copyParagraph.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: allCopyData }));
+            const allCopiedPlain = allCopyData.getData("text/plain");
+            selectAllCopy = selectAllEvent.defaultPrevented
+              && Boolean(allSelection && !allSelection.isCollapsed)
+              && allCopiedPlain.length > copiedPlain.length
+              && allCopiedPlain.includes("跨块格式甲")
+              && allCopiedPlain.includes("const value = 1;");
+          }
           const formatStart = selectAcrossParagraphs("跨块格式甲", "跨块格式乙");
           if (formatStart) {
             formatStart.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true }));
@@ -1444,6 +1667,50 @@ function createMainWindow(): BrowserWindow {
           } catch (error) {
             multilinePasteError = error instanceof Error ? error.message : String(error);
           }
+          try {
+            const htmlParagraph = [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")]
+              .find((element) => element.textContent?.includes("剪贴板 HTML 测试"));
+            if (htmlParagraph instanceof HTMLElement) {
+              const htmlRect = htmlParagraph.getBoundingClientRect();
+              htmlParagraph.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: htmlRect.left + 8, clientY: htmlRect.top + htmlRect.height / 2 }));
+              const htmlRange = document.createRange();
+              htmlRange.selectNodeContents(htmlParagraph);
+              const htmlSelection = window.getSelection();
+              htmlSelection?.removeAllRanges();
+              htmlSelection?.addRange(htmlRange);
+              const clipboardData = new DataTransfer();
+              clipboardData.setData("text/plain", "外部加粗\\n外部图");
+              clipboardData.setData("text/html", '<p><strong>外部加粗</strong></p><p><img src="file:///secret.png" alt="外部图"></p>');
+              htmlParagraph.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
+              htmlParagraph.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+              externalHtmlPaste = await waitFor(() => {
+                const text = document.querySelector(".cm-content")?.textContent ?? "";
+                return text.includes("**外部加粗**") && text.includes("![外部图]（图片未包含）");
+              });
+              await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")]
+                .some((element) => element.textContent?.includes("外部加粗")));
+              const richTarget = [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")]
+                .find((element) => element.textContent?.includes("外部加粗"));
+              if (richTarget instanceof HTMLElement) {
+                const richRange = document.createRange();
+                richRange.selectNodeContents(richTarget);
+                htmlSelection?.removeAllRanges();
+                htmlSelection?.addRange(richRange);
+                const richData = new DataTransfer();
+                richData.setData("text/plain", "\\\\# IMA 标题\\n\\\\- 一级\\n  \\\\- 二级\\n3\\\\. 第三项");
+                richData.setData("text/html", "<h1>IMA 标题</h1><ul><li><strong>一级</strong><ul><li>二级</li></ul></li></ul><ol start=3><li>第三项</li></ol>");
+                richTarget.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: richData }));
+                richTarget.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+                imaRichPaste = await waitFor(() => {
+                  const text = document.querySelector(".cm-content")?.textContent ?? "";
+                  imaPasteSnapshot = text;
+                  return text.includes("# IMA 标题") && text.includes("- **一级**") && text.includes("  - 二级") && text.includes("3. 第三项") && !text.includes("\\\\# IMA 标题");
+                });
+              }
+            }
+          } catch (error) {
+            multilinePasteError = [multilinePasteError, error instanceof Error ? error.message : String(error)].filter(Boolean).join(" | ");
+          }
           const diagramReady = await waitFor(() => {
             const content = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content");
             const candidate = content?.querySelector(".mermaid-diagram");
@@ -1590,6 +1857,11 @@ function createMainWindow(): BrowserWindow {
             crossBlockFormatted,
             crossBlockPasted,
             crossBlockProtectedRejected,
+            dualFormatCopy,
+            selectAllCopy,
+            externalHtmlPaste,
+            imaRichPaste,
+            imaPasteSnapshot,
             blockInserted,
             blockDragged,
             blockDuplicated,
@@ -1625,7 +1897,52 @@ function createMainWindow(): BrowserWindow {
           } catch (error) {
             return { exists: true, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
           }
-        })()`, true) as { exists: boolean; ready?: boolean; edited?: boolean; directInputReady?: boolean; caretInside?: boolean; browserInserted?: boolean; formatted?: boolean; paragraphBreaks?: boolean; mergedParagraphs?: boolean; compositionDeferred?: boolean; blankParagraphAdded?: boolean; blankParagraphDeduplicated?: boolean; blankParagraphDeleted?: boolean; multilinePasteHandled?: boolean; imageAltEdited?: boolean; formulaStructuredApplied?: boolean; codeStructuredApplied?: boolean; linkStructuredApplied?: boolean; inlineCodeStructuredApplied?: boolean; mixedInlineEdited?: boolean; mixedAtomsProtected?: boolean; protectedSelectionRejected?: boolean; crossBlockFormatted?: boolean; crossBlockPasted?: boolean; crossBlockProtectedRejected?: boolean; blockInserted?: boolean; blockDragged?: boolean; blockDuplicated?: boolean; blockDeleted?: boolean; blockKeyboardMoved?: boolean; tableCellEdited?: boolean; tableColumnInserted?: boolean; tableAlignmentApplied?: boolean; tableRowAppended?: boolean; listItemEdited?: boolean; listDirectReady?: boolean; listBrowserInserted?: boolean; listIndented?: boolean; listOutdented?: boolean; nestedParentEdited?: boolean; nestedSubtreeIndented?: boolean; nestedSubtreeOutdented?: boolean; quoteEdited?: boolean; taskToggled?: boolean; undone?: boolean; redone?: boolean; sourceCardApplied?: boolean; visualWasActive?: boolean; sourceRestored?: boolean; afterEdit?: string; afterUndo?: string; afterRedo?: string };
+        })()`, true) as { exists: boolean; ready?: boolean; edited?: boolean; directInputReady?: boolean; caretInside?: boolean; browserInserted?: boolean; formatted?: boolean; paragraphBreaks?: boolean; mergedParagraphs?: boolean; compositionDeferred?: boolean; blankParagraphAdded?: boolean; blankParagraphDeduplicated?: boolean; blankParagraphDeleted?: boolean; multilinePasteHandled?: boolean; imageAltEdited?: boolean; formulaStructuredApplied?: boolean; codeStructuredApplied?: boolean; linkStructuredApplied?: boolean; inlineCodeStructuredApplied?: boolean; mixedInlineEdited?: boolean; mixedAtomsProtected?: boolean; protectedSelectionRejected?: boolean; crossBlockFormatted?: boolean; crossBlockPasted?: boolean; crossBlockProtectedRejected?: boolean; dualFormatCopy?: boolean; selectAllCopy?: boolean; externalHtmlPaste?: boolean; imaRichPaste?: boolean; blockInserted?: boolean; blockDragged?: boolean; blockDuplicated?: boolean; blockDeleted?: boolean; blockKeyboardMoved?: boolean; tableCellEdited?: boolean; tableColumnInserted?: boolean; tableAlignmentApplied?: boolean; tableRowAppended?: boolean; listItemEdited?: boolean; listDirectReady?: boolean; listBrowserInserted?: boolean; listIndented?: boolean; listOutdented?: boolean; nestedParentEdited?: boolean; nestedSubtreeIndented?: boolean; nestedSubtreeOutdented?: boolean; quoteEdited?: boolean; taskToggled?: boolean; undone?: boolean; redone?: boolean; sourceCardApplied?: boolean; visualWasActive?: boolean; sourceRestored?: boolean; afterEdit?: string; afterUndo?: string; afterRedo?: string };
+        const viewWorkflow = await window.webContents.executeJavaScript(`(async () => {
+          try {
+          const waitFor = async (predicate, timeout = 8000) => {
+            const deadline = Date.now() + timeout;
+            while (Date.now() < deadline) {
+              if (predicate()) return true;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            return false;
+          };
+          const visualButton = document.querySelector("[data-testid=editor-mode-switch] button:last-child");
+          const sourceButton = document.querySelector("[data-testid=editor-mode-switch] button:first-child");
+          if (!(visualButton instanceof HTMLButtonElement) || !(sourceButton instanceof HTMLButtonElement)) return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButton: false, searchButton: false };
+          visualButton.click();
+          await waitFor(() => Boolean(document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content")));
+          const container = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-editor");
+          const font = document.querySelector("[data-testid=wysiwyg-font-select]");
+          let scrollPreserved = false;
+          if (container instanceof HTMLElement && font instanceof HTMLInputElement) {
+            container.scrollTop = Math.min(700, Math.max(1, container.scrollHeight - container.clientHeight));
+            const before = container.scrollTop;
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            setter?.call(font, font.value === "KaiTi" ? "Arial" : "KaiTi");
+            font.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+            font.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            scrollPreserved = before > 0 && container.scrollTop > 0;
+          }
+          document.querySelector('button[aria-label="仅预览"]')?.click();
+          const directPreview = await waitFor(() => Boolean(document.querySelector(".document-stage.view-preview .preview-pane")));
+          const previewMermaid = directPreview && await waitFor(() => Boolean(document.querySelector(".document-stage.view-preview .mermaid-diagram svg")));
+          const outlineButtonRemoved = ![...document.querySelectorAll(".header-nav-button")].some((button) => button.textContent?.includes("目录"));
+          const openEditorButton = document.querySelector(".open-editor-select");
+          openEditorButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          const inlineOutline = await waitFor(() => Boolean(document.querySelector(".open-editor-entry .inline-outline .document-outline")));
+          const repairButton = [...document.querySelectorAll(".header-nav-button")].some((button) => button.textContent?.includes("修复网页 Markdown") && button instanceof HTMLButtonElement && !button.disabled);
+          const searchButton = [...document.querySelectorAll(".header-nav-button")].some((button) => button.textContent?.includes("查找/替换"));
+          document.querySelector('button[aria-label="仅编辑"]')?.click();
+          sourceButton.click();
+          await waitFor(() => Boolean(document.querySelector(".source-editor-layer.active")));
+          return { fontControl: font instanceof HTMLInputElement, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButton, searchButton };
+          } catch (error) {
+            return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButton: false, searchButton: false, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
+          }
+        })()`, true) as { fontControl: boolean; scrollPreserved: boolean; directPreview: boolean; previewMermaid: boolean; inlineOutline: boolean; outlineButtonRemoved: boolean; repairButton: boolean; searchButton: boolean };
         const imageBridge = await window.webContents.executeJavaScript(`(async () => {
           const binary = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII="), character => character.charCodeAt(0));
           const file = new File([binary], "smoke.png", { type: "image/png" });
@@ -1645,10 +1962,16 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
-        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && mermaidRendered && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.directInputReady && wysiwyg.caretInside && wysiwyg.browserInserted && wysiwyg.formatted && wysiwyg.paragraphBreaks && wysiwyg.mergedParagraphs && wysiwyg.compositionDeferred && wysiwyg.blankParagraphAdded && wysiwyg.blankParagraphDeduplicated && wysiwyg.blankParagraphDeleted && wysiwyg.multilinePasteHandled && wysiwyg.imageAltEdited && wysiwyg.formulaStructuredApplied && wysiwyg.codeStructuredApplied && wysiwyg.linkStructuredApplied && wysiwyg.inlineCodeStructuredApplied && wysiwyg.mixedInlineEdited && wysiwyg.mixedAtomsProtected && wysiwyg.protectedSelectionRejected && wysiwyg.crossBlockFormatted && wysiwyg.crossBlockPasted && wysiwyg.crossBlockProtectedRejected && wysiwyg.blockInserted && wysiwyg.blockDragged && wysiwyg.blockDuplicated && wysiwyg.blockDeleted && wysiwyg.blockKeyboardMoved && wysiwyg.tableCellEdited && wysiwyg.tableColumnInserted && wysiwyg.tableAlignmentApplied && wysiwyg.tableRowAppended && wysiwyg.listItemEdited && wysiwyg.listDirectReady && wysiwyg.listBrowserInserted && wysiwyg.listIndented && wysiwyg.listOutdented && wysiwyg.nestedParentEdited && wysiwyg.nestedSubtreeIndented && wysiwyg.nestedSubtreeOutdented && wysiwyg.quoteEdited && wysiwyg.taskToggled && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
-        console.log(JSON.stringify({ uiReady, before, drag, after, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
-      await finishSmoke("ui", valid === true);
-      })().catch((error: unknown) => { console.error(error); void finishSmoke("ui", false); });
+          const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && mermaidRendered && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.directInputReady && wysiwyg.caretInside && wysiwyg.browserInserted && wysiwyg.formatted && wysiwyg.paragraphBreaks && wysiwyg.mergedParagraphs && wysiwyg.compositionDeferred && wysiwyg.blankParagraphAdded && wysiwyg.blankParagraphDeduplicated && wysiwyg.blankParagraphDeleted && wysiwyg.multilinePasteHandled && wysiwyg.imageAltEdited && wysiwyg.formulaStructuredApplied && wysiwyg.codeStructuredApplied && wysiwyg.linkStructuredApplied && wysiwyg.inlineCodeStructuredApplied && wysiwyg.mixedInlineEdited && wysiwyg.mixedAtomsProtected && wysiwyg.protectedSelectionRejected && wysiwyg.crossBlockFormatted && wysiwyg.crossBlockPasted && wysiwyg.crossBlockProtectedRejected && wysiwyg.dualFormatCopy && wysiwyg.selectAllCopy && wysiwyg.externalHtmlPaste && wysiwyg.imaRichPaste && wysiwyg.blockInserted && wysiwyg.blockDragged && wysiwyg.blockDuplicated && wysiwyg.blockDeleted && wysiwyg.blockKeyboardMoved && wysiwyg.tableCellEdited && wysiwyg.tableColumnInserted && wysiwyg.tableAlignmentApplied && wysiwyg.tableRowAppended && wysiwyg.listItemEdited && wysiwyg.listDirectReady && wysiwyg.listBrowserInserted && wysiwyg.listIndented && wysiwyg.listOutdented && wysiwyg.nestedParentEdited && wysiwyg.nestedSubtreeIndented && wysiwyg.nestedSubtreeOutdented && wysiwyg.quoteEdited && wysiwyg.taskToggled && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.previewMermaid && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButton && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        console.log(JSON.stringify({ uiReady, before, drag, after, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
+      await finishSmoke("ui", valid === true, { uiReady, before, drag, after, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
+      })().catch((error: unknown) => {
+        const diagnostic = error instanceof Error
+          ? { name: error.name, message: error.message, stack: error.stack ?? "" }
+          : { message: String(error) };
+        console.error(error);
+        void finishSmoke("ui", false, { error: diagnostic });
+      });
     });
     window.webContents.once("did-fail-load", (_event, code, description) => { console.error(`Renderer load failed (${code}): ${description}`); void finishSmoke("ui", false); });
   } else if (process.env.FANTASTIC_EDITOR_SMOKE_TEST === "1") {
@@ -1665,7 +1988,7 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
-app.whenReady().then(() => {
+if (singleInstanceAcquired) app.whenReady().then(() => {
   registerSecurityPolicy();
   registerAssetProtocol();
   const sessionTemporaryDirectory = join(app.getPath("userData"), "untitled-sessions");

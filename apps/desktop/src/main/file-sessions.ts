@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, type Dirent, type Stats } from "node:fs";
-import { access, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
@@ -11,6 +11,10 @@ import type {
   OpenFileResult,
   OpenFolderResult,
   OpenWorkspaceFileRequest,
+  RenameWorkspaceFileRequest,
+  RenameWorkspaceFileResult,
+  RenameOpenFileRequest,
+  RenameOpenFileResult,
   FileSessionCommandResult,
   PersistRecoveryRequest,
   RestoreRecoveryResult,
@@ -203,6 +207,22 @@ function encodeMarkdown(
 function isMarkdownFile(name: string): boolean {
   const extension = extname(name).toLowerCase();
   return extension === ".md" || extension === ".markdown";
+}
+
+function normalizeWorkspaceRename(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("文件名不能为空。");
+  if (trimmed.length > 255 || trimmed.includes("\0") || /[\\/:*?"<>|]/u.test(trimmed)) {
+    throw new Error("文件名包含无效字符或超过 255 个字符。");
+  }
+  if (trimmed === "." || trimmed === ".." || trimmed.endsWith(".") || trimmed.endsWith(" ")) {
+    throw new Error("文件名不能以句点或空格结尾。");
+  }
+  const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.[^.]+)?$/iu;
+  if (reserved.test(trimmed)) throw new Error("该文件名是 Windows 保留名称，不能使用。");
+  const normalized = extname(trimmed) ? trimmed : `${trimmed}.md`;
+  if (!isMarkdownFile(normalized)) throw new Error("只能使用 .md 或 .markdown 扩展名。");
+  return normalized;
 }
 
 function entrySort(left: Dirent, right: Dirent): number {
@@ -573,6 +593,118 @@ export class FileSessionManager {
       }, options);
     } catch (error) {
       return { status: "failed", error: error instanceof Error ? error.message : "读取工作区文件失败。" };
+    }
+  }
+
+  async renameWorkspaceFile(request: RenameWorkspaceFileRequest): Promise<RenameWorkspaceFileResult> {
+    const workspace = this.#folderWorkspace;
+    if (
+      !workspace
+      || request.workspaceId !== workspace.workspaceId
+      || request.workspaceRevision !== workspace.workspaceRevision
+    ) return { status: "failed", error: "工作区身份已失效，请重新打开文件夹。" };
+    const file = workspace.files.get(request.fileId);
+    if (!file) return { status: "failed", error: "文件标识不存在或已经失效。" };
+    try {
+      const newName = normalizeWorkspaceRename(request.newName);
+      const candidate = join(workspace.rootRealPath, ...file.relativePath.split("/"));
+      const oldRealPath = await realpath(candidate);
+      if (!isPathInside(workspace.rootRealPath, oldRealPath) || !isMarkdownFile(oldRealPath) || !(await stat(oldRealPath)).isFile()) {
+        return { status: "failed", error: "所选文件越出工作区授权边界。" };
+      }
+      const targetPath = join(dirname(oldRealPath), newName);
+      if (!isPathInside(workspace.rootRealPath, targetPath)) {
+        return { status: "failed", error: "新文件名越出工作区授权边界。" };
+      }
+      if (targetPath.toLocaleLowerCase("en-US") === oldRealPath.toLocaleLowerCase("en-US")) {
+        return { status: "failed", error: "新文件名与当前文件相同。" };
+      }
+      try {
+        await lstat(targetPath);
+        return { status: "failed", error: "目标文件名已存在，请换一个名称。" };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await rename(oldRealPath, targetPath);
+      const renamedRealPath = await realpath(targetPath);
+      if (!isPathInside(workspace.rootRealPath, renamedRealPath)) {
+        return { status: "failed", error: "重命名后的文件越出工作区授权边界。" };
+      }
+      const relativePath = relative(workspace.rootRealPath, renamedRealPath).split(sep).join("/");
+      const renamedFile: WorkspaceFileEntry = { ...file, relativePath, displayName: relativePath };
+      workspace.files.set(file.fileId, renamedFile);
+      workspace.workspaceRevision += 1;
+      for (const session of this.#sessions.values()) {
+        if (session.workspaceId !== workspace.workspaceId) continue;
+        if (session.path.toLocaleLowerCase("en-US") === oldRealPath.toLocaleLowerCase("en-US")) {
+          session.path = renamedRealPath;
+          session.documentRealPath = renamedRealPath;
+        }
+        session.workspaceRevision = workspace.workspaceRevision;
+      }
+      return { status: "renamed", workspaceRevision: workspace.workspaceRevision, file: renamedFile };
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "重命名 Markdown 文件失败。" };
+    }
+  }
+
+  async renameOpenFile(request: RenameOpenFileRequest): Promise<RenameOpenFileResult> {
+    const session = this.#sessions.get(request.sessionId);
+    if (!session) return { status: "failed", error: "文件会话已失效，请重新打开文件。" };
+    if (session.isUntitled) return { status: "failed", error: "未命名文档请先保存，再右键重命名。" };
+    if (session.workspaceMode === "folder-workspace") {
+      const workspace = this.#folderWorkspace;
+      const file = workspace && [...workspace.files.values()].find((item) => {
+        const candidate = join(workspace.rootRealPath, ...item.relativePath.split("/"));
+        return candidate.toLocaleLowerCase("en-US") === session.path.toLocaleLowerCase("en-US");
+      });
+      if (!workspace || !file) return { status: "failed", error: "工作区文件身份已失效，请重新打开文件夹。" };
+      const result = await this.renameWorkspaceFile({
+        workspaceId: workspace.workspaceId,
+        workspaceRevision: workspace.workspaceRevision,
+        fileId: file.fileId,
+        newName: request.newName,
+      });
+      return result.status === "renamed"
+        ? { status: "renamed", displayName: basename(result.file.relativePath), workspaceRevision: result.workspaceRevision, file: result.file }
+        : result;
+    }
+    try {
+      const newName = normalizeWorkspaceRename(request.newName);
+      const oldRealPath = await realpath(session.path);
+      const beforeStat = await stat(oldRealPath);
+      if (!beforeStat.isFile() || !isPathInside(session.authorizationRootRealPath, oldRealPath)) {
+        return { status: "failed", error: "所选文件越出授权边界。" };
+      }
+      if (!fingerprintsEqual(session.fingerprint, fingerprintFromStat(beforeStat))) {
+        return { status: "failed", error: "磁盘文件已被其他程序修改，请重新打开后再重命名。" };
+      }
+      const targetPath = join(dirname(oldRealPath), newName);
+      if (!isPathInside(session.authorizationRootRealPath, targetPath)) {
+        return { status: "failed", error: "新文件名越出授权边界。" };
+      }
+      if (targetPath.toLocaleLowerCase("en-US") === oldRealPath.toLocaleLowerCase("en-US")) {
+        return { status: "failed", error: "新文件名与当前文件相同。" };
+      }
+      try {
+        await lstat(targetPath);
+        return { status: "failed", error: "目标文件名已存在，请换一个名称。" };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await rename(oldRealPath, targetPath);
+      const renamedRealPath = await realpath(targetPath);
+      if (!isPathInside(session.authorizationRootRealPath, renamedRealPath)) {
+        return { status: "failed", error: "重命名后的文件越出授权边界。" };
+      }
+      session.path = renamedRealPath;
+      session.documentRealPath = renamedRealPath;
+      session.workspaceRevision += 1;
+      session.fingerprint = fingerprintFromStat(await stat(renamedRealPath));
+      delete session.displayNameOverride;
+      return { status: "renamed", displayName: basename(renamedRealPath), workspaceRevision: session.workspaceRevision };
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "重命名 Markdown 文件失败。" };
     }
   }
 

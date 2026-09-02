@@ -10,11 +10,17 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
   type ReactEventHandler,
+  type CSSProperties,
 } from "react";
-import type { ImportedAssetReceipt } from "@fantastic-editor/shared";
+import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
+import { buildClipboardPayload, escapePlainTextForMarkdown, sanitizeClipboardMarkdown } from "@fantastic-editor/document-core";
 import katex from "katex";
 import { createImageMarkdown } from "./image-insertion";
 import { renderMermaidPreview } from "./mermaid-preview";
+import { buildWechatThemeProjectionCss } from "./wechat-theme-projection";
+import { htmlToMarkdown } from "./html-to-markdown";
+import { resolveClipboardPaste, type PasteIntent } from "./clipboard-paste";
+import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
 import {
   createMarkdownBlockInsertion,
   createMarkdownBlockMove,
@@ -60,6 +66,9 @@ interface WysiwygEditorProps {
   html: string;
   htmlReady: boolean;
   fontFamily: string;
+  readingMaxWidth?: string;
+  previewFontSize?: number;
+  wechatThemeDefinition?: WechatThemeDefinition;
   darkMode: boolean;
   imageImportBusy: boolean;
   onApplyTextChange(change: WysiwygTextChange): string | null;
@@ -131,6 +140,9 @@ export interface WysiwygEditorHandle {
   discardInsertionAnchor(anchorId: string): void;
   insertImages(anchorId: string, receipts: readonly ImportedAssetReceipt[]): boolean;
   commitPending(): boolean;
+  revealSourceRange(from: number, to: number): boolean;
+  find(query: string, direction?: number, previousIndex?: number): SearchNavigationResult;
+  clearSearch(): void;
   focus(): void;
 }
 
@@ -452,6 +464,26 @@ function selectionBelongsTo(element: HTMLElement): boolean {
     && element.contains(selection.focusNode));
 }
 
+function selectAllEditorContents(content: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection) return false;
+  content.focus({ preventScroll: true });
+  const range = document.createRange();
+  range.selectNodeContents(content);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return !selection.isCollapsed;
+}
+
+function selectionIsWholeEditor(content: HTMLElement, selection: Selection): boolean {
+  if (selection.isCollapsed || selection.rangeCount !== 1) return false;
+  const range = selection.getRangeAt(0);
+  return range.startContainer === content
+    && range.startOffset === 0
+    && range.endContainer === content
+    && range.endOffset === content.childNodes.length;
+}
+
 function selectionIntersectsInlineAtom(element: HTMLElement): boolean {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !selectionBelongsTo(element)) return false;
@@ -609,7 +641,7 @@ function imageInsertionText(text: string, position: number, receipts: readonly I
 }
 
 export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>(function WysiwygEditor(
-  { value, html, htmlReady, fontFamily, darkMode, imageImportBusy, onApplyTextChange, onImageDrop, onRequestImageReplacement, onDropRejected, onStatus, onErrorCapture, onLoadCapture },
+  { value, html, htmlReady, fontFamily, readingMaxWidth = "820px", previewFontSize = 14, wechatThemeDefinition, darkMode, imageImportBusy, onApplyTextChange, onImageDrop, onRequestImageReplacement, onDropRejected, onStatus, onErrorCapture, onLoadCapture },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -627,6 +659,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
   const structuredPreviewSequenceRef = useRef(0);
   const isComposingRef = useRef(false);
   const pendingCompositionBlurRef = useRef(false);
+  const literalPasteUntilRef = useRef(0);
   const activeBlockRef = useRef<HTMLElement | null>(null);
   const draggedBlockRangeRef = useRef<{ range: WysiwygSourceRange; expectedText: string } | null>(null);
   const blockDropTargetRef = useRef<BlockDropTarget | null>(null);
@@ -829,14 +862,17 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     const content = contentRef.current;
     if (!content || !htmlReady || directEditRef.current || sourceEditRef.current || imageEditRef.current || value !== valueRef.current) return;
     const sequence = ++renderSequenceRef.current;
+    const scrollTop = containerRef.current?.scrollTop ?? 0;
     activeBlockRef.current = null;
     draggedBlockRangeRef.current = null;
     setBlockEditContext(null);
     content.innerHTML = htmlRef.current;
     decorateEditability(content, valueRef.current);
+    if (containerRef.current) containerRef.current.scrollTop = scrollTop;
     void renderMermaidPreview(content, { darkMode, fontFamily }).then(() => {
       if (sequence !== renderSequenceRef.current) return;
       decorateEditability(content, valueRef.current);
+      if (containerRef.current) containerRef.current.scrollTop = scrollTop;
     }).catch(() => onStatus?.("Mermaid 所见即所得预览未能完成。"));
   };
 
@@ -870,10 +906,75 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       return next !== null;
     },
     commitPending,
+    revealSourceRange(from, to) {
+      const content = contentRef.current;
+      if (!content || to <= from || !htmlReady) return false;
+      const target = [...content.querySelectorAll<HTMLElement>("[data-source-from][data-source-to]")]
+        .filter((element) => Number(element.dataset.sourceFrom) <= from && Number(element.dataset.sourceTo) >= to)
+        .sort((left, right) => (Number(left.dataset.sourceTo) - Number(left.dataset.sourceFrom)) - (Number(right.dataset.sourceTo) - Number(right.dataset.sourceFrom)))[0];
+      if (!target) return false;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      return true;
+    },
+    find(query, direction = 1, previousIndex = -1) {
+      const content = contentRef.current;
+      return content ? applyVisibleTextSearch(content, query, direction, previousIndex) : { index: 0, total: 0 };
+    },
+    clearSearch() {
+      clearVisibleTextSearch();
+    },
     focus() { (directEditRef.current?.element ?? contentRef.current)?.focus(); },
   }));
 
   useEffect(() => { if (htmlReady && !directEditRef.current && !sourceEditRef.current && !imageEditRef.current) renderHtml(); }, [html, htmlReady, darkMode, fontFamily]);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content || !htmlReady) return;
+    content.querySelectorAll<HTMLElement>(".preview-code-toolbar").forEach((item) => item.remove());
+    content.querySelectorAll<HTMLElement>("pre > code").forEach((code) => {
+      const pre = code.parentElement;
+      if (!pre || pre.closest(".mermaid-diagram")) return;
+      pre.classList.add("preview-code-block");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "preview-code-toolbar";
+      button.textContent = "复制";
+      button.ariaLabel = "复制代码块";
+      button.addEventListener("click", async () => {
+        const text = (code.textContent ?? "").replace(/\r\n?/g, "\n");
+        try {
+          if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.style.position = "fixed";
+          textarea.style.opacity = "0";
+          document.body.append(textarea);
+          textarea.select();
+          const copied = document.execCommand("copy");
+          textarea.remove();
+          if (!copied) { onStatus?.("代码复制失败，请选中代码后复制。"); return; }
+        }
+        button.textContent = "已复制";
+        onStatus?.("代码块已复制到系统剪贴板。");
+        window.setTimeout(() => { if (button.isConnected) button.textContent = "复制"; }, 1200);
+      });
+      pre.append(button);
+    });
+  }, [darkMode, fontFamily, html, htmlReady, onStatus]);
+
+  useEffect(() => {
+    const clearLiteralPasteIntent = () => { literalPasteUntilRef.current = 0; };
+    window.addEventListener("blur", clearLiteralPasteIntent);
+    document.addEventListener("visibilitychange", clearLiteralPasteIntent);
+    return () => {
+      window.removeEventListener("blur", clearLiteralPasteIntent);
+      document.removeEventListener("visibilitychange", clearLiteralPasteIntent);
+      literalPasteUntilRef.current = 0;
+    };
+  }, []);
 
   useEffect(() => {
     const host = structuredPreviewRef.current;
@@ -1431,8 +1532,27 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     return finishCrossBlockTransaction(change, `已对跨块选择设置${label}；可用一次撤销恢复。`);
   };
   const handleDirectKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
+      literalPasteUntilRef.current = Date.now() + 2000;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      const content = contentRef.current;
+      if (content && selectAllEditorContents(content)) onStatus?.("已全选所见即所得正文。可直接复制全部内容。");
+      return;
+    }
+    if (event.nativeEvent.isComposing || isComposingRef.current) return;
+    const editorSelection = window.getSelection();
+    if ((event.key === "Backspace" || event.key === "Delete")
+      && contentRef.current
+      && editorSelection
+      && selectionIsWholeEditor(contentRef.current, editorSelection)) {
+      event.preventDefault();
+      finishCrossBlockTransaction({ from: 0, to: valueRef.current.length, insert: "", expectedText: valueRef.current }, "已删除全部正文；可用一次撤销恢复。");
+      return;
+    }
     const edit = directEditRef.current;
-    if (!edit || event.nativeEvent.isComposing || isComposingRef.current) return;
+    if (!edit) return;
     if (
       edit.isNewBlock
       && !(edit.element.textContent ?? "").trim()
@@ -1622,19 +1742,75 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     }
   };
 
-  const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
+  const selectionClipboardMarkdown = (): string | null => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null;
+    const content = contentRef.current;
+    if (content && selectionIsWholeEditor(content, selection)) return valueRef.current;
+    const range = selection.getRangeAt(0);
+    const cross = content ? currentCrossBlockSelection(content, valueRef.current) : null;
+    if (cross) {
+      return cross.fragments.map((fragment) => fragment.source.slice(fragment.selectionFrom, fragment.selectionTo)).join("\n\n");
+    }
     const edit = directEditRef.current;
+    if (edit && selectionBelongsTo(edit.element) && !selectionIntersectsInlineAtom(edit.element)) {
+      const fragment = blockSelectionFragment(edit.element, valueRef.current, {
+        container: range.startContainer,
+        offset: range.startOffset,
+      }, {
+        container: range.endContainer,
+        offset: range.endOffset,
+      });
+      if (fragment) return fragment.source.slice(fragment.selectionFrom, fragment.selectionTo);
+    }
+    const protectedNode = boundaryElement(range.startContainer)?.closest(".wysiwyg-inline-atom, pre, table, .preview-formula-block, .mermaid-diagram");
+    if (protectedNode) return sanitizeClipboardMarkdown(selection.toString());
+    const holder = document.createElement("div");
+    holder.append(range.cloneContents());
+    const converted = htmlToMarkdown(holder.innerHTML);
+    return converted.markdown || sanitizeClipboardMarkdown(selection.toString());
+  };
+
+  const writeClipboardPayload = (event: ClipboardEvent<HTMLElement>, markdown: string): void => {
+    if (!event.clipboardData) return;
+    const payload = buildClipboardPayload(markdown);
+    event.clipboardData.setData("text/plain", payload.plain);
+    if (payload.html) event.clipboardData.setData("text/html", payload.html);
+    for (const warning of payload.warnings) onStatus?.(warning);
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
+    // Native paste normally arrives after pointer selection has opened a direct
+    // edit session. Keep the handler resilient for keyboard/synthetic paste
+    // events that target a direct block before that session is established.
+    let edit = directEditRef.current;
+    if (!edit && event.target instanceof Element) {
+      const target = directEditableElement(event.target, valueRef.current.length);
+      if (target && selectBlock(target) === "direct") edit = directEditRef.current;
+    }
     if (!edit) return;
     if (isComposingRef.current) {
       event.preventDefault();
       onStatus?.("请先确认中文输入，再粘贴文本。");
       return;
     }
-    const plainText = event.clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
+    const resolved = resolveClipboardPaste({
+      plainText: event.clipboardData.getData("text/plain"),
+      htmlText: event.clipboardData.getData("text/html"),
+      intent: literalPasteUntilRef.current >= Date.now() ? "literal" : "normal",
+    });
+    literalPasteUntilRef.current = 0;
+    if (resolved.rejected) {
+      event.preventDefault();
+      onStatus?.(resolved.warnings.join(" "));
+      return;
+    }
+    const plainText = resolved.markdown;
     if (window.getSelection()?.isCollapsed === false && !selectionBelongsTo(edit.element)) {
       event.preventDefault();
-      const insert = normalizeCrossBlockPlainText(plainText);
-      replaceCurrentCrossBlockSelection(insert, "已用规范化纯文本替换跨块选择；可用一次撤销恢复。");
+      const insert = resolved.source === "plain" ? normalizeCrossBlockPlainText(plainText) : plainText;
+      replaceCurrentCrossBlockSelection(insert, "已用安全 Markdown 替换跨块选择；可用一次撤销恢复。");
+      if (resolved.warnings.length > 0) onStatus?.(resolved.warnings.join(" "));
       return;
     }
     if (selectionIntersectsInlineAtom(edit.element)) {
@@ -1643,7 +1819,59 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       return;
     }
     event.preventDefault();
-    document.execCommand("insertText", false, edit.element.matches("th, td") ? plainText.replace(/\n+/g, " ") : plainText);
+    if (!plainText) return;
+    const committed = commitDirectEdit();
+    if (committed) {
+      const currentSelection = window.getSelection();
+      const currentRange = currentSelection && currentSelection.rangeCount > 0 ? currentSelection.getRangeAt(0) : null;
+      const fragment = currentRange ? blockSelectionFragment(edit.element, valueRef.current, {
+        container: currentRange.startContainer,
+        offset: currentRange.startOffset,
+      }, {
+        container: currentRange.endContainer,
+        offset: currentRange.endOffset,
+      }) : null;
+      if (fragment && fragment.selectionFrom !== fragment.selectionTo) {
+        const directInsert = resolved.source === "plain" ? escapePlainTextForMarkdown(plainText) : plainText;
+        const change: WysiwygTextChange = {
+          from: fragment.range.from + fragment.selectionFrom,
+          to: fragment.range.from + fragment.selectionTo,
+          insert: edit.element.matches("th, td") ? directInsert.replace(/\n+/g, " ") : directInsert,
+          expectedText: valueRef.current,
+        };
+        // Applying the CodeMirror transaction can synchronously flush a React
+        // render and blur the contentEditable node. Detach the direct session
+        // before dispatch so that blur cannot serialize stale DOM over the new
+        // canonical Markdown.
+        const pendingDirectEdit = directEditRef.current;
+        directEditRef.current = null;
+        const next = onApplyTextChange(change);
+        if (next !== null) {
+          valueRef.current = next;
+          edit.expectedText = next;
+          edit.range = { from: edit.range.from, to: edit.range.to + change.insert.length - (change.to - change.from) };
+          edit.originalSource = next.slice(edit.range.from, edit.range.to);
+          mapRenderedSourceRanges(contentRef.current, { from: change.from, to: change.to }, change.insert.length);
+          if (resolved.warnings.length > 0) onStatus?.(resolved.warnings.join(" "));
+          // The canonical document is already committed. Do not serialize the stale
+          // pre-paste DOM again during blur or block switching; let the next render
+          // project the committed Markdown and start a fresh edit session.
+          edit.element.contentEditable = "false";
+          edit.element.classList.remove("wysiwyg-direct-edit");
+          directEditRef.current = null;
+          activeBlockRef.current = null;
+          setActiveEditKind(null);
+          setTableEditContext(null);
+          setListEditContext(null);
+          window.requestAnimationFrame(renderHtml);
+          return;
+        }
+        directEditRef.current = pendingDirectEdit;
+      }
+    }
+    const fallbackInsert = resolved.source === "plain" ? escapePlainTextForMarkdown(plainText) : plainText;
+    document.execCommand("insertText", false, edit.element.matches("th, td") ? fallbackInsert.replace(/\n+/g, " ") : fallbackInsert);
+    if (resolved.warnings.length > 0) onStatus?.(resolved.warnings.join(" "));
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -1695,13 +1923,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
   };
 
   return (
-    <div className="markdown-preview wysiwyg-editor" ref={containerRef} style={{ fontFamily }} onErrorCapture={onErrorCapture} onLoadCapture={onLoadCapture} onDropCapture={handleDrop} onDragOverCapture={(event) => {
+    <div className={`markdown-preview wysiwyg-editor${wechatThemeDefinition ? " wechat-theme-active" : ""}`} ref={containerRef} style={{ fontFamily, fontSize: `${previewFontSize}px` } as CSSProperties} onErrorCapture={onErrorCapture} onLoadCapture={onLoadCapture} onDropCapture={handleDrop} onDragOverCapture={(event) => {
       if ([...event.dataTransfer.items].some((item) => item.kind === "file")) {
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
       }
       if (updateBlockDropTarget(event)) return;
     }}>
+      {wechatThemeDefinition && <style>{buildWechatThemeProjectionCss(wechatThemeDefinition)}</style>}
       <div className="wysiwyg-toolbar" role="toolbar" aria-label="所见即所得格式工具栏" onMouseDown={(event) => event.preventDefault()}>
         <button type="button" title="粗体（Ctrl+B）" onClick={() => runCommand("bold")}><strong>B</strong></button>
         <button type="button" title="斜体（Ctrl+I）" onClick={() => runCommand("italic")}><em>I</em></button>
@@ -1955,6 +2184,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       <article
         className="preview-content wysiwyg-content"
         ref={contentRef}
+        style={{ "--reading-max-width": readingMaxWidth } as CSSProperties}
         tabIndex={0}
         onPointerDown={(event: PointerEvent<HTMLElement>) => {
           const target = event.target;
@@ -2002,6 +2232,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           if (directEditRef.current && !isComposingRef.current) onStatus?.("正在编辑；离开当前块时写回 Markdown。");
         }}
         onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) literalPasteUntilRef.current = 0;
           const edit = directEditRef.current;
           if (!edit || edit.element.contains(event.relatedTarget as Node | null)) return;
           if (isComposingRef.current) {
@@ -2010,23 +2241,29 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           }
           if (finishDirectEdit()) window.requestAnimationFrame(renderHtml);
         }}
+        onContextMenu={() => { literalPasteUntilRef.current = 0; }}
         onPaste={handlePaste}
         onCopy={(event) => {
-          const edit = directEditRef.current;
-          const selection = window.getSelection();
-          if (!edit || !selection || selection.isCollapsed || selectionBelongsTo(edit.element)) return;
+          const markdown = selectionClipboardMarkdown();
+          if (!markdown) return;
           event.preventDefault();
-          event.clipboardData.setData("text/plain", selection.toString().replace(/\r\n?/g, "\n"));
-          onStatus?.("已复制跨块纯文本；不会复制编辑器内部 DOM。");
+          writeClipboardPayload(event, markdown);
+          onStatus?.("已复制安全 Markdown；不会复制编辑器内部 DOM。");
         }}
         onCut={(event) => {
-          const edit = directEditRef.current;
           const selection = window.getSelection();
-          if (!edit || !selection || selection.isCollapsed || selectionBelongsTo(edit.element)) return;
+          const markdown = selectionClipboardMarkdown();
+          if (!selection || selection.isCollapsed || !markdown) return;
           event.preventDefault();
-          const selectedText = selection.toString().replace(/\r\n?/g, "\n");
-          if (replaceCurrentCrossBlockSelection("", "已剪切跨块选择；可用一次撤销恢复。")) {
-            event.clipboardData.setData("text/plain", selectedText);
+          writeClipboardPayload(event, markdown);
+          const edit = directEditRef.current;
+          if (edit && !selectionBelongsTo(edit.element)) {
+            replaceCurrentCrossBlockSelection("", "已剪切跨块选择；可用一次撤销恢复。");
+            return;
+          }
+          if (edit && !selectionIntersectsInlineAtom(edit.element)) {
+            document.execCommand("delete");
+            if (finishDirectEdit()) window.requestAnimationFrame(renderHtml);
           }
         }}
         data-document-length={value.length}

@@ -3,6 +3,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  type CSSProperties,
   type ReactEventHandler,
 } from "react";
 import {
@@ -14,6 +15,7 @@ import {
   type PreviewSourceAnchor,
 } from "./preview-sync";
 import { renderMermaidPreview } from "./mermaid-preview";
+import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
 
 interface SynchronizedPreviewProps {
   html: string;
@@ -21,7 +23,10 @@ interface SynchronizedPreviewProps {
   active: boolean;
   identityKey: string | null;
   fontFamily: string;
+  readingMaxWidth?: string;
+  previewFontSize?: number;
   darkMode: boolean;
+  onStatus?: (message: string) => void;
   onMermaidRender?: (result: { rendered: number; failed: number; limited: number }) => void;
   onErrorCapture?: ReactEventHandler<HTMLDivElement>;
   onLoadCapture?: ReactEventHandler<HTMLDivElement>;
@@ -31,6 +36,9 @@ export interface SynchronizedPreviewHandle {
   updateViewportAnchor(anchor: EditorViewportAnchor): void;
   updateSelection(selection: EditorSourceSelection | null): void;
   clearTransientState(): void;
+  revealSourceRange(from: number, to: number): boolean;
+  find(query: string, direction?: number, previousIndex?: number): SearchNavigationResult;
+  clearSearch(): void;
 }
 
 interface PreviewDomAnchor extends PreviewSourceAnchor {
@@ -66,7 +74,7 @@ function minimalDomAnchors(anchors: PreviewDomAnchor[]): PreviewDomAnchor[] {
 }
 
 export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, SynchronizedPreviewProps>(function SynchronizedPreview(
-  { html, enabled, active, identityKey, fontFamily, darkMode, onMermaidRender, onErrorCapture, onLoadCapture },
+  { html, enabled, active, identityKey, fontFamily, readingMaxWidth = "820px", previewFontSize = 14, darkMode, onMermaidRender, onStatus, onErrorCapture, onLoadCapture },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -163,6 +171,24 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
       scheduleUpdate(false);
     },
     clearTransientState,
+    revealSourceRange(from, to) {
+      const container = containerRef.current;
+      const content = contentRef.current;
+      if (!container || !content || !interactionReadyRef.current || to <= from) return false;
+      const anchor = collectPreviewAnchors(container, content)
+        .filter((candidate) => candidate.sourceFrom <= from && candidate.sourceTo >= to)
+        .sort((left, right) => (left.sourceTo - left.sourceFrom) - (right.sourceTo - right.sourceFrom))[0];
+      if (!anchor) return false;
+      anchor.element.scrollIntoView({ block: "center", behavior: "smooth" });
+      return true;
+    },
+    find(query, direction = 1, previousIndex = -1) {
+      const content = contentRef.current;
+      return content ? applyVisibleTextSearch(content, query, direction, previousIndex) : { index: 0, total: 0 };
+    },
+    clearSearch() {
+      clearVisibleTextSearch();
+    },
   }));
 
   useEffect(() => {
@@ -195,6 +221,53 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
 
   useEffect(() => {
     const content = contentRef.current;
+    if (!content) return;
+    const decorate = () => {
+      content.querySelectorAll<HTMLElement>(".preview-code-toolbar").forEach((item) => item.remove());
+      content.querySelectorAll<HTMLElement>("pre > code").forEach((code) => {
+        const pre = code.parentElement;
+        if (!pre || pre.closest(".mermaid-diagram")) return;
+        pre.classList.add("preview-code-block");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "preview-code-toolbar";
+        const language = code.className.match(/language-([\w-]+)/i)?.[1];
+        button.textContent = "复制";
+        button.ariaLabel = language ? `复制 ${language} 代码块` : "复制代码块";
+        button.title = button.ariaLabel;
+        button.addEventListener("click", async () => {
+          const text = (code.textContent ?? "").replace(/\r\n?/g, "\n");
+          try {
+            if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+            await navigator.clipboard.writeText(text);
+          } catch {
+            const textarea = document.createElement("textarea");
+            textarea.value = text;
+            textarea.style.position = "fixed";
+            textarea.style.opacity = "0";
+            document.body.append(textarea);
+            textarea.select();
+            const copied = document.execCommand("copy");
+            textarea.remove();
+            if (!copied) {
+              onStatus?.("代码复制失败，请选中代码后复制。");
+              return;
+            }
+          }
+          button.textContent = "已复制";
+          onStatus?.("代码块已复制到系统剪贴板。");
+          window.setTimeout(() => { if (button.isConnected) button.textContent = "复制"; }, 1200);
+        });
+        pre.append(button);
+      });
+    };
+    decorate();
+    const timer = window.setTimeout(decorate, 0);
+    return () => window.clearTimeout(timer);
+  }, [html, darkMode, fontFamily, onStatus]);
+
+  useEffect(() => {
+    const content = contentRef.current;
     if (!content || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => scheduleUpdate(true));
     observer.observe(content);
@@ -207,11 +280,11 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
     <div
       className="markdown-preview"
       ref={containerRef}
-      style={{ fontFamily }}
+      style={{ fontFamily, fontSize: `${previewFontSize}px` } as CSSProperties}
       onErrorCapture={onErrorCapture}
       onLoadCapture={onLoadCapture}
     >
-      <article className="preview-content" ref={contentRef} dangerouslySetInnerHTML={{ __html: html }} />
+      <article className="preview-content" ref={contentRef} style={{ "--reading-max-width": readingMaxWidth } as CSSProperties} dangerouslySetInnerHTML={{ __html: html }} />
       <div className="preview-selection-layer" ref={overlayRef} data-box-count="0" aria-hidden="true" />
     </div>
   );

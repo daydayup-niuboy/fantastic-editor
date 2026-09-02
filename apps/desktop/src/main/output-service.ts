@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Diagnostic, DocumentNode } from "@fantastic-editor/document-core";
-import { FANTASTIC_EDITOR_LIMITS, WECHAT_THEME_OPTIONS } from "@fantastic-editor/shared";
+import { FANTASTIC_EDITOR_LIMITS, resolveOfficialWechatTheme, type ResolvedWechatTheme, type WechatThemeId } from "@fantastic-editor/shared";
 import type {
   ApproveOmissions,
   BeginOutputRequest,
@@ -12,7 +12,6 @@ import type {
   OutputResult,
   ResolutionSnapshot,
   WechatReplacementItem,
-  WechatThemeId,
 } from "@fantastic-editor/shared";
 import type { SingleFileResolutionContext } from "./file-sessions.js";
 import type { OutputFormulaAsset } from "./docx-adapter.js";
@@ -74,7 +73,7 @@ export interface WechatAcceptanceSummary {
   documentId: string;
   sourceHash: string;
   status: Extract<OutputResult["status"], "completed" | "completed-with-omissions">;
-  themeId: WechatThemeId;
+  themeId: string;
   replacementItems: WechatReplacementItem[];
   omittedReferenceKeys: string[];
 }
@@ -137,13 +136,6 @@ function normalizeOutputFont(value: unknown): string {
   return font && font.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(font) ? font : "Microsoft YaHei UI";
 }
 
-const WECHAT_THEME_IDS = new Set<string>(WECHAT_THEME_OPTIONS.map((theme) => theme.id));
-
-function normalizeWechatThemeId(value: unknown): WechatThemeId | null {
-  if (value === undefined) return "wechat-native-enhanced";
-  return typeof value === "string" && WECHAT_THEME_IDS.has(value) ? value as WechatThemeId : null;
-}
-
 function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   const seen = new Set<string>();
   return groups.flat().filter((item) => {
@@ -166,6 +158,7 @@ export class OutputService {
   readonly #mermaidRenderer: MermaidRenderer | undefined;
   readonly #pdfRenderer: PdfRenderer | undefined;
   readonly #saveOutput: (suggestedName: string, bytes: Uint8Array, target: BeginOutputRequest["target"]) => Promise<SaveOutputResult>;
+  readonly #resolveWechatTheme: ((themeId: string, workspaceRoot: string | null) => Promise<ResolvedWechatTheme>) | undefined;
 
   constructor(
     handles: AssetHandleRegistry,
@@ -175,6 +168,7 @@ export class OutputService {
     formulaRenderer?: FormulaRenderer,
     pdfRenderer?: PdfRenderer,
     mermaidRenderer?: MermaidRenderer,
+    resolveWechatThemeForOutput?: (themeId: string, workspaceRoot: string | null) => Promise<ResolvedWechatTheme>,
   ) {
     this.#handles = handles;
     this.#svgTransformer = svgTransformer;
@@ -183,6 +177,7 @@ export class OutputService {
     this.#formulaRenderer = formulaRenderer;
     this.#mermaidRenderer = mermaidRenderer;
     this.#pdfRenderer = pdfRenderer;
+    this.#resolveWechatTheme = resolveWechatThemeForOutput;
   }
 
   getWechatReplacement(jobId: string, itemId: string): { bytes: Uint8Array; mimeType: string } | undefined {
@@ -231,7 +226,17 @@ export class OutputService {
     context: SingleFileResolutionContext | undefined,
     isCurrent: () => boolean,
   ): Promise<OutputCommandResult> {
-    const wechatThemeId = normalizeWechatThemeId(request.wechatThemeId);
+    const requestedWechatThemeId = request.wechatThemeId ?? "wechat-native-enhanced";
+    let resolvedWechatTheme: ResolvedWechatTheme | undefined;
+    if (request.target === "wechat-html" || request.target === "wechat-clipboard") {
+      try {
+        resolvedWechatTheme = this.#resolveWechatTheme
+          ? await this.#resolveWechatTheme(String(requestedWechatThemeId), context?.authorizationRootRealPath ?? null)
+          : (() => { const definition = resolveOfficialWechatTheme(String(requestedWechatThemeId)); return { id: definition.id, baseThemeId: definition.baseThemeId, tokens: { ...definition.tokens }, definition, source: "official" as const, name: definition.id }; })();
+      } catch (error) {
+        return { status: "failed", error: error instanceof Error ? error.message : "公众号主题解析失败。" };
+      }
+    }
     if (
       (request.target !== "offline-html" && request.target !== "docx" && request.target !== "pdf" && request.target !== "wechat-html" && request.target !== "wechat-clipboard")
       || !context
@@ -242,7 +247,7 @@ export class OutputService {
       || request.workspaceRevision !== context.workspaceRevision
       || request.parsedDocument.sourceLength > FANTASTIC_EDITOR_LIMITS.maxSourceCharacters
       || request.parsedDocument.resourceReferences.length > FANTASTIC_EDITOR_LIMITS.maxResourceReferences
-      || ((request.target === "wechat-html" || request.target === "wechat-clipboard") && wechatThemeId === null)
+      || ((request.target === "wechat-html" || request.target === "wechat-clipboard") && !resolvedWechatTheme)
     ) return { status: "failed", error: "导出请求无效、已过期或目标尚未实现。" };
     const snapshot = this.#snapshots.get(request.parseCommitId);
     if (!snapshot || snapshot.documentId !== request.documentId || snapshot.sourceHash !== request.sourceHash || snapshot.workspaceRevision !== request.workspaceRevision) {
@@ -306,7 +311,9 @@ export class OutputService {
         diagnostics: mergeDiagnostics(snapshot.diagnostics, collected.diagnostics, formulaCollection.diagnostics, mermaidCollection.diagnostics),
       },
       derivedAssetManifest,
-      theme: { id: request.target === "wechat-html" || request.target === "wechat-clipboard" ? wechatThemeId! : "user-preview", tokens: { "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } },
+      theme: request.target === "wechat-html" || request.target === "wechat-clipboard"
+        ? { id: resolvedWechatTheme!.id, baseThemeId: resolvedWechatTheme!.baseThemeId, definition: resolvedWechatTheme!.definition, tokens: { ...resolvedWechatTheme!.tokens, "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } }
+        : { id: "user-preview", tokens: { "typography.body.fontFamily": normalizeOutputFont(request.fontFamily), "colorScheme": request.darkMode === true ? "dark" : "light" } },
       locale: "zh-CN",
       options: {},
     };

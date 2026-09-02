@@ -14,6 +14,7 @@ const docxPath = resolve(artifactRoot, "fixed-export.docx");
 const htmlPath = resolve(artifactRoot, "fixed-export.html");
 const uiScreenshotPath = resolve(smokeRoot, "fantastic-editor-ui-smoke.png");
 
+await rm(smokeRoot, { recursive: true, force: true });
 await mkdir(artifactRoot, { recursive: true });
 const executableStat = await stat(executable);
 if (!executableStat.isFile() || executableStat.size < 20 * 1024 * 1024) {

@@ -69,6 +69,22 @@ describe("FileSessionManager", () => {
     expect(manager.getActiveResolutionContext()?.documentId).toBe(second.session!.documentId);
   });
 
+  it("renames a separately opened Markdown file without widening its directory grant", async () => {
+    const directory = await createTemporaryDirectory();
+    const path = join(directory, "article.md");
+    await writeFile(path, "# Article\n", "utf8");
+    const manager = new FileSessionManager();
+    const opened = await manager.openPath(path);
+    if (opened.status !== "opened" || !opened.session) throw new Error("Expected opened session.");
+
+    const renamed = await manager.renameOpenFile({ sessionId: opened.session.sessionId, newName: "renamed" });
+
+    expect(renamed).toMatchObject({ status: "renamed", displayName: "renamed.md" });
+    expect(await readFile(join(directory, "renamed.md"), "utf8")).toBe("# Article\n");
+    expect(manager.getResolutionContext(opened.session.documentId)?.documentRealPath).toBe(resolve(directory, "renamed.md"));
+    expect((await manager.renameOpenFile({ sessionId: opened.session.sessionId, newName: "outside.txt" })).status).toBe("failed");
+  });
+
   it("creates an untitled session, requires Save As, and removes its isolated temporary root", async () => {
     const directory = await createTemporaryDirectory();
     const manager = new FileSessionManager();

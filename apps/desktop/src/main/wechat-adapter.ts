@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { renderParsedDocumentHtml, type Diagnostic, type DocumentNode, type ParsedDocument } from "@fantastic-editor/document-core";
-import { applyWechatThemeToFragment, resolveWechatTheme, type OutputContext, type OutputResultStatus, type WechatReplacementItem } from "@fantastic-editor/shared";
+import { compileWechatPublishHtml, resolveWechatTheme, type OutputContext, type OutputResultStatus, type WechatReplacementItem } from "@fantastic-editor/shared";
 import { formulaReferenceKey, type OutputFormulaAsset } from "./docx-adapter.js";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
 import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
@@ -192,8 +192,8 @@ export function generateWechatHtml(
     },
   });
   const selectedFont = typeof context.theme.tokens["typography.body.fontFamily"] === "string" ? String(context.theme.tokens["typography.body.fontFamily"]).replace(/[";{}<>]/g, "") : "Microsoft YaHei";
-  const selectedTheme = resolveWechatTheme(context.theme.id);
-  const html = `<section style="${selectedTheme.wrapperStyle}font-family:&quot;${escapeHtml(selectedFont)}&quot;,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">${applyWechatThemeToFragment(stripUnsupportedPresentationAttributes(fragment), selectedTheme.id)}</section>`;
+  const selectedTheme = context.theme.definition ?? resolveWechatTheme(context.theme.id);
+  const html = compileWechatPublishHtml({ fragment: stripUnsupportedPresentationAttributes(fragment), definition: selectedTheme, wrapperFontFromContext: selectedFont });
   const securityIssues = auditWechatHtmlMarkup(html);
   if (securityIssues.length > 0) {
     diagnostics.push(diagnostic(context, "WECHAT_HTML_SECURITY_AUDIT_FAILED", `公众号富文本安全审计失败（${securityIssues.join("、")}），未写入剪贴板。`));

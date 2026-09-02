@@ -145,9 +145,9 @@ describe("generateWechatHtml", () => {
     expect(outputs[2]!.html).toContain("line-height:1.82");
   });
 
-  it("falls back from legacy or unknown internal theme ids without accepting arbitrary styles", () => {
+  it("accepts the read-time legacy alias but rejects arbitrary theme ids", () => {
     expect(resolveWechatTheme("wechat-green").id).toBe("wechat-native-enhanced");
-    expect(resolveWechatTheme("<style>body{display:none}</style>").id).toBe("wechat-native-enhanced");
+    expect(() => resolveWechatTheme("<style>body{display:none}</style>")).toThrowError(/未知公众号主题/);
   });
 
   it("does not treat forbidden-protocol words in article text as live resource addresses", async () => {

@@ -1,11 +1,11 @@
-import { WECHAT_THEME_OPTIONS, type OutputResultStatus, type WechatAcceptanceConfirmation, type WechatReplacementItem, type WechatThemeId } from "@fantastic-editor/shared";
+import { WECHAT_THEME_OPTIONS, type OutputResultStatus, type WechatAcceptanceConfirmation, type WechatReplacementItem } from "@fantastic-editor/shared";
 
 export interface WechatAcceptanceReportInput {
   jobId: string;
   documentId: string;
   sourceHash: string;
   status: Extract<OutputResultStatus, "completed" | "completed-with-omissions">;
-  themeId: WechatThemeId;
+  themeId: string;
   replacementItems: readonly WechatReplacementItem[];
   omittedReferenceKeys: readonly string[];
   confirmation: WechatAcceptanceConfirmation;

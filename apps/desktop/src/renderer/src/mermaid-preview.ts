@@ -3,6 +3,7 @@ import mermaid from "mermaid";
 const MAX_PREVIEW_DIAGRAMS = 100;
 const MAX_DIAGRAM_SOURCE_LENGTH = 100_000;
 let renderSequence = 0;
+let renderQueue: Promise<void> = Promise.resolve();
 
 export interface MermaidPreviewOptions {
   darkMode: boolean;
@@ -22,7 +23,7 @@ function copySourceIdentity(source: HTMLElement, target: HTMLElement): void {
   }
 }
 
-export async function renderMermaidPreview(
+async function renderMermaidPreviewNow(
   content: HTMLElement,
   options: MermaidPreviewOptions,
 ): Promise<MermaidPreviewResult> {
@@ -87,5 +88,14 @@ export async function renderMermaidPreview(
     }
   }
   return { rendered, failed, limited };
+}
+
+export function renderMermaidPreview(
+  content: HTMLElement,
+  options: MermaidPreviewOptions,
+): Promise<MermaidPreviewResult> {
+  const result = renderQueue.then(() => renderMermaidPreviewNow(content, options));
+  renderQueue = result.then(() => undefined, () => undefined);
+  return result;
 }
 

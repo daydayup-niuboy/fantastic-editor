@@ -85,4 +85,36 @@ describe("FileSessionManager folder workspace", () => {
     expect(saved.status).toBe("saved");
     expect(await readFile(join(root, "notes", "second.markdown"), "utf8")).toBe("# Changed\r\n");
   });
+
+  it("renames a Markdown file inside the workspace and updates its open session", async () => {
+    const root = await workspaceFixture();
+    const manager = new FileSessionManager();
+    const opened = await manager.openFolder(root);
+    if (opened.status !== "opened" || !opened.workspace) throw new Error("missing workspace");
+    const file = opened.workspace.files.find((item) => item.relativePath === "notes/second.markdown");
+    if (!file) throw new Error("missing workspace file");
+    const selected = await manager.openWorkspaceFile({
+      workspaceId: opened.workspace.workspaceId,
+      workspaceRevision: opened.workspace.workspaceRevision,
+      fileId: file.fileId,
+    });
+    if (selected.status !== "opened" || !selected.session) throw new Error("missing session");
+
+    const renamed = await manager.renameWorkspaceFile({
+      workspaceId: opened.workspace.workspaceId,
+      workspaceRevision: opened.workspace.workspaceRevision,
+      fileId: file.fileId,
+      newName: "renamed.md",
+    });
+
+    expect(renamed).toMatchObject({ status: "renamed", file: { relativePath: "notes/renamed.md", displayName: "notes/renamed.md" } });
+    expect(await readFile(join(root, "notes", "renamed.md"), "utf8")).toBe("# Second\r\n");
+    expect(manager.getResolutionContext(selected.session.documentId)?.documentRealPath).toBe(await realpath(join(root, "notes", "renamed.md")));
+    expect((await manager.renameWorkspaceFile({
+      workspaceId: opened.workspace.workspaceId,
+      workspaceRevision: opened.workspace.workspaceRevision,
+      fileId: file.fileId,
+      newName: "renamed.txt",
+    }))).toMatchObject({ status: "failed" });
+  });
 });

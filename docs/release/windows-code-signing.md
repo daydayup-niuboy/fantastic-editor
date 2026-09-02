@@ -43,7 +43,7 @@ npm run dist:signed
 
 ## 公益免费项目的未签名发布
 
-- fantastic-editor 当前暂不采购商业代码签名证书，证书费用不作为 `0.3.0-rc.1` 完成条件。
+- fantastic-editor 当前暂不采购商业代码签名证书，证书费用不作为 `0.3.0-rc.2` 完成条件。
 - 未签名安装版和便携版可以公开发布，但 Release、README 和 release manifest 必须明确写出 `NotSigned`，同时提供官方来源和 SHA-256 校验值，并提示 Windows 可能显示“未知发布者”或 SmartScreen 警告。
 - 不生成自签名公开包，也不把 PE 证书表存在性描述为受信任签名。现有签名脚本保留，未来获得受信任证书或符合条件的免费开源签名服务后再启用。
 

@@ -1,6 +1,6 @@
 {
   "name": "fantastic-editor",
-  "version": "0.3.0-rc.1",
+  "version": "0.3.0-rc.2",
   "private": true,
   "type": "module",
   "description": "Local-first Markdown editor for Windows",
@@ -59,6 +59,10 @@
     "appId": "com.fantastic.editor",
     "productName": "fantastic-editor",
     "asar": true,
+    "fileAssociations": [
+      { "ext": "md", "name": "Markdown document", "role": "Editor" },
+      { "ext": "markdown", "name": "Markdown document", "role": "Editor" }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"

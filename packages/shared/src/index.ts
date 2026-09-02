@@ -1,54 +1,56 @@
 import type { Diagnostic, ParsedDocument, ResourceReference } from "@fantastic-editor/document-core";
-export { WECHAT_THEME_OPTIONS, applyWechatThemeToFragment, resolveWechatTheme } from "./wechat-themes.js";
-export type { WechatThemeDefinition, WechatThemeId } from "./wechat-themes.js";
-import type { WechatThemeId } from "./wechat-themes.js";
-
-export const IPC_CHANNELS = {
-  openMarkdownFile: "file:open-markdown",
-  listRecentFiles: "file:list-recent",
-  openRecentFile: "file:open-recent",
-  createUntitledFile: "file:create-untitled",
-  openDroppedMarkdownFile: "file:open-dropped-markdown",
-  activateFileSession: "file:activate-session",
-  closeFileSession: "file:close-session",
-  persistRecoverySession: "recovery:persist-session",
-  restoreRecoverySession: "recovery:restore-session",
-  openWorkspaceFolder: "workspace:open-folder",
-  openWorkspaceFile: "workspace:open-file",
-  saveCurrentFile: "file:save-current",
-  saveCurrentFileAs: "file:save-current-as",
-  selectAndImportImages: "image:select-and-import",
-  importDroppedImages: "image:import-dropped",
-  commitParse: "document:commit-parse",
-  resolveResources: "resource:resolve",
-  previewDerivedUpdate: "preview:derived-update",
-  beginOutput: "output:begin",
-  approveOutputOmissions: "output:approve-omissions",
-  cancelOutput: "output:cancel",
-  copyWechatReplacement: "output:wechat-copy-replacement",
-  createWechatDraft: "output:wechat-create-draft",
-  publishWechatArticle: "output:wechat-publish-article",
-  getWechatApiConfig: "config:wechat-api-get",
-  testWechatApiConnection: "config:wechat-api-test-connection",
-  saveWechatApiConfig: "config:wechat-api-save",
-  selectWechatCover: "config:wechat-cover-select",
-  clearWechatApiConfig: "config:wechat-api-clear",
-  saveWechatAcceptanceReport: "output:wechat-save-acceptance-report",
-} as const;
+export { FANTASTIC_EDITOR_LIMITS, IPC_CHANNELS } from "./runtime.js";
+export {
+  OFFICIAL_WECHAT_THEME_IDS,
+  WECHAT_CUSTOM_THEME_ID_RE,
+  WECHAT_THEME_OPTIONS,
+  OFFICIAL_THEME_TOKENS,
+  applyOfficialWechatThemeToFragment,
+  applyWechatThemeToFragment,
+  buildDeepBlueTechRecipe,
+  buildMinimalInkRecipe,
+  buildWechatNativeEnhancedRecipe,
+  buildWechatThemeDefinition,
+  canonicalWechatThemeIdentity,
+  canonicalWechatThemeJson,
+  normalizeOfficialWechatThemeId,
+  normalizeWechatThemeTokens,
+  resolveOfficialWechatTheme,
+  resolveWechatTheme,
+  validateWechatThemeName,
+  WechatThemeError,
+} from "./wechat-themes.js";
+export type {
+  OfficialWechatThemeId,
+  LegacyWechatThemeAlias,
+  WechatThemeDefinition,
+  WechatThemeErrorCode,
+  WechatThemeId,
+  WechatThemeListItem,
+  WechatThemeOverlayFile,
+  WechatThemeOverlayInput,
+  WechatThemeOverlayPatch,
+  WechatThemeRecipe,
+  WechatThemeStyleTag,
+  WechatThemeTokens,
+  ResolvedWechatTheme,
+} from "./wechat-themes.js";
+export { compileWechatPublishHtml, normalizeWechatHtmlMarkup } from "./wechat-theme-compiler.js";
+export type { CompileWechatPublishHtmlInput } from "./wechat-theme-compiler.js";
+import type {
+  ResolvedWechatTheme,
+  WechatThemeDefinition,
+  WechatThemeId,
+  WechatThemeListItem,
+  WechatThemeOverlayFile,
+  WechatThemeOverlayInput,
+} from "./wechat-themes.js";
+export { auditGeneratedHtmlMarkup, auditWechatHtmlMarkup } from "@fantastic-editor/document-core";
+export type { GeneratedHtmlSecurityIssue } from "@fantastic-editor/document-core";
 
 export type LineSeparator = "lf" | "crlf" | "mixed";
 export type TextEncoding = "utf-8" | "utf-8-bom";
 export type WorkspaceMode = "single-file" | "folder-workspace";
-
-export const FANTASTIC_EDITOR_LIMITS = Object.freeze({
-  maxSourceCharacters: 10_000_000,
-  maxMarkdownFileBytes: 40 * 1024 * 1024,
-  maxResourceReferences: 10_000,
-  maxSingleResourceBytes: 50 * 1024 * 1024,
-  maxUniqueResolutionBytes: 200 * 1024 * 1024,
-  maxFormulaRendersPerOutput: 500,
-  maxMermaidRendersPerOutput: 100,
-});
 
 export interface FileFingerprint {
   byteLength: number;
@@ -93,6 +95,17 @@ export type RecentFilesResult =
 
 export interface OpenRecentFileRequest { recentId: string; }
 
+export interface ExternalMarkdownOpenRequest {
+  requestId: string;
+  displayName: string;
+}
+
+export interface ExternalMarkdownOpenResult {
+  status: "opened" | "cancelled" | "failed";
+  session?: OpenFileResult["session"];
+  error?: string;
+}
+
 export type FileSessionCommandResult =
   | { status: "activated" | "closed" }
   | { status: "failed"; error: string };
@@ -132,6 +145,26 @@ export interface OpenWorkspaceFileRequest {
   workspaceRevision: number;
   fileId: string;
 }
+
+export interface RenameWorkspaceFileRequest {
+  workspaceId: string;
+  workspaceRevision: number;
+  fileId: string;
+  newName: string;
+}
+
+export type RenameWorkspaceFileResult =
+  | { status: "renamed"; workspaceRevision: number; file: WorkspaceFileEntry }
+  | { status: "failed"; error: string };
+
+export interface RenameOpenFileRequest {
+  sessionId: string;
+  newName: string;
+}
+
+export type RenameOpenFileResult =
+  | { status: "renamed"; displayName: string; workspaceRevision: number; file?: WorkspaceFileEntry }
+  | { status: "failed"; error: string };
 
 export interface SaveFileRequest {
   sessionId: string;
@@ -350,6 +383,8 @@ export interface DerivedAssetManifest {
 export interface OutputTheme {
   id: string;
   tokens: Record<string, string | number>;
+  baseThemeId?: string;
+  definition?: WechatThemeDefinition;
 }
 
 export interface OutputPreflightContext {
@@ -492,6 +527,54 @@ export type SaveWechatAcceptanceReportResult =
   | { status: "saved"; displayName: string }
   | { status: "cancelled" }
   | { status: "failed"; error: string };
+
+export interface ListWechatThemesRequest { documentId: string; }
+export type ListWechatThemesResult =
+  | { status: "listed"; themes: WechatThemeListItem[] }
+  | { status: "failed"; error: string };
+
+export interface ResolveWechatThemeForPreviewRequest {
+  documentId: string;
+  themeId: string;
+}
+export type ResolveWechatThemeForPreviewResult =
+  | { status: "resolved"; theme: ResolvedWechatTheme }
+  | { status: "failed"; error: string };
+
+export interface SaveWechatThemeAsCustomRequest {
+  documentId: string;
+  input: WechatThemeOverlayInput;
+}
+export type SaveWechatThemeAsCustomResult =
+  | { status: "saved"; theme: ResolvedWechatTheme }
+  | { status: "failed"; error: string };
+
+export interface DeleteWechatThemeRequest {
+  documentId: string;
+  themeId: string;
+  currentThemeId?: string;
+}
+export type DeleteWechatThemeResult =
+  | { status: "deleted" }
+  | { status: "failed"; error: string };
+
+export interface ExportWechatThemeRequest {
+  documentId: string;
+  themeId: string;
+}
+export type ExportWechatThemeResult =
+  | { status: "exported"; file: WechatThemeOverlayFile }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
+
+export interface ImportWechatThemeRequest {
+  documentId: string;
+  storage?: "workspace" | "global";
+}
+export type ImportWechatThemeResult =
+  | { status: "imported"; theme: ResolvedWechatTheme }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };
 export interface OutputTiming {
   startedAt: string;
   completedAt: string;
@@ -567,12 +650,17 @@ export interface FantasticEditorApi {
   openRecentFile(request: OpenRecentFileRequest): Promise<OpenFileResult>;
   createUntitledFile(): Promise<OpenFileResult>;
   openDroppedMarkdownFile(file: unknown): Promise<OpenFileResult>;
+  listExternalOpenRequests(): Promise<ExternalMarkdownOpenRequest[]>;
+  openExternalFile(request: { requestId: string }): Promise<OpenFileResult>;
+  discardExternalOpenRequest(request: { requestId: string }): Promise<{ status: "discarded" | "missing" }>;
   activateFileSession(request: FileSessionRequest): Promise<FileSessionCommandResult>;
   closeFileSession(request: FileSessionRequest): Promise<FileSessionCommandResult>;
   persistRecoverySession(request: PersistRecoveryRequest): Promise<PersistRecoveryResult>;
   restoreRecoverySession(): Promise<RestoreRecoveryResult>;
   openWorkspaceFolder(): Promise<OpenFolderResult>;
   openWorkspaceFile(request: OpenWorkspaceFileRequest): Promise<OpenFileResult>;
+  renameWorkspaceFile(request: RenameWorkspaceFileRequest): Promise<RenameWorkspaceFileResult>;
+  renameOpenFile(request: RenameOpenFileRequest): Promise<RenameOpenFileResult>;
   saveCurrentFile(request: SaveFileRequest): Promise<SaveFileResult>;
   saveCurrentFileAs(request: SaveFileRequest): Promise<SaveFileResult>;
   selectAndImportImages(request: ImageImportSessionRequest): Promise<ImportImagesResult>;
@@ -592,4 +680,10 @@ export interface FantasticEditorApi {
   selectWechatCover(): Promise<SelectWechatCoverResult>;
   clearWechatApiConfig(): Promise<ClearWechatApiConfigResult>;
   saveWechatAcceptanceReport(request: SaveWechatAcceptanceReportRequest): Promise<SaveWechatAcceptanceReportResult>;
+  listWechatThemes(request: ListWechatThemesRequest): Promise<ListWechatThemesResult>;
+  resolveWechatThemeForPreview(request: ResolveWechatThemeForPreviewRequest): Promise<ResolveWechatThemeForPreviewResult>;
+  saveWechatThemeAsCustom(request: SaveWechatThemeAsCustomRequest): Promise<SaveWechatThemeAsCustomResult>;
+  deleteWechatTheme(request: DeleteWechatThemeRequest): Promise<DeleteWechatThemeResult>;
+  exportWechatTheme(request: ExportWechatThemeRequest): Promise<ExportWechatThemeResult>;
+  importWechatTheme(request: ImportWechatThemeRequest): Promise<ImportWechatThemeResult>;
 }

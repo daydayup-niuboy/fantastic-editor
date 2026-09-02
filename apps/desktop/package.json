@@ -1,6 +1,6 @@
 {
   "name": "@fantastic-editor/desktop",
-  "version": "0.3.0-rc.1",
+  "version": "0.3.0-rc.2",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -14,6 +14,7 @@
     "@codemirror/commands": "^6.10.2",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.12.1",
+    "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.39.16",
     "@fantastic-editor/document-core": "*",

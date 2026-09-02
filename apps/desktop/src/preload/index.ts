@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { FANTASTIC_EDITOR_LIMITS, IPC_CHANNELS } from "../../../../packages/shared/src/index";
+import { FANTASTIC_EDITOR_LIMITS, IPC_CHANNELS } from "../../../../packages/shared/src/runtime";
 import type {
   ApproveOmissions,
   BeginOutputRequest,
@@ -8,6 +8,8 @@ import type {
   CreateWechatDraftRequest,
   PublishWechatArticleRequest,
   OpenWorkspaceFileRequest,
+  RenameWorkspaceFileRequest,
+  RenameOpenFileRequest,
   OpenRecentFileRequest,
   FantasticEditorApi,
   FileSessionRequest,
@@ -20,6 +22,12 @@ import type {
   SaveFileRequest,
   SaveWechatApiConfigRequest,
   SaveWechatAcceptanceReportRequest,
+  ListWechatThemesRequest,
+  ResolveWechatThemeForPreviewRequest,
+  SaveWechatThemeAsCustomRequest,
+  DeleteWechatThemeRequest,
+  ExportWechatThemeRequest,
+  ImportWechatThemeRequest,
 } from "@fantastic-editor/shared";
 
 const api: FantasticEditorApi = {
@@ -36,12 +44,17 @@ const api: FantasticEditorApi = {
       return Promise.resolve({ status: "failed" as const, error: "拖入对象不是有效的本地文件。" });
     }
   },
+  listExternalOpenRequests: () => ipcRenderer.invoke(IPC_CHANNELS.listExternalOpenRequests),
+  openExternalFile: (request: { requestId: string }) => ipcRenderer.invoke(IPC_CHANNELS.openExternalFile, request),
+  discardExternalOpenRequest: (request: { requestId: string }) => ipcRenderer.invoke(IPC_CHANNELS.discardExternalOpenRequest, request),
   activateFileSession: (request: FileSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.activateFileSession, request),
   closeFileSession: (request: FileSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.closeFileSession, request),
   persistRecoverySession: (request: PersistRecoveryRequest) => ipcRenderer.invoke(IPC_CHANNELS.persistRecoverySession, request),
   restoreRecoverySession: () => ipcRenderer.invoke(IPC_CHANNELS.restoreRecoverySession),
   openWorkspaceFolder: () => ipcRenderer.invoke(IPC_CHANNELS.openWorkspaceFolder),
   openWorkspaceFile: (request: OpenWorkspaceFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.openWorkspaceFile, request),
+  renameWorkspaceFile: (request: RenameWorkspaceFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.renameWorkspaceFile, request),
+  renameOpenFile: (request: RenameOpenFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.renameOpenFile, request),
   saveCurrentFile: (request: SaveFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveCurrentFile, request),
   saveCurrentFileAs: (request: SaveFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveCurrentFileAs, request),
   selectAndImportImages: (request: ImageImportSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.selectAndImportImages, request),
@@ -91,6 +104,12 @@ const api: FantasticEditorApi = {
   selectWechatCover: () => ipcRenderer.invoke(IPC_CHANNELS.selectWechatCover),
   clearWechatApiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearWechatApiConfig),
   saveWechatAcceptanceReport: (request: SaveWechatAcceptanceReportRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveWechatAcceptanceReport, request),
+  listWechatThemes: (request: ListWechatThemesRequest) => ipcRenderer.invoke(IPC_CHANNELS.listWechatThemes, request),
+  resolveWechatThemeForPreview: (request: ResolveWechatThemeForPreviewRequest) => ipcRenderer.invoke(IPC_CHANNELS.resolveWechatThemeForPreview, request),
+  saveWechatThemeAsCustom: (request: SaveWechatThemeAsCustomRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveWechatThemeAsCustom, request),
+  deleteWechatTheme: (request: DeleteWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.deleteWechatTheme, request),
+  exportWechatTheme: (request: ExportWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.exportWechatTheme, request),
+  importWechatTheme: (request: ImportWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.importWechatTheme, request),
 };
 
 contextBridge.exposeInMainWorld("fantasticEditor", Object.freeze(api));

@@ -41,7 +41,7 @@ async function fixture(): Promise<{ context: OutputContext; asset: OutputMermaid
       workspaceRevision: 1,
       entries: {},
     },
-    theme: { id: "user-preview", tokens: { "typography.body.fontFamily": "KaiTi" } },
+    theme: { id: "wechat-native-enhanced", tokens: { "typography.body.fontFamily": "KaiTi" } },
     locale: "zh-CN",
     approvedOmittedReferenceKeys: [],
     options: {},

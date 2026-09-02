@@ -12,24 +12,47 @@ export interface WechatMobileAuditIssue {
 function elementLabel(element: HTMLElement): string {
   const tag = element.tagName.toLowerCase();
   const text = (element.getAttribute("alt") || element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 32);
+  if (element.matches(".preview-formula-inline,.preview-formula-block")) return text ? `公式：${text}` : "公式";
   return text ? `${tag}：${text}` : tag;
+}
+
+export interface WechatOverflowCandidate {
+  element: HTMLElement;
+  overflowPixels: number;
+  locallyScrollable: boolean;
+}
+
+export function actionableOverflowCandidates(candidates: readonly WechatOverflowCandidate[]): WechatOverflowCandidate[] {
+  return candidates.filter((candidate) => {
+    const scrollOwner = candidates.find((other) => other !== candidate && other.locallyScrollable && other.element.contains(candidate.element));
+    if (scrollOwner) return false;
+    if (candidate.locallyScrollable) return true;
+    return !candidates.some((other) => other !== candidate && candidate.element.contains(other.element));
+  });
 }
 
 export function auditWechatMobileLayout(root: HTMLElement): WechatMobileAuditIssue[] {
   const issues: WechatMobileAuditIssue[] = [];
   const rootWidth = root.clientWidth;
   if (rootWidth <= 0) return issues;
-  for (const element of root.querySelectorAll<HTMLElement>("section,h1,h2,h3,h4,h5,h6,p,blockquote,ul,ol,pre,code,table,img,svg,a")) {
+  const elements = [...root.querySelectorAll<HTMLElement>("section,h1,h2,h3,h4,h5,h6,p,blockquote,ul,ol,pre,code,table,img,svg,a,.preview-formula-inline,.preview-formula-block")];
+  const overflowCandidates: WechatOverflowCandidate[] = [];
+  for (const element of elements) {
     const overflowPixels = Math.ceil(element.scrollWidth - Math.min(element.clientWidth || rootWidth, rootWidth));
     if (overflowPixels > 2) {
       const overflowX = getComputedStyle(element).overflowX;
-      issues.push({
-        severity: overflowX === "auto" || overflowX === "scroll" ? "notice" : "warning",
-        kind: "horizontal-overflow",
-        label: elementLabel(element),
-        overflowPixels,
-      });
+      overflowCandidates.push({ element, overflowPixels, locallyScrollable: overflowX === "auto" || overflowX === "scroll" });
     }
+  }
+  for (const candidate of actionableOverflowCandidates(overflowCandidates)) {
+    issues.push({
+      severity: candidate.locallyScrollable ? "notice" : "warning",
+      kind: "horizontal-overflow",
+      label: elementLabel(candidate.element),
+      overflowPixels: candidate.overflowPixels,
+    });
+  }
+  for (const element of elements) {
     const fontSize = Number.parseFloat(getComputedStyle(element).fontSize);
     if (Number.isFinite(fontSize) && fontSize > 0 && fontSize < 12) {
       issues.push({ severity: "notice", kind: "tiny-text", label: elementLabel(element) });

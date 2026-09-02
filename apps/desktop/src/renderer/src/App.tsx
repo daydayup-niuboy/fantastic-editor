@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from "react";
-import { WECHAT_THEME_OPTIONS, type OpenFileResult, type OpenFolderResult, type OutputCommandResult, type PersistRecoveryRequest, type PreviewDerivedUpdate, type PreviewSession, type RecentFileEntry, type WechatApiConfigSummary, type WechatReplacementItem, type WechatThemeId, type WorkspaceFileEntry } from "@fantastic-editor/shared";
+import { OFFICIAL_WECHAT_THEME_IDS, WECHAT_CUSTOM_THEME_ID_RE, WECHAT_THEME_OPTIONS, resolveOfficialWechatTheme, type OpenFileResult, type OpenFolderResult, type OutputCommandResult, type PersistRecoveryRequest, type PreviewDerivedUpdate, type PreviewSession, type RecentFileEntry, type ResolvedWechatTheme, type WechatApiConfigSummary, type WechatReplacementItem, type WechatThemeId, type WechatThemeListItem, type WechatThemeOverlayInput, type WorkspaceFileEntry } from "@fantastic-editor/shared";
 import { Icon } from "./Icon";
 import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { SynchronizedPreview, type SynchronizedPreviewHandle } from "./SynchronizedPreview";
@@ -7,7 +7,7 @@ import { applyResolutionToPreviewHtml } from "./preview-assets";
 import { applyPreviewDerivedUpdate, createPreviewSession } from "./preview-session";
 import { ParseWorkerClient } from "./workers/parse-worker-client";
 import { WelcomeScreen } from "./WelcomeScreen";
-import { DEFAULT_PREVIEW_FONT, PREVIEW_FONT_PRESETS, normalizePreviewFontName, previewFontStack } from "./preview-font";
+import { DEFAULT_PREVIEW_FONT, PREVIEW_FONT_PRESETS, DEFAULT_PREVIEW_FONT_SIZE, DEFAULT_READING_WIDTH, READING_WIDTH_OPTIONS, commitPreviewFontDraft, normalizePreviewFontName, normalizePreviewFontSize, normalizeReadingWidth, previewFontStack, readingWidthMaxWidth, type ReadingWidth } from "./preview-font";
 import { WysiwygEditor, type WysiwygEditorHandle } from "./WysiwygEditor";
 import { computeWechatAcceptanceGates, createEmptyWechatAcceptance, updateWechatAcceptance, type WechatAcceptanceProgress } from "./wechat-acceptance";
 import { WechatThemePreview } from "./WechatThemePreview";
@@ -15,6 +15,10 @@ import { WechatApiConfigDialog } from "./WechatApiConfigDialog";
 import { clampSplitRatio, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, splitRatioForKey } from "./accessibility";
 import { adjacentTabIndex, moveTabIndexForKey, moveTabItem, tabIndexForNavigationKey } from "./tab-navigation";
 import { createDocumentPerformanceSnapshot, documentPerformanceDescription, documentPerformanceLabel, type DocumentPerformanceSnapshot } from "./document-performance";
+import { extractDocumentOutline, type OutlineEntry } from "./document-outline";
+import { DocumentOutline } from "./DocumentOutline";
+import { clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
+import { repairWebMarkdown } from "./web-markdown-repair";
 
 interface ActiveDocument {
   sessionId: string;
@@ -30,6 +34,10 @@ interface ActiveDocument {
 interface DocumentTab extends ActiveDocument {
   draft: string;
 }
+
+type RenameTarget =
+  | { kind: "open"; sessionId: string }
+  | { kind: "workspace"; workspaceId: string; fileId: string };
 
 type ActiveWorkspace = NonNullable<OpenFolderResult["workspace"]>;
 
@@ -58,6 +66,7 @@ export function App() {
   const wysiwygEditorRef = useRef<WysiwygEditorHandle | null>(null);
   const synchronizedPreviewRef = useRef<SynchronizedPreviewHandle | null>(null);
   const exportMenuSummaryRef = useRef<HTMLElement | null>(null);
+  const wechatThemeButtonRef = useRef<HTMLButtonElement | null>(null);
   const draggedTabSessionIdRef = useRef<string | null>(null);
   const imageImportBusyRef = useRef(false);
   const activeDocumentIdRef = useRef<string | null>(null);
@@ -90,11 +99,34 @@ export function App() {
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem("fantastic-editor-theme") === "dark");
   const [syncScrollEnabled, setSyncScrollEnabled] = useState(() => window.localStorage.getItem("fantastic-editor-sync-scroll") === "true");
   const [previewFontName, setPreviewFontName] = useState(() => normalizePreviewFontName(window.localStorage.getItem("fantastic-editor-preview-font") ?? DEFAULT_PREVIEW_FONT));
+  const [previewFontDraft, setPreviewFontDraft] = useState(previewFontName);
+  const [readingWidth, setReadingWidth] = useState<ReadingWidth>(() => normalizeReadingWidth(window.localStorage.getItem("fantastic-editor-reading-width") ?? DEFAULT_READING_WIDTH));
+  const [previewFontSize, setPreviewFontSize] = useState(() => normalizePreviewFontSize(window.localStorage.getItem("fantastic-editor-preview-font-size") ?? DEFAULT_PREVIEW_FONT_SIZE));
+  const [outlineDocument, setOutlineDocument] = useState<PreviewSession["parsedDocument"] | null>(null);
+  const [expandedOutlineSessionId, setExpandedOutlineSessionId] = useState<string | null>(null);
+  const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "outline">("explorer");
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const [searchResult, setSearchResult] = useState<SearchNavigationResult>({ index: 0, total: 0 });
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const searchIndexRef = useRef(-1);
   const [wechatThemeId, setWechatThemeId] = useState<WechatThemeId>(() => {
     const stored = window.localStorage.getItem("fantastic-editor-wechat-theme");
-    return WECHAT_THEME_OPTIONS.some((theme) => theme.id === stored) ? stored as WechatThemeId : "wechat-native-enhanced";
+    return stored && ((OFFICIAL_WECHAT_THEME_IDS as readonly string[]).includes(stored) || WECHAT_CUSTOM_THEME_ID_RE.test(stored)) ? stored as WechatThemeId : "wechat-native-enhanced";
   });
+  const [wechatThemes, setWechatThemes] = useState<WechatThemeListItem[]>(() => WECHAT_THEME_OPTIONS.map((theme) => ({ id: theme.id, name: theme.name, baseThemeId: theme.id, source: "official" })));
+  const [wechatThemeResolved, setWechatThemeResolved] = useState<ResolvedWechatTheme>(() => {
+    const definition = resolveOfficialWechatTheme("wechat-native-enhanced");
+    return { id: definition.id, name: "微信原生增强", source: "official", baseThemeId: definition.baseThemeId, tokens: { ...definition.tokens }, definition };
+  });
+  const [wechatThemeSaveOpen, setWechatThemeSaveOpen] = useState(false);
   const [wechatThemePreviewOpen, setWechatThemePreviewOpen] = useState(false);
+  const [wechatThemeInWysiwyg, setWechatThemeInWysiwyg] = useState(() => window.localStorage.getItem("fantastic-editor-wechat-theme-wysiwyg") === "true");
   const [wechatApiConfig, setWechatApiConfig] = useState<WechatApiConfigSummary>(EMPTY_WECHAT_API_CONFIG);
   const [wechatApiConfigOpen, setWechatApiConfigOpen] = useState(false);
   const [wechatDraftFeedback, setWechatDraftFeedback] = useState<{ kind: "working" | "success" | "error"; message: string } | null>(null);
@@ -141,6 +173,99 @@ export function App() {
 
   useEffect(() => { refreshRecentFiles(); }, [refreshRecentFiles]);
   useEffect(() => { refreshWechatApiConfig(); }, [refreshWechatApiConfig]);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void window.fantasticEditor.listWechatThemes({ documentId: active.documentId }).then((result) => {
+      if (cancelled) return;
+      if (result.status === "listed") {
+        setWechatThemes(result.themes);
+        if (!result.themes.some((theme) => theme.id === wechatThemeId)) {
+          setWechatThemeId("wechat-native-enhanced");
+        }
+      } else {
+        setStatus(result.error);
+      }
+    }).catch((error: unknown) => { if (!cancelled) setStatus(error instanceof Error ? error.message : "读取公众号主题失败。"); });
+    return () => { cancelled = true; };
+  }, [active?.documentId]);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void window.fantasticEditor.resolveWechatThemeForPreview({ documentId: active.documentId, themeId: wechatThemeId }).then((result) => {
+      if (cancelled) return;
+      if (result.status === "resolved") setWechatThemeResolved(result.theme);
+      else setStatus(result.error);
+    }).catch((error: unknown) => { if (!cancelled) setStatus(error instanceof Error ? error.message : "解析公众号主题失败。"); });
+    return () => { cancelled = true; };
+  }, [active?.documentId, wechatThemeId]);
+
+  const saveWechatThemeAsCustom = useCallback(async (input: WechatThemeOverlayInput) => {
+    if (!active) return false;
+    setWechatThemeSaveOpen(true);
+    try {
+      const result = await window.fantasticEditor.saveWechatThemeAsCustom({
+        documentId: active.documentId,
+        input,
+      });
+      if (result.status === "saved") {
+        setWechatThemeResolved(result.theme);
+        setWechatThemeId(result.theme.id as WechatThemeId);
+        const listed = await window.fantasticEditor.listWechatThemes({ documentId: active.documentId });
+        if (listed.status === "listed") setWechatThemes(listed.themes);
+        setStatus(`已保存自定义主题“${result.theme.name}”。`);
+        return true;
+      }
+      setStatus(result.error);
+      return false;
+    } catch (error: unknown) {
+      setStatus(error instanceof Error ? error.message : "保存自定义主题失败。");
+      return false;
+    } finally {
+      setWechatThemeSaveOpen(false);
+    }
+  }, [active]);
+
+  const deleteWechatTheme = useCallback(async (themeId: string): Promise<boolean> => {
+    if (!active) return false;
+    const target = wechatThemes.find((theme) => theme.id === themeId);
+    if (!target || target.source === "official") return false;
+    const nextThemeId = themeId === wechatThemeId ? target.baseThemeId : wechatThemeId;
+    try {
+      const result = await window.fantasticEditor.deleteWechatTheme({ documentId: active.documentId, themeId, currentThemeId: nextThemeId });
+      if (result.status !== "deleted") {
+        setStatus(result.error);
+        return false;
+      }
+      setWechatThemes((current) => current.filter((theme) => theme.id !== themeId));
+      if (themeId === wechatThemeId) setWechatThemeId(target.baseThemeId);
+      setStatus(themeId === wechatThemeId ? `自定义主题已删除，已切回“${WECHAT_THEME_OPTIONS.find((theme) => theme.id === target.baseThemeId)?.name ?? target.baseThemeId}”。` : "自定义主题已删除。");
+      return true;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "删除自定义主题失败。");
+      return false;
+    }
+  }, [active, wechatThemeId, wechatThemes]);
+
+  const exportWechatTheme = useCallback(async () => {
+    if (!active || wechatThemeResolved.source === "official") return;
+    const result = await window.fantasticEditor.exportWechatTheme({ documentId: active.documentId, themeId: wechatThemeResolved.id });
+    if (result.status === "exported") setStatus(`已导出自定义主题“${result.file.name}”。`);
+    else if (result.status === "failed") setStatus(result.error);
+  }, [active, wechatThemeResolved]);
+
+  const importWechatTheme = useCallback(async (storage: "workspace" | "global") => {
+    if (!active) return;
+    const result = await window.fantasticEditor.importWechatTheme({ documentId: active.documentId, storage });
+    if (result.status === "imported") {
+      setWechatThemeResolved(result.theme);
+      setWechatThemeId(result.theme.id as WechatThemeId);
+      const listed = await window.fantasticEditor.listWechatThemes({ documentId: active.documentId });
+      if (listed.status === "listed") setWechatThemes(listed.themes);
+      setStatus(`已导入并选中自定义主题“${result.theme.name}”。`);
+    } else if (result.status === "failed") setStatus(result.error);
+  }, [active]);
   const applyDraftChange = useCallback((value: string) => {
     draftRef.current = value;
     setOutputReady(false);
@@ -192,11 +317,19 @@ export function App() {
 
   useEffect(() => {
     window.localStorage.setItem("fantastic-editor-preview-font", previewFontName);
+    setPreviewFontDraft(previewFontName);
   }, [previewFontName]);
+
+  useEffect(() => { window.localStorage.setItem("fantastic-editor-reading-width", readingWidth); }, [readingWidth]);
+  useEffect(() => { window.localStorage.setItem("fantastic-editor-preview-font-size", String(previewFontSize)); }, [previewFontSize]);
 
   useEffect(() => {
     window.localStorage.setItem("fantastic-editor-wechat-theme", wechatThemeId);
   }, [wechatThemeId]);
+
+  useEffect(() => {
+    window.localStorage.setItem("fantastic-editor-wechat-theme-wysiwyg", String(wechatThemeInWysiwyg));
+  }, [wechatThemeInWysiwyg]);
 
   useEffect(() => {
     const acceptDerivedUpdate = (update: PreviewDerivedUpdate): boolean => {
@@ -276,6 +409,7 @@ export function App() {
             pendingDerivedUpdateRef.current = null;
           }
           previewSessionRef.current = session;
+          setOutlineDocument(session.parsedDocument);
           setOutputReady(true);
           setPreviewRetryAvailable(false);
           setPreviewHtml(applyResolutionToPreviewHtml(response.previewHtml, session));
@@ -326,6 +460,8 @@ export function App() {
     setPreviewRetryAvailable(false);
     setPreviewSyncIdentity(null);
     setPreviewHtmlReady(false);
+    setOutlineDocument(null);
+    searchIndexRef.current = -1;
     synchronizedPreviewRef.current?.clearTransientState();
     parseWorkerRef.current?.invalidate();
     const parseDelayMs = draft.length >= 1_000_000 ? 500 : draft.length >= 250_000 ? 300 : 180;
@@ -360,6 +496,7 @@ export function App() {
     if (!cached) updateTabs((current) => [...current, { ...nextActive, draft: result.session!.editorText }]);
     activeDocumentIdRef.current = nextActive.documentId;
     previewSessionRef.current = null;
+    setOutlineDocument(null);
     setOutputReady(false);
     setWechatReplacements(null);
     setCopiedReplacementIds(new Set());
@@ -403,6 +540,10 @@ export function App() {
     file: WorkspaceFileEntry,
     confirmDirty = true,
   ) => {
+    if (active?.workspaceFileId === file.fileId && active.sessionId) {
+      setExpandedOutlineSessionId((current) => current === active.sessionId ? null : active.sessionId);
+      return;
+    }
     if (confirmDirty && dirty && !window.confirm("当前修改尚未保存，仍要切换文件吗？")) return;
     const result = await window.fantasticEditor.openWorkspaceFile({
       workspaceId: targetWorkspace.workspaceId,
@@ -412,9 +553,103 @@ export function App() {
     if (result.status === "opened") {
       updateTabs(() => []);
       setActive(null);
+      setExpandedOutlineSessionId(result.session?.sessionId ?? null);
     }
     acceptOpenedFile(result, file.fileId);
-  }, [acceptOpenedFile, dirty, updateTabs]);
+  }, [acceptOpenedFile, active?.sessionId, active?.workspaceFileId, dirty, updateTabs]);
+
+  const renameWorkspaceFile = useCallback(async (targetWorkspace: ActiveWorkspace, file: WorkspaceFileEntry, newName: string) => {
+    const result = await window.fantasticEditor.renameWorkspaceFile({
+      workspaceId: targetWorkspace.workspaceId,
+      workspaceRevision: targetWorkspace.workspaceRevision,
+      fileId: file.fileId,
+      newName,
+    });
+    if (result.status !== "renamed") {
+      setStatus(result.error);
+      return;
+    }
+    setWorkspace((current) => current && current.workspaceId === targetWorkspace.workspaceId
+      ? { ...current, workspaceRevision: result.workspaceRevision, files: current.files.map((item) => item.fileId === result.file.fileId ? result.file : item) }
+      : current);
+    updateTabs((current) => current.map((tab) => tab.workspaceFileId === result.file.fileId
+      ? { ...tab, displayName: result.file.displayName, workspaceRevision: result.workspaceRevision }
+      : tab));
+    setActive((current) => current && current.workspaceFileId === result.file.fileId
+      ? { ...current, displayName: result.file.displayName, workspaceRevision: result.workspaceRevision }
+      : current);
+    setStatus(`已重命名为 ${result.file.displayName}`);
+  }, [updateTabs]);
+
+  const renameOpenFile = useCallback(async (tab: DocumentTab, newName: string) => {
+    if (tab.isUntitled) {
+      setStatus("未命名文档请先保存，再右键重命名。");
+      return;
+    }
+    const result = await window.fantasticEditor.renameOpenFile({ sessionId: tab.sessionId, newName });
+    if (result.status !== "renamed") {
+      setStatus(result.error);
+      return;
+    }
+    updateTabs((current) => current.map((item) => item.sessionId === tab.sessionId
+      ? { ...item, displayName: result.displayName, workspaceRevision: result.workspaceRevision }
+      : item));
+    setActive((current) => current?.sessionId === tab.sessionId
+      ? { ...current, displayName: result.displayName, workspaceRevision: result.workspaceRevision }
+      : current);
+    if (result.file) {
+      setWorkspace((current) => current
+        ? { ...current, workspaceRevision: result.workspaceRevision, files: current.files.map((item) => item.fileId === result.file!.fileId ? result.file! : item) }
+        : current);
+    }
+    setStatus(`已重命名为 ${result.displayName}`);
+  }, [updateTabs]);
+
+  const beginRenameOpenFile = useCallback((tab: DocumentTab) => {
+    if (tab.isUntitled) {
+      setStatus("未命名文档请先保存，再右键重命名。");
+      return;
+    }
+    setRenameTarget({ kind: "open", sessionId: tab.sessionId });
+    setRenameValue(tab.displayName);
+  }, []);
+
+  const beginRenameWorkspaceFile = useCallback((targetWorkspace: ActiveWorkspace, file: WorkspaceFileEntry) => {
+    setRenameTarget({ kind: "workspace", workspaceId: targetWorkspace.workspaceId, fileId: file.fileId });
+    setRenameValue(file.relativePath.split("/").at(-1) ?? file.displayName);
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setRenameTarget(null);
+    setRenameValue("");
+  }, []);
+
+  const submitRename = useCallback(async () => {
+    const target = renameTarget;
+    const value = renameValue;
+    if (!target) return;
+    if (!value.trim()) {
+      setStatus("文件名不能为空。");
+      renameInputRef.current?.focus();
+      return;
+    }
+    cancelRename();
+    if (target.kind === "open") {
+      const tab = tabsRef.current.find((item) => item.sessionId === target.sessionId);
+      if (tab) await renameOpenFile(tab, value);
+      return;
+    }
+    const targetWorkspace = workspace && workspace.workspaceId === target.workspaceId ? workspace : null;
+    const file = targetWorkspace?.files.find((item) => item.fileId === target.fileId);
+    if (targetWorkspace && file) await renameWorkspaceFile(targetWorkspace, file, value);
+  }, [cancelRename, renameOpenFile, renameTarget, renameValue, renameWorkspaceFile, workspace]);
+
+  useEffect(() => {
+    if (renameTarget) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renameTarget]);
 
   const openFolder = useCallback(async () => {
     await waitForRecoveryReady();
@@ -449,6 +684,34 @@ export function App() {
     if (!committed) setStatus("所见即所得修改基于旧文档版本，未执行保存或切换。");
     return committed;
   }, [editorMode]);
+
+  const repairCurrentWebMarkdown = useCallback(() => {
+    if (!active) {
+      setStatus("请先新建或打开一个 Markdown 文件。");
+      return;
+    }
+    if (!commitPendingEditor()) return;
+    const source = draftRef.current;
+    const repaired = repairWebMarkdown(source);
+    if (!repaired.changed) {
+      setStatus("未检测到可安全修复的网页 Markdown 结构。");
+      return;
+    }
+    const summary = [
+      `结构标记 ${repaired.repairedMarkers} 处`,
+      `成对行内格式 ${repaired.repairedInlinePairs} 处`,
+      `多余空行 ${repaired.removedBlankLines} 处`,
+      `表格断行 ${repaired.repairedTableGaps} 处`,
+    ].join("、");
+    if (!window.confirm(`检测到网页复制产生的 Markdown 转义。\n\n将修复：${summary}。\n代码块内部、路径和普通反斜杠不会改动。是否继续？`)) return;
+    const next = markdownEditorRef.current?.applyTextChange({
+      from: 0,
+      to: source.length,
+      insert: repaired.markdown,
+      expectedText: source,
+    }) ?? null;
+    setStatus(next === null ? "网页 Markdown 修复未执行：文档版本已经变化。" : `网页 Markdown 已修复：${summary}；可用一次撤销恢复。`);
+  }, [active, commitPendingEditor]);
 
   const saveAs = useCallback(async (): Promise<ActiveDocument | null> => {
     if (!active) { setStatus("请先新建或打开一个 Markdown 文件"); return null; }
@@ -832,6 +1095,29 @@ export function App() {
     }, recoveryDelayMs);
     return () => window.clearTimeout(timer);
   }, [active?.sessionId, queueRecoverySnapshot, recoveryReady, tabs]);
+
+  useEffect(() => {
+    if (!recoveryReady) return;
+    let cancelled = false;
+    void window.fantasticEditor.listExternalOpenRequests().then(async (requests) => {
+      for (const request of requests) {
+        if (cancelled) return;
+        if (dirty && !window.confirm(`当前文档尚未保存，仍要打开“${request.displayName}”吗？`)) {
+          await window.fantasticEditor.discardExternalOpenRequest({ requestId: request.requestId });
+          continue;
+        }
+        const result = await window.fantasticEditor.openExternalFile({ requestId: request.requestId });
+        if (cancelled) return;
+        if (result.status === "opened") {
+          setWorkspace(null);
+          acceptOpenedFile(result);
+        } else if (result.status === "failed") setStatus(result.error ?? `打开 ${request.displayName} 失败。`);
+      }
+    }).catch((error: unknown) => {
+      if (!cancelled) setStatus(error instanceof Error ? `外部 Markdown 打开失败：${error.message}` : "外部 Markdown 打开失败。");
+    });
+    return () => { cancelled = true; };
+  }, [acceptOpenedFile, dirty, recoveryReady]);
   useEffect(() => {
     if (!recoveryReady) return;
     const flushRecovery = () => {
@@ -851,6 +1137,14 @@ export function App() {
     presentTab(tab);
     setStatus(`已切换到 ${tab.displayName}`);
   }, [active?.sessionId, commitPendingEditor, presentTab]);
+
+  const toggleOutlineForTab = useCallback(async (tab: DocumentTab) => {
+    if (active?.sessionId !== tab.sessionId) {
+      await activateTab(tab);
+      if (activeDocumentIdRef.current !== tab.documentId) return;
+    }
+    setExpandedOutlineSessionId((current) => current === tab.sessionId ? null : tab.sessionId);
+  }, [activateTab, active?.sessionId]);
 
   const closeTab = useCallback(async (tab: DocumentTab) => {
     if (active?.sessionId === tab.sessionId && !commitPendingEditor()) return;
@@ -1019,10 +1313,54 @@ export function App() {
     setEditorMode(nextMode);
   }, [commitPendingEditor, editorMode, viewMode]);
 
+  const clearSearch = useCallback(() => {
+    markdownEditorRef.current?.clearSearch?.();
+    wysiwygEditorRef.current?.clearSearch?.();
+    synchronizedPreviewRef.current?.clearSearch?.();
+    clearVisibleTextSearch();
+    searchIndexRef.current = -1;
+    setSearchResult({ index: 0, total: 0 });
+  }, []);
+
+  const findInCurrentView = useCallback((direction = 1) => {
+    const query = searchQuery.trim();
+    if (!query) { clearSearch(); return; }
+    const result = viewMode === "preview"
+      ? synchronizedPreviewRef.current?.find(query, direction, searchIndexRef.current)
+      : editorMode === "wysiwyg"
+        ? wysiwygEditorRef.current?.find(query, direction, searchIndexRef.current)
+        : markdownEditorRef.current?.find(query, direction, searchIndexRef.current);
+    const normalized = result ?? { index: 0, total: 0 };
+    searchIndexRef.current = normalized.index > 0 ? normalized.index - 1 : -1;
+    setSearchResult(normalized);
+  }, [clearSearch, editorMode, searchQuery, viewMode]);
+
+  const revealOutlineEntry = useCallback((entry: OutlineEntry) => {
+    const revealed = viewMode === "preview"
+      ? synchronizedPreviewRef.current?.revealSourceRange(entry.from, entry.to)
+      : editorMode === "wysiwyg"
+        ? wysiwygEditorRef.current?.revealSourceRange(entry.from, entry.to)
+        : markdownEditorRef.current?.revealSourceRange(entry.from, entry.to);
+    setStatus(revealed ? `已跳转到 ${entry.label}` : "当前视图尚未完成渲染，暂时无法跳转。请稍候再试。");
+  }, [editorMode, viewMode]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && searchOpen) {
+        event.preventDefault();
+        setSearchOpen(false);
+        clearSearch();
+        return;
+      }
       if (!event.ctrlKey) return;
       if (wechatThemePreviewOpen) return;
+      if (event.key.toLowerCase() === "f" || event.key.toLowerCase() === "h") {
+        event.preventDefault();
+        setSearchOpen(true);
+        setSearchReplaceOpen(event.key.toLowerCase() === "h");
+        window.requestAnimationFrame(() => searchInputRef.current?.focus());
+        return;
+      }
       if (event.key === "Tab") {
         const currentIndex = tabsRef.current.findIndex((tab) => tab.sessionId === active?.sessionId);
         const nextIndex = adjacentTabIndex(tabsRef.current.length, currentIndex, event.shiftKey ? -1 : 1);
@@ -1055,7 +1393,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activateTabAtIndex, active, closeTab, commitPendingEditor, editorMode, newFile, openFile, save, saveAs, wechatThemePreviewOpen]);
+  }, [activateTabAtIndex, active, clearSearch, closeTab, commitPendingEditor, editorMode, newFile, openFile, save, saveAs, searchOpen, wechatThemePreviewOpen]);
 
   const handlePreviewImageError = useCallback((event: SyntheticEvent<HTMLElement>) => {
     const image = event.target;
@@ -1110,8 +1448,15 @@ export function App() {
 
   const closeWechatThemePreview = useCallback(() => {
     setWechatThemePreviewOpen(false);
-    window.requestAnimationFrame(() => exportMenuSummaryRef.current?.focus());
+    window.requestAnimationFrame(() => wechatThemeButtonRef.current?.focus());
   }, []);
+
+  const applyPreviewFontDraft = useCallback((value: string) => {
+    const next = commitPreviewFontDraft(value, previewFontName);
+    setPreviewFontDraft(next);
+    setPreviewFontName(next);
+    setStatus(`正文字体已切换为 ${next}。`);
+  }, [previewFontName]);
 
   const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const next = splitRatioForKey(splitRatio, event.key, event.shiftKey);
@@ -1125,6 +1470,7 @@ export function App() {
 
   return (
     <main className={`app-shell${darkMode ? " theme-dark" : ""}${dragActive ? " drag-active" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragActive(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }} onDrop={(event) => void handleDrop(event)}>
+      <datalist id="preview-font-presets">{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font} />)}</datalist>
       <header className="app-header">
         <div className="brand-lockup"><span className="brand-symbol">f</span><span className="brand-name">fantastic<span>editor</span></span></div>
         <div className="header-file-actions">
@@ -1143,10 +1489,13 @@ export function App() {
             <span className="wechat-header-dot" />
             <span>{wechatApiConfig.configured ? "公众号设置" : "公众号设置 · 待配置"}</span>
           </button>
+          <button ref={wechatThemeButtonRef} type="button" className="header-nav-button wechat-layout-entry" disabled={!active || wechatThemeSaveOpen} title="选择公众号主题并查看手机宽度质量审计" onClick={() => setWechatThemePreviewOpen(true)}><Icon name="eye" size={14} /><span>公众号排版</span></button>
+          <button type="button" className="header-nav-button" disabled={!active} title="修复网页复制产生的标题、列表、代码围栏、成对格式和表格断行" onClick={repairCurrentWebMarkdown}><Icon name="markdown" size={14} /><span>修复网页 Markdown</span></button>
+          <button type="button" className="header-nav-button" disabled={!active} onClick={() => { setSearchOpen(true); setSearchReplaceOpen(false); window.requestAnimationFrame(() => searchInputRef.current?.focus()); }}><Icon name="search" size={14} /><span>查找/替换</span></button>
           <div className="view-switcher" role="group" aria-label="视图模式">
             <button type="button" className={viewMode === "editor" ? "active" : ""} disabled={!active} aria-label="仅编辑" aria-pressed={viewMode === "editor"} title="仅编辑" onClick={() => setViewMode("editor")}><Icon name="markdown" /></button>
             <button type="button" className={viewMode === "split" ? "active" : ""} disabled={!active || editorMode === "wysiwyg"} aria-label="分栏" aria-pressed={viewMode === "split"} title={editorMode === "wysiwyg" ? "所见即所得模式已包含渲染效果" : "编辑与预览"} onClick={() => setViewMode("split")}><Icon name="columns" /></button>
-            <button type="button" className={viewMode === "preview" ? "active" : ""} disabled={!active || editorMode === "wysiwyg"} aria-label="仅预览" aria-pressed={viewMode === "preview"} title={editorMode === "wysiwyg" ? "所见即所得模式就是可编辑预览" : "仅预览"} onClick={() => setViewMode("preview")}><Icon name="eye" /></button>
+            <button type="button" className={viewMode === "preview" ? "active" : ""} disabled={!active} aria-label="仅预览" aria-pressed={viewMode === "preview"} title="查看最终只读渲染" onClick={() => { if (editorMode === "wysiwyg" && !commitPendingEditor()) return; setViewMode("preview"); }}><Icon name="eye" /></button>
           </div>
           <details className={`export-menu${!active || !outputReady || outputBusy ? " disabled" : ""}`}>
             <summary
@@ -1164,15 +1513,7 @@ export function App() {
               <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("docx"); }}><span className="format-badge word">W</span><span><strong>导出 Word</strong><small>生成可继续编辑的 DOCX</small></span></button>
               <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("offline-html"); }}><span className="format-badge html">&lt;/&gt;</span><span><strong>离线 HTML</strong><small>图片与公式完全自包含</small></span></button>
               <div className="menu-separator" />
-              <label className="wechat-theme-control">
-                <span>公众号正文主题</span>
-                <select value={wechatThemeId} onChange={(event) => setWechatThemeId(event.target.value as WechatThemeId)} aria-label="公众号正文主题">
-                  {WECHAT_THEME_OPTIONS.map((theme) => <option key={theme.id} value={theme.id}>{theme.name}</option>)}
-                </select>
-                <small>{WECHAT_THEME_OPTIONS.find((theme) => theme.id === wechatThemeId)?.description}</small>
-              </label>
-              <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; setWechatThemePreviewOpen(true); }}><span className="format-badge mobile">预</span><span><strong>主题与手机预览</strong><small>320–414px 宽度审计</small></span></button>
-              <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("wechat-clipboard"); }}><span className="format-badge wechat">微</span><span><strong>复制到公众号</strong><small>内联样式与图片替换助手</small></span></button>
+              <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("wechat-clipboard"); }}><span className="format-badge wechat">微</span><span><strong>复制到公众号</strong><small>使用主界面当前选定的公众号主题</small></span></button>
             </div>
           </details>
           <button type="button" className="icon-button theme-toggle" aria-label={darkMode ? "切换浅色主题" : "切换深色主题"} title={darkMode ? "浅色主题" : "深色主题"} onClick={() => setDarkMode((value) => !value)}><Icon name={darkMode ? "sun" : "moon"} /></button>
@@ -1181,12 +1522,13 @@ export function App() {
 
       <div className="workbench">
         <aside className="activity-bar" aria-label="主导航">
-          <button type="button" className={sidebarVisible ? "active" : ""} aria-label="切换资源管理器" title="资源管理器" onClick={() => setSidebarVisible((value) => !value)}><Icon name="panelLeft" /></button>
+          <button type="button" className={sidebarVisible && sidebarPanel === "explorer" ? "active" : ""} aria-label="切换资源管理器" title="资源管理器" onClick={() => { setSidebarPanel("explorer"); setSidebarVisible(true); }}><Icon name="panelLeft" /></button>
+          <button type="button" className={sidebarVisible && sidebarPanel === "outline" ? "active" : ""} aria-label="切换文档大纲" title="文档大纲" onClick={() => { setSidebarPanel("outline"); setSidebarVisible(true); }}><Icon name="list" /></button>
           <button type="button" aria-label="新建文档" title="新建文档" onClick={() => void newFile()}><Icon name="filePlus" /></button>
           <button type="button" aria-label="打开文件夹" title="打开文件夹" onClick={() => void openFolder()}><Icon name="folder" /></button>
         </aside>
 
-        {sidebarVisible && (
+        {sidebarVisible && sidebarPanel === "explorer" && (
           <aside className="explorer-panel" aria-label="资源管理器">
             <div className="explorer-title"><span>资源管理器</span><button type="button" title="打开文件夹" aria-label="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" size={16} /></button></div>
             <section className="explorer-section">
@@ -1194,9 +1536,25 @@ export function App() {
               <div className="open-editors">
                 {tabs.length === 0 && <p className="explorer-empty">尚未打开文档</p>}
                 {tabs.map((tab) => (
-                  <button type="button" className={active?.sessionId === tab.sessionId ? "active" : ""} key={tab.sessionId} onClick={() => void activateTab(tab)}>
-                    <Icon name="markdown" size={15} /><span>{tab.displayName}</span>{(tab.requiresSave || tab.draft !== tab.savedText) && <i aria-label="未保存" />}
-                  </button>
+                  <div className="open-editor-entry" key={tab.sessionId}>
+                    {renameTarget?.kind === "open" && renameTarget.sessionId === tab.sessionId ? (
+                      <form className="rename-inline-form" onSubmit={(event) => { event.preventDefault(); void submitRename(); }}>
+                        <input ref={renameInputRef} value={renameValue} aria-label="新的 Markdown 文件名" onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelRename(); } }} />
+                      </form>
+                    ) : (
+                      <button type="button" className={`open-editor-select${active?.sessionId === tab.sessionId ? " active" : ""}`} title="点击切换文档；再次点击展开或收起目录；右键重命名" onClick={() => void toggleOutlineForTab(tab)} onContextMenu={(event) => {
+                        event.preventDefault();
+                        beginRenameOpenFile(tab);
+                      }}>
+                        <Icon name="markdown" size={15} /><span>{tab.displayName}</span>{(tab.requiresSave || tab.draft !== tab.savedText) && <i aria-label="未保存" />}
+                      </button>
+                    )}
+                    {expandedOutlineSessionId === tab.sessionId && active?.sessionId === tab.sessionId && (
+                      <div className="inline-outline">
+                        <DocumentOutline entries={extractDocumentOutline(outlineDocument)} stale={Boolean(active && !outlineDocument)} onReveal={revealOutlineEntry} />
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </section>
@@ -1205,13 +1563,27 @@ export function App() {
                 <div className="section-title"><span className="section-chevron">⌄</span><span title={workspace.displayName}>{workspace.displayName}</span><small>{workspace.files.length}</small></div>
                 <div className="workspace-files">
                   {workspace.files.map((file) => (
-                    <button type="button" className={active?.workspaceFileId === file.fileId ? "active" : ""} key={file.fileId} title={file.relativePath} onClick={() => void selectWorkspaceFile(workspace, file)}><Icon name="file" size={14} /><span>{file.displayName}</span></button>
+                    <div className="workspace-file-entry" key={file.fileId}>
+                      {renameTarget?.kind === "workspace" && renameTarget.workspaceId === workspace.workspaceId && renameTarget.fileId === file.fileId ? (
+                        <form className="rename-inline-form" onSubmit={(event) => { event.preventDefault(); void submitRename(); }}>
+                          <input ref={renameInputRef} value={renameValue} aria-label="新的 Markdown 文件名" onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelRename(); } }} />
+                        </form>
+                      ) : (
+                        <button type="button" className={`workspace-file-select${active?.workspaceFileId === file.fileId ? " active" : ""}`} title={`${file.relativePath} · 右键重命名`} onClick={() => void selectWorkspaceFile(workspace, file)} onContextMenu={(event) => { event.preventDefault(); beginRenameWorkspaceFile(workspace, file); }}><Icon name="file" size={14} /><span>{file.displayName}</span></button>
+                      )}
+                    </div>
                   ))}
                 </div>
               </section>
             ) : (
               <div className="explorer-onboarding"><Icon name="folder" size={28} /><strong>还没有打开文件夹</strong><span>打开工作区后，可以在这里快速切换 Markdown 文档。</span><button type="button" onClick={() => void openFolder()}>打开文件夹</button></div>
             )}
+          </aside>
+        )}
+        {sidebarVisible && sidebarPanel === "outline" && (
+          <aside className="explorer-panel outline-panel" aria-label="文档大纲">
+            <div className="explorer-title"><span>文档大纲</span><small>{extractDocumentOutline(outlineDocument).length}</small></div>
+            <DocumentOutline entries={extractDocumentOutline(outlineDocument)} stale={Boolean(active && !outlineDocument)} onReveal={revealOutlineEntry} />
           </aside>
         )}
 
@@ -1251,6 +1623,22 @@ export function App() {
                       <button type="button" className={editorMode === "source" ? "active" : ""} aria-pressed={editorMode === "source"} disabled={imageImportBusy} onClick={() => switchEditorMode("source")}>源代码</button>
                       <button type="button" className={editorMode === "wysiwyg" ? "active" : ""} aria-pressed={editorMode === "wysiwyg"} disabled={imageImportBusy} onClick={() => switchEditorMode("wysiwyg")}>所见即所得</button>
                     </div>
+                    {editorMode === "wysiwyg" && <>
+                      <button
+                        type="button"
+                        className={`wysiwyg-theme-toggle${wechatThemeInWysiwyg ? " active" : ""}`}
+                        aria-pressed={wechatThemeInWysiwyg}
+                        title={wechatThemeInWysiwyg ? "关闭所见即所得区的公众号主题显示" : `在所见即所得区实时显示“${wechatThemeResolved.name}”`}
+                        onClick={() => {
+                          const next = !wechatThemeInWysiwyg;
+                          setWechatThemeInWysiwyg(next);
+                          setStatus(next ? `已在所见即所得区启用公众号主题：${wechatThemeResolved.name}。Markdown 内容不会改变。` : "已关闭所见即所得区的公众号主题显示。");
+                        }}
+                      >{wechatThemeInWysiwyg ? "公众号主题 · 开" : "公众号主题 · 关"}</button>
+                      <label className="preview-font-control" title="输入本机已安装的字体名称，按 Enter 或移出焦点应用"><span>字体</span><input data-testid="wysiwyg-font-select" list="preview-font-presets" value={previewFontDraft} onChange={(event) => { const value = event.target.value; setPreviewFontDraft(value); if (PREVIEW_FONT_PRESETS.includes(value as typeof PREVIEW_FONT_PRESETS[number])) applyPreviewFontDraft(value); }} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }} /></label>
+                      <label className="preview-reading-control" title="调整所见即所得阅读宽度"><span>宽度</span><select aria-label="所见即所得阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                      <div className="preview-font-size-control" role="group" aria-label="所见即所得字号"><button type="button" title="减小字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
+                    </>}
                     <small>{editorMode === "source" ? "Markdown" : "Markdown 实时写回"}</small>
                     <button type="button" className="insert-image-button" disabled={imageImportBusy} title="在当前位置插入图片" aria-label="插入图片" onClick={() => void importImages()}><Icon name="imagePlus" size={15} />插入图片</button>
                   </div>
@@ -1264,6 +1652,7 @@ export function App() {
                       onSelectionChange={(selection) => { if (editorMode === "source") synchronizedPreviewRef.current?.updateSelection(selection); }}
                       onImageDrop={(files, anchorId) => void importImages(files, anchorId)}
                       onDropRejected={(message) => { setDragActive(false); setStatus(message); }}
+                      onStatus={setStatus}
                       onChange={applyDraftChange}
                     />
                   </div>
@@ -1274,6 +1663,9 @@ export function App() {
                       html={previewHtml}
                       htmlReady={previewHtmlReady}
                       fontFamily={previewFontStack(previewFontName)}
+                      readingMaxWidth={readingWidthMaxWidth(readingWidth)}
+                      previewFontSize={previewFontSize}
+                      {...(wechatThemeInWysiwyg ? { wechatThemeDefinition: wechatThemeResolved.definition } : {})}
                       darkMode={darkMode}
                       imageImportBusy={imageImportBusy}
                       onApplyTextChange={(change) => {
@@ -1298,27 +1690,17 @@ export function App() {
                   <div className="pane-actions">
                     <label className="preview-font-control" title="设置实时预览和导出的正文字体">
                       <span>字体</span>
-                      <select
+                      <input
                         data-testid="preview-font-select"
-                        value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : "__custom__"}
-                        onChange={(event) => {
-                          if (event.target.value !== "__custom__") {
-                            setPreviewFontName(normalizePreviewFontName(event.target.value));
-                            return;
-                          }
-                          const custom = window.prompt("输入本机已安装的字体名称", previewFontName);
-                          if (custom !== null) setPreviewFontName(normalizePreviewFontName(custom));
-                        }}
-                      >
-                        <option value="Microsoft YaHei UI">微软雅黑</option>
-                        <option value="Segoe UI Variable Text">Segoe UI</option>
-                        <option value="Arial">Arial</option>
-                        <option value="DengXian">等线</option>
-                        <option value="SimSun">宋体</option>
-                        <option value="KaiTi">楷体</option>
-                        <option value="__custom__">自定义…</option>
-                      </select>
+                        list="preview-font-presets"
+                        value={previewFontDraft}
+                        onChange={(event) => { const value = event.target.value; setPreviewFontDraft(value); if (PREVIEW_FONT_PRESETS.includes(value as typeof PREVIEW_FONT_PRESETS[number])) applyPreviewFontDraft(value); }}
+                        onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }}
+                      />
                     </label>
+                    <label className="preview-reading-control" title="仅影响实时预览和所见即所得阅读区，不改变导出结果"><span>宽度</span><select aria-label="阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                    <div className="preview-font-size-control" role="group" aria-label="预览字号"><button type="button" title="减小预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
                     <button
                       type="button"
                       className={`sync-scroll-button${syncScrollEnabled ? " active" : ""}`}
@@ -1345,6 +1727,8 @@ export function App() {
                   active={viewMode !== "editor"}
                   identityKey={previewSyncIdentity}
                   fontFamily={previewFontStack(previewFontName)}
+                  readingMaxWidth={readingWidthMaxWidth(readingWidth)}
+                  previewFontSize={previewFontSize}
                   darkMode={darkMode}
                   onMermaidRender={(result) => {
                     if (result.failed > 0 || result.limited > 0) setStatus(`Mermaid：${result.rendered} 个已渲染，${result.failed + result.limited} 个未完成。`);
@@ -1360,10 +1744,15 @@ export function App() {
         </section>
       </div>
 
+      {searchOpen && <section className="search-panel" role="search" aria-label={searchReplaceOpen ? "查找和替换" : "查找"}>
+        <div className="search-row"><input ref={searchInputRef} value={searchQuery} placeholder="查找…" aria-label="查找文本" onChange={(event) => { setSearchQuery(event.target.value); searchIndexRef.current = -1; }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); findInCurrentView(event.shiftKey ? -1 : 1); } }} /><button type="button" title="上一个" onClick={() => findInCurrentView(-1)}>↑</button><button type="button" title="下一个" onClick={() => findInCurrentView(1)}>↓</button><span className="search-count">{searchResult.total ? `${searchResult.index}/${searchResult.total}` : "无结果"}</span><button type="button" className="search-close" aria-label="关闭查找" onClick={() => { setSearchOpen(false); clearSearch(); }}>×</button></div>
+        {searchReplaceOpen && <div className="search-row"><input value={replaceText} placeholder="替换为…" aria-label="替换文本" onChange={(event) => setReplaceText(event.target.value)} /><button type="button" disabled={editorMode !== "source" || !searchQuery} onClick={() => { const changed = markdownEditorRef.current?.replaceCurrent(searchQuery, replaceText) ?? false; setStatus(changed ? "已替换当前匹配。" : "当前选择不是匹配文本，请先查找。"); findInCurrentView(1); }}>替换</button><button type="button" disabled={editorMode !== "source" || !searchQuery} onClick={() => { const count = markdownEditorRef.current?.replaceAll(searchQuery, replaceText) ?? 0; setStatus(count > 0 ? `已替换 ${count} 处匹配。` : "没有可替换的匹配。"); searchIndexRef.current = -1; findInCurrentView(1); }}>全部替换</button><small>{editorMode === "source" ? "仅源代码模式可替换" : "切换到源代码模式后可替换"}</small></div>}
+      </section>}
+
       {wechatReplacements && (
         <aside className="wechat-replacements" aria-label="公众号发布验收助手">
           <div className="replacement-header">
-            <strong>公众号发布验收助手 · {WECHAT_THEME_OPTIONS.find((theme) => theme.id === wechatReplacements.themeId)?.name ?? "微信原生增强"}</strong>
+            <strong>公众号发布验收助手 · {wechatThemes.find((theme) => theme.id === wechatReplacements.themeId)?.name ?? WECHAT_THEME_OPTIONS.find((theme) => theme.id === wechatReplacements.themeId)?.name ?? "微信原生增强"}</strong>
             <span>{confirmedReplacementIds.size}/{wechatReplacements.items.length} 已确认替换</span>
             <button type="button" className="replacement-close" onClick={() => {
               setWechatReplacements(null);
@@ -1426,8 +1815,14 @@ export function App() {
         <WechatThemePreview
           html={previewHtml}
           themeId={wechatThemeId}
+          themes={wechatThemes}
+          definition={wechatThemeResolved.definition}
           fontFamily={previewFontStack(previewFontName)}
           onThemeChange={setWechatThemeId}
+          onSaveAsCustom={saveWechatThemeAsCustom}
+          onDeleteCustom={deleteWechatTheme}
+          onExportCustom={() => void exportWechatTheme()}
+          onImportCustom={(storage) => void importWechatTheme(storage)}
           onClose={closeWechatThemePreview}
         />
       )}

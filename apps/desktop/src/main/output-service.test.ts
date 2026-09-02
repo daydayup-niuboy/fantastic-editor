@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "@fantastic-editor/document-core";
-import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
+import {
+  buildWechatThemeDefinition,
+  FANTASTIC_EDITOR_LIMITS,
+  normalizeWechatThemeTokens,
+} from "@fantastic-editor/shared";
 import type {
   BeginOutputRequest,
   OutputContext,
@@ -164,7 +168,63 @@ describe("OutputService", () => {
     remember(rejected, invalid);
     const rejectedResult = await rejected.begin(invalid.request, invalid.context, () => true);
     expect(rejectedResult.status).toBe("failed");
-    expect(rejectedResult.error).toContain("请求无效");
+    expect(rejectedResult.error).toContain("未知公众号主题");
+  });
+
+  it("uses the Main-resolved custom theme in the final WeChat compiler", async () => {
+    const value = await fixture("# 公众号标题\n\n## 小节\n\n正文。");
+    const customId = "minimal-ink+0123456789ab" as const;
+    value.request = { ...value.request, target: "wechat-clipboard", wechatThemeId: customId };
+    const saved: Uint8Array[] = [];
+    const tokens = normalizeWechatThemeTokens("minimal-ink", {
+      accent: "#a23456",
+      heading: "#813047",
+      text: "#242424",
+      page: "#fefefe",
+      sizeBodyPx: 17,
+      align: "justify",
+    });
+    const definition = buildWechatThemeDefinition("minimal-ink", tokens);
+    const service = new OutputService(
+      new AssetHandleRegistry(),
+      { transformSvg: async () => ({ status: "failed", code: "UNEXPECTED_SVG_TRANSFORM", message: "unexpected SVG transform" } as const) },
+      {
+        generateOfflineHtml: async (context: OutputContext, assets) => generateOfflineHtml(context, assets),
+        generateDocx: async (context: OutputContext, assets, formulaAssets) => generateDocx(context, assets, formulaAssets),
+        generateWechatHtml: async (context: OutputContext, assets, formulaAssets) => generateWechatHtml(context, assets, formulaAssets),
+        cancelJob: () => true,
+      },
+      async (_name, bytes) => {
+        saved.push(bytes);
+        return {
+          status: "saved" as const,
+          artifact: { kind: "clipboard" as const, displayName: "公众号正文", mimeType: "text/html", byteLength: bytes.byteLength },
+        };
+      },
+      undefined,
+      undefined,
+      undefined,
+      async (themeId, workspaceRoot) => {
+        expect(themeId).toBe(customId);
+        expect(workspaceRoot).toBe(value.context.authorizationRootRealPath);
+        return {
+          id: customId,
+          baseThemeId: "minimal-ink" as const,
+          tokens,
+          definition,
+          source: "workspace" as const,
+          name: "验收主题",
+        };
+      },
+    );
+    remember(service, value);
+
+    const result = await service.begin(value.request, value.context, () => true);
+
+    expect(result.status).toBe("completed");
+    expect(result.result?.wechatThemeId).toBe(customId);
+    expect(new TextDecoder().decode(saved[0])).toContain("#87364d");
+    expect(new TextDecoder().decode(saved[0])).toContain("font-size:17px");
   });
 
   it("requires exact one-job approval and reports approved omissions as partial completion", async () => {

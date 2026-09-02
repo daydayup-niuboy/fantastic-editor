@@ -3,7 +3,7 @@
 > 软件作者：Tbin · 联系邮箱：niuboy5188@gmail.com
 > 规格标识：fantastic-editor UDM  
 > 版本：1.3-draft
-> 状态：核心模型已随 `0.2.0-rc.3` 冻结；`0.3.0-rc.1` 仅收口公众号草稿连接器与凭据/白名单边界，不改变 canonical 文档模型
+> 状态：核心模型已随 `0.2.0-rc.3` 冻结；`0.3.0-rc.2` 新增公众号自定义主题输出配置，不改变 canonical 文档模型
 > 关联文档：[fantastic-editor 开发项目书](fantastic-editor-开发项目书.md)
 
 ## 当前规格结论（2026-08-31）
@@ -11,8 +11,32 @@
 - canonical `editorText` 仍是唯一保存来源；ParsedDocument、ResolutionSnapshot、PreviewSession、预览派生缓存和导出 DerivedAssetManifest 的分层保持不变。
 - 源代码与所见即所得共用同一 Markdown、SourceRange 事务和撤销历史；可编辑 DOM、预览 SVG、选择框、同步滚动状态和临时资源句柄均不得成为文档数据。
 - PDF 继续由隐藏 Chromium 窗口生成；DOCX、离线 HTML 和公众号 HTML 走隔离 Node/Utility 输出；公式和 Mermaid 导出为受控 PNG 派生资源。
-- `0.3.0-rc.1` 的公众号自动草稿仍是输出侧连接器：Renderer 发送 `jobId`，主进程从已完成任务、加密凭据和受控资源中组装上传，不把 AppSecret、token、路径、HTML 或图片字节扩大到普通 IPC。
+- `0.3.0-rc.2` 继续沿用已验收的公众号自动草稿输出侧连接器：Renderer 发送 `jobId`，主进程从已完成任务、加密凭据和受控资源中组装上传，不把 AppSecret、token、路径、HTML 或图片字节扩大到普通 IPC。
 - 真实账号已经验证自动上传、草稿创建和回读链路，未发现需要修改 UDM schema 的问题。后续多账号如实施，应扩展凭据选择层，不得复制 ParsedDocument 或建立第二套附件模型。
+- 所见即所得字体、阅读宽度、字号、滚动位置、文件名内联目录、搜索面板和预览模式均为 Renderer 视图状态；从 IMA 等外部应用粘贴时先比较安全语义 HTML 与纯文本覆盖度，完整 HTML 转为 canonical Markdown，不完整 HTML 回退到较完整纯文本。预览与所见即所得的 Mermaid SVG 仍只是派生视图。上述收口不新增 UDM 字段。
+- 字体输入草稿、常用字体建议和最终本机字体名都是 Renderer 偏好；自定义字体通过可编辑输入框提交，不通过原生 prompt。空草稿不得覆盖当前字体，非法 CSS 字符仍须由现有字体名规范化边界拒绝。
+
+## 公众号自定义主题输出模型
+
+- 公众号主题是纯 `OutputTheme` 配置，不是 Markdown、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest 或恢复快照字段。切换、保存、导入、导出或删除主题不得改变 `editorText`、sourceHash、解析结果、资源解析、公式/Mermaid 派生键或替换项顺序。
+- 主界面“公众号排版”入口和所见即所得“公众号主题”开关均是 Renderer 视图状态。“公众号设置”只管理 AppID、AppSecret、封面与 IP 白名单，不承载排版主题；导出菜单只执行输出动作。
+- 启用所见即所得主题时，Renderer 只能把 Main 返回的已解析主题定义作用域化投影到当前编辑容器；不得把公众号编译 HTML 写回可编辑 DOM、不得从主题 DOM 反序列化 Markdown，也不得改变 `editorText`、SourceRange、revision、撤销历史、恢复稿或保存结果。开关可作为本机 UI 偏好持久化。
+- 主题语义固定为 3 个官方基底和完整 10 令牌。自定义身份由规范化后的 `schemaVersion/base/tokens` 固定顺序 JSON 的 SHA-256 前 12 位得到；名称、slug、文件路径和作用域不参与内容身份。读取旧别名只允许映射到官方 ID，不得静默回退未知主题。
+- 主题文件、schema 校验、哈希、碰撞检测、工作区/全局优先级和删除事务只在 Main；Shared 只提供纯规范化、recipe 与编译器；Renderer 不得使用 Node 文件系统、读取主题 JSON、计算内容哈希或解析自定义 ID，只消费 Main 返回的无路径元数据和解析结果。
+- 预览与公众号最终输出必须调用同一个 `compileWechatPublishHtml`。主题样式只能合并到允许的行内样式，最终公众号 HTML 仍须经过只读安全审计；审计不能反向修正文档，也不能通过建立第二套主题编译器来绕过失败。
+- 自定义主题磁盘覆盖层必须保存完整 10 令牌、拒绝未知字段；导入可接收受控部分令牌，但写盘前必须继承基底补全并规范化。工作区主题优先于同 slug 的全局主题。主题仓库仍拒绝直接删除当前 ID；主界面经用户二次确认后，必须先把当前选择切到该主题的官方基底，再执行删除。同一内容身份可能存在于工作区和全局时，删除事务必须移除全部副本，不能让隐藏副本重新出现在列表。
+- 移动宽度审计的嵌套溢出必须归因到最内层可处理节点；若祖先是 `overflow-x:auto|scroll` 的局部滚动容器，则只保留该祖先为复核项。公式应标记为公式，不得同时为其外层 `section`、`p` 重复生成警告。审计仍是 Renderer 派生状态，不改变主题或文档模型。
+
+## Moji 五项优先能力边界（Renderer / Windows 集成）
+
+纳入《fantastic-editor-Moji 五项优先能力开发方案》的五项能力按 M1→M5 交付：可调阅读宽度与预览字号、代码块一键复制、文档大纲与标题导航、统一查找与替换、Windows Markdown 文件关联与单实例打开。它们都是视图或启动集成能力，不新增 UDM 节点和 Markdown 语法。
+
+- 阅读宽度、预览字号、大纲选中态、搜索索引/高亮和代码复制按钮只存在于 Renderer 短生命周期状态，不进入 canonical `editorText`、ParsedDocument、恢复快照、PreviewSession、PDF/DOCX/HTML/公众号输出。
+- 大纲只能从当前 ParsedDocument 的 heading 与 SourceRange 生成；搜索替换只允许在源码模式修改 canonical Markdown，预览和所见即所得仅做只读查找。
+- “打开的编辑器”中的已保存独立单文件与工作区文件右键重命名，都是主进程受控文件事务的 Renderer 入口；独立单文件只能在已授权父目录内改为同目录 Markdown 文件名，工作区文件还须通过工作区 revision 与边界检查。成功后同步已打开会话、标签显示名及适用的工作区 revision，不改变正文或 ParsedDocument。
+- “修复网页 Markdown”是用户显式触发的 canonical `editorText` 编辑事务，不是粘贴时自动清洗，也不得直接修改 ParsedDocument 或任何输出适配器。它只可修复代码围栏外可确认的结构性转义、过量空行和表格行间空白；已有围栏内容、普通路径、正则及无法确认语义的反斜杠必须原样保留，整次修改必须可以一步撤销。
+- 文件关联只由 Windows 安装版注册 `.md`/`.markdown`；单实例外部打开使用不透明 requestId，Renderer 不接收绝对路径，便携版不得写注册表。
+- 五项能力完成后，才执行 P1 阶段 B 的真实系统剪贴板跨 Word、Typora、浏览器和公众号人工验收；人工验收不改变 UDM 契约。
 
 
 ## Mermaid 与排版偏好补充规格
@@ -60,6 +84,15 @@
 > 第八轮新增 `editTableStructure` 结构化意图。载荷固定为 `insertRowBefore | insertRowAfter | deleteRow | insertColumnBefore | insertColumnAfter | deleteColumn | setColumnAlignment`，并携带当前 rowIndex、columnIndex；对齐操作另携带 `left | center | right | null`。事务目标是完整表格 SourceRange，而不是当前 DOM 行或单元格；解析原始表格时必须忽略转义管道和代码跨度内的管道。表头行与唯一列不得删除，末格 Tab 等价于 `insertRowAfter`。结构修改以一次 TextChange 重写该表格，保留单元格文本、首尾管道风格、首行缩进、分隔行最小宽度、对齐和尾随换行；允许仅在被结构修改的表格内规范化分隔空格，不得波及表外文本。提交后旧表格 DOM 立即失效并清空，当前解析投影 ready 前不得再次接受命令。新插入空单元格的内容范围允许 `from === to`，其他块级可编辑范围仍要求非空。
 >
 > 第九轮新增 `editCrossBlockSelection` 意图。Renderer 先把单个非折叠 DOM Range 映射为按文档顺序排列的 `MarkdownBlockSelectionFragment { range, source, selectionFrom, selectionTo }`；fragment 只允许标题、普通段落、引用段落和安全叶级列表项，range 使用当前 canonical editorText 的 UTF-16 SourceRange，selectionFrom/To 是该受控 Markdown 片段内偏移。删除、替换、Enter、剪切和 `setMark(bold | italic | strike)` 最终都折叠为一个外层 TextChange；复制没有编辑事务，只写规范化 text/plain。多段纯文本粘贴统一 LF、单行换行为段落边界，并转义反斜杠、行内标记及行首标题/引用/列表触发符。选区端点位于已有 strong/em/del/link/code/受保护原子内部，或 Range 与图片、公式、链接、行内代码、代码块、Mermaid、表格、源码卡片相交时，映射失败。失败检查必须发生在 commitDirectEdit 之前，因此拒绝不得顺带规范化首块或产生历史项。DOM、Range、Selection 和 ClipboardEvent 均不得进入 UDM、IPC、恢复稿或输出。
+
+## HTML/Markdown 双格式复制与智能粘贴补充规格（阶段 A + 阶段 B 生产门禁）
+
+- 剪贴板是 Renderer 的瞬时交换协议，不是 UDM 节点、恢复快照字段或导出输入。canonical `editorText` 继续是唯一保存来源。
+- 复制/剪切的 `text/plain` 必须是 LF 规范化且经过资源脱敏的 Markdown；`text/html` 只能是由同一 Markdown 片段渲染的安全片段。内部片段可带 `data-fantastic-clipboard="v1"`、UTF-16 长度和 `fnv1a32:<8位十六进制>` 校验标记；标记用于完整性和往返提示，不是认证机制。
+- 生成 HTML 与外部 HTML 使用不同边界：生成侧只审计本应用渲染结果，外部侧必须经过独立 DOM 白名单转换。任何脚本、事件属性、未知危险资源协议、localhost/loopback、绝对路径和超限内容不得进入 Markdown 或编辑 DOM。
+- 图片、公式和 Mermaid 在通用剪贴板中不携带本地/临时地址；图片统一降级为 `![alt]（图片未包含）`，公式/Mermaid 保留可解释的 Markdown/代码文本。外部 HTML 不触发网络请求或资源下载。
+- 普通粘贴按内部 payload → 完整安全语义 HTML → Markdown 形纯文本 → 普通纯文本解析；HTML 的可比较正文少于纯文本 85% 时视为不完整，不得覆盖较完整纯文本。HTML 转换后的重复 Markdown 转义只允许在恢复后仍呈现明确 Markdown 结构时修复；有序列表必须保留 `<ol start>` 和 `<li value>`。Ctrl+Shift+V 在短时意图令牌内按字面文本转义 Markdown。CodeMirror 源码粘贴使用一个 `input.paste` 事务，剪切使用一个 `delete.cut` 事务；WYSIWYG 写回前仍需通过当前 SourceRange/快照校验。
+- 阶段 A 已落地核心契约、安全清洗、外部 HTML 转换和两种编辑器事件接入；阶段 B 生产态 Electron UI smoke 已通过双格式 payload 标记/hash、外部 HTML 图片降级、IMA 语义 HTML、嵌套/起始编号列表、WYSIWYG 写回和撤销回归断言。真实 IMA 样本证明 Ctrl+A 可能只把虚拟化尾段放入系统剪贴板；应用只能转换已收到内容，不得伪造或猜测缺失正文。跨 Word/Typora/浏览器/公众号读回、复杂结构人工保真和大内容性能仍待验收，不得提前标记为跨应用最终完成。
 
 ### 唯一数据源与视图
 
@@ -1547,6 +1580,16 @@ WechatAcceptanceReport 是任务完成后的审计投影，不属于 ParsedDocum
 - Authenticode 证书身份、时间戳、签名状态和发布哈希只属于发行元数据，不进入 canonical Markdown、ParsedDocument、ResolutionSnapshot、DerivedAssetManifest、OutputContext、OutputResult 或恢复快照。
 - 签名失败只能使发行门禁失败，不能把任何文档导出任务改写为 `failed`，也不能改变公众号草稿、批准省略或人工验收状态。
 - PFX、私钥、证书密码和证书存储指纹不得经 Renderer IPC、日志、Markdown 或导出内容传播。构建脚本只接收进程环境或本机证书存储中的签名身份。
-- 当前公益免费项目允许发行元数据保持 `NotSigned`；未签名状态只影响 Windows 发布提示与发行说明，不阻断 canonical Markdown、解析、导出或公众号草稿任务。商业代码签名证书不属于 `0.3.0-rc.1` 的完成条件。
+- 当前公益免费项目允许发行元数据保持 `NotSigned`；未签名状态只影响 Windows 发布提示与发行说明，不阻断 canonical Markdown、解析、导出或公众号草稿任务。商业代码签名证书不属于 `0.3.0-rc.2` 的完成条件。
 - 未签名发行必须在 release manifest、Release 页面和 README 中记录 `NotSigned`，并提供官方来源及 SHA-256 校验值；不得使用自签名证书冒充受信任发布者。现有签名流水线仅作为未来可选能力保留。
 - 当前公众号范围固定为单账号；支持显式确认后发布单篇文章，但不支持多账号、群发或定时群发。
+
+## 三十九、Moji 五项优先能力实现边界
+
+- 阅读宽度与预览字号属于 Renderer 瞬时/本机 UI 状态；它们不得进入 canonical Markdown、ParsedDocument、sourceHash、恢复快照或任何导出结果。
+- 大纲只能从当前已接受 ParsedDocument 的 heading 节点生成，并以节点 SourceRange 跳转；解析过期、文档切换或无标题时必须显示空/更新状态，不得猜测旧偏移。
+- 预览代码块复制只读取渲染 DOM 的 code 文本，输出 LF 纯文本并写系统剪贴板；复制按钮和状态不改变 UDM、HTML artifact 或公众号任务。
+- 所见即所得 `Ctrl+A` 只改变正文容器的短寿命 Selection；整篇复制必须直接取当前 canonical `editorText`，再按双格式剪贴板协议写入 `text/plain` 与安全 `text/html`，不得从装饰 DOM 反推文档。
+- 搜索可覆盖源代码、所见即所得和可见预览文本；替换是源代码唯一事务入口，必须经过现有 canonical Markdown、解析、资源和 dirty 状态链路。预览/WYSIWYG 查找高亮是短寿命 DOM 状态。
+- `.md`/`.markdown` 文件关联只由安装版注册；单实例请求通过主进程不透明 requestId 映射传递，Renderer 不接收任意命令行字符串或绝对路径。外部打开沿用现有未保存确认、编码转换、文件大小和资源安全门禁。
+- 五项能力完成后，P1 阶段 B 的 Word、Typora、浏览器、公众号后台双向剪贴板验收必须由人工真实操作并单独记录，不能用本地 smoke 或 DOM 断言替代。
