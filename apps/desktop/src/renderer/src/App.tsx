@@ -19,6 +19,7 @@ import { extractDocumentOutline, type OutlineEntry } from "./document-outline";
 import { DocumentOutline } from "./DocumentOutline";
 import { clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
 import { repairWebMarkdown } from "./web-markdown-repair";
+import packageMetadata from "../../../../../package.json";
 
 interface ActiveDocument {
   sessionId: string;
@@ -1832,7 +1833,7 @@ export function App() {
         onClose={closeWechatApiConfig}
         onSaved={applySavedWechatApiConfig}
       />
-      <footer className="statusbar"><span className="status-message" role="status" aria-live="polite" aria-atomic="true"><i />{status}{previewRetryAvailable && <button type="button" className="status-retry" onClick={retryPreview}>重新解析</button>}</span><span className="status-meta"><span>{active ? (editorMode === "source" ? "Markdown · 源代码" : "Markdown · 所见即所得") : "本地模式"}</span><span>{draft.length.toLocaleString()} 字符</span>{documentPerformance && <span className={`performance-metric is-${documentPerformance.level}`} title={documentPerformanceDescription(documentPerformance)} aria-label={documentPerformanceDescription(documentPerformance)}>{documentPerformanceLabel(documentPerformance)}</span>}</span></footer>
+      <footer className="statusbar"><span className="status-message" role="status" aria-live="polite" aria-atomic="true"><i />{status}{previewRetryAvailable && <button type="button" className="status-retry" onClick={retryPreview}>重新解析</button>}</span><span className="status-meta"><span>{active ? (editorMode === "source" ? "Markdown · 源代码" : "Markdown · 所见即所得") : "本地模式"}</span><span>{draft.length.toLocaleString()} 字符</span>{documentPerformance && <span className={`performance-metric is-${documentPerformance.level}`} title={documentPerformanceDescription(documentPerformance)} aria-label={documentPerformanceDescription(documentPerformance)}>{documentPerformanceLabel(documentPerformance)}</span>}<span className="app-about" data-testid="app-about" aria-label={`软件版本 ${packageMetadata.version}，作者 ${packageMetadata.author.name}，邮箱 ${packageMetadata.author.email}`}>v{packageMetadata.version} · 作者：{packageMetadata.author.name} · 邮箱：{packageMetadata.author.email}</span></span></footer>
       {dragActive && <div className="drop-overlay"><div className="drop-card"><span className="drop-icon"><Icon name="download" size={30} /></span><strong>释放以打开文档或插入图片</strong><span>Markdown 可在窗口打开；图片请放到编辑区的具体位置</span></div></div>}
     </main>
   );

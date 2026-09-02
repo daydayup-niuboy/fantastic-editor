@@ -207,6 +207,10 @@ async function finishSmoke(scenario: string, valid: boolean, diagnostics?: unkno
     }
   }
   process.exitCode = valid ? 0 : 1;
+  if (scenario === "ui") {
+    app.exit(process.exitCode);
+    return;
+  }
   app.quit();
 }
 

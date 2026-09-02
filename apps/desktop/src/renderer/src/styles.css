@@ -557,6 +557,7 @@ kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border:
 .status-message i { flex: 0 0 auto; width: 5px; height: 5px; margin-right: 7px; background: var(--accent); border-radius: 50%; }
 .status-retry { flex: 0 0 auto; margin-left: 8px; }
 .status-meta { display: flex; align-items: center; gap: 15px; padding-left: 14px; white-space: nowrap; }
+.app-about { color: var(--text); font-size: 10px; }
 .performance-metric { padding: 2px 5px; border-radius: 4px; }
 .performance-metric.is-notice { color: #8a621f; background: color-mix(in srgb, #d39a35 13%, transparent); }
 .performance-metric.is-slow { color: #a33e32; background: color-mix(in srgb, #d65a4b 13%, transparent); font-weight: 700; }
