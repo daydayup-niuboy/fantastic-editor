@@ -85,7 +85,7 @@ npm audit --audit-level=high
 - `packages/shared`：可结构化克隆的共享类型和最小 IPC 契约。
 - `apps/desktop`：Electron 主进程、sandboxed Renderer、隔离公式/PDF 窗口和 Utility Process 输出适配器。
 
-详细规格见项目根目录的三份开发文档；当前实现状态见 `fantastic-editor-开发进度.md`。`npm run dist:portable` 会生成便携版并执行产物、隐私及生产态验证；`npm run dist:rc` 会生成安装版、便携版和完整清单，再执行产物、隐私、7 组生产态与安装/卸载门禁。两种产物均使用正式绿色 `f` 图标。公众号 AppID、AppSecret、封面路径和 IP 信息不会写入安装包或便携包，用户只能在安装后应用内单独配置；AppSecret 仅以 Windows 系统加密值保存。正式签名发布使用 `npm run dist:signed`：它先验证 PFX 或 Windows 证书存储中的代码签名身份，强制 RFC 3161 时间戳，构建后要求安装版和便携版的 Authenticode 状态均为 `Valid`，否则整个发布失败。证书文件与密码只能通过本机证书存储或环境变量提供，不得提交仓库。
+`npm run dist:portable` 会生成便携版并执行产物、隐私及生产态验证；`npm run dist:rc` 会生成安装版、便携版和完整清单，再执行产物、隐私、7 组生产态与安装/卸载门禁。两种产物均使用正式绿色 `f` 图标。公众号 AppID、AppSecret、封面路径和 IP 信息不会写入安装包或便携包，用户只能在安装后应用内单独配置；AppSecret 仅以 Windows 系统加密值保存。正式签名发布使用 `npm run dist:signed`：它先验证 PFX 或 Windows 证书存储中的代码签名身份，强制 RFC 3161 时间戳，构建后要求安装版和便携版的 Authenticode 状态均为 `Valid`，否则整个发布失败。证书文件与密码只能通过本机证书存储或环境变量提供，不得提交仓库。
 
 当前最新产物为 `release/fantastic-editor-0.3.0-rc.2-portable.exe` 和 `release/fantastic-editor-0.3.0-rc.2-setup.exe`；两者包含本轮公众号自定义主题、主界面排版入口、所见即所得主题投影、自定义字体修复和主题删除修复。隐私扫描、便携隔离启动、basic/PDF/DOCX/离线 HTML/公式/Mermaid/UI 七组生产冒烟及安装—启动—卸载门禁全部通过，签名状态均为 `NotSigned`。安装版为 136,690,113 字节，SHA-256 `DD45E7A9012329340C4C10BE8C43F0488C112B0309CB744A0800F7A08998E2EE`；便携版为 136,432,037 字节，SHA-256 `A2643D21805C9DB6BF239A1D36B7A67948EAA692D85374A9298D99D513035F16`。RC.1 及 `0.2.0-rc.*` 历史产物继续保留，不被覆盖。
 

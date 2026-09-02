@@ -13,6 +13,12 @@ build-tmp/
 /fantastic-editor-ui-smoke.png
 /wechat-acceptance-*.md
 
+# Keep local project notes out of the public repository.
+/*.md
+!/README.md
+!/fantastic-editor-推广文案.md
+/docs/**/*.md
+
 # Code-signing secrets must never enter source control.
 *.pfx
 *.p12
