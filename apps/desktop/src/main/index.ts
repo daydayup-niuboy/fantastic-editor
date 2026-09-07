@@ -208,8 +208,10 @@ async function finishSmoke(scenario: string, valid: boolean, diagnostics?: unkno
   }
   process.exitCode = valid ? 0 : 1;
   if (scenario === "ui") {
-    app.exit(process.exitCode);
-    return;
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.destroy();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   app.quit();
 }
@@ -617,7 +619,7 @@ function registerIpc(): void {
     requireTrustedRenderer(event);
     const result = await dialog.showSaveDialog({
       title: "另存为 Markdown",
-      defaultPath: "document.md",
+      defaultPath: fileSessions.getSuggestedSaveName(request.sessionId),
       filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
     });
     if (result.canceled || !result.filePath) return { status: "cancelled" } as const;
@@ -1001,7 +1003,151 @@ function createMainWindow(): BrowserWindow {
     return { action: "deny" };
   });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (process.env.FANTASTIC_EDITOR_UI_SMOKE_TEST === "1") {
+  let showWhenLoaded = false;
+  if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
+    window.webContents.once("did-finish-load", () => {
+      void (async () => {
+        const ready = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          let clicked = false;
+          while (Date.now() < deadline) {
+            const newButton = document.querySelector("[data-testid=new-document]");
+            if (newButton instanceof HTMLButtonElement) {
+              newButton.click();
+              clicked = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          while (Date.now() < deadline) {
+            if (document.querySelector(".cm-content") && document.querySelector("[data-testid=editor-mode-switch]")) return "ready";
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return clicked ? "editor-missing" : "new-button-missing";
+        })()`, true) as string;
+        if (ready !== "ready") {
+          const rendererState = await window.webContents.executeJavaScript(`({ title: document.title, body: document.body?.innerText?.slice(0, 500) ?? "", html: document.body?.innerHTML?.slice(0, 500) ?? "" })`, true);
+          throw new Error(`Live Preview smoke could not create an editable document: ${ready}. ${JSON.stringify(rendererState)}`);
+        }
+
+        window.show();
+        window.focus();
+        window.webContents.focus();
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("测试粗体\n\n# 标题\n\n- 第一项\n- \n- ");
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        window.webContents.sendInputEvent({ type: "char", keyCode: "y" });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const liveTyped = await window.webContents.executeJavaScript(`[...document.querySelectorAll(".cm-line")].some((line) => line.textContent?.includes("y"))`, true) as boolean;
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const liveUndo = await window.webContents.executeJavaScript(`({ articlePresent: document.querySelector(".cm-content")?.textContent?.includes("测试粗体") === true, typedRemoved: ![...document.querySelectorAll(".cm-line")].some((line) => line.textContent?.includes("y")), focused: document.activeElement?.classList.contains("cm-content") === true })`, true) as { articlePresent: boolean; typedRemoved: boolean; focused: boolean };
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        window.webContents.sendInputEvent({ type: "char", keyCode: "x" });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const sourceTyped = await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.textContent?.includes("x") === true`, true) as boolean;
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        const initial = await window.webContents.executeJavaScript(`(() => {
+          const lines = [...document.querySelectorAll(".cm-line")];
+          const emptyLine = [...lines].reverse().find((line) => (line.textContent ?? "").trim() === "-" || (line.textContent ?? "").trim() === "•");
+          const rect = emptyLine?.getBoundingClientRect();
+          return {
+            singleEditor: document.querySelectorAll(".cm-editor").length === 1,
+            liveClass: document.querySelector(".cm-editor")?.classList.contains("cm-live-preview") === true,
+            headingStyled: Boolean(document.querySelector(".cm-live-heading-1")),
+            fontOptions: document.querySelector("[data-testid=wysiwyg-font-preset]")?.querySelectorAll("option").length ?? 0,
+            toolbarButtons: [...document.querySelectorAll(".live-preview-format-toolbar button")].map((button) => button.textContent?.trim() ?? ""),
+            emptyLine: rect ? { x: rect.left + 18, y: rect.top + rect.height / 2 } : null,
+            lineText: lines.map((line) => line.textContent ?? "")
+          };
+        })()`, true) as { singleEditor: boolean; liveClass: boolean; headingStyled: boolean; fontOptions: number; toolbarButtons: string[]; emptyLine: { x: number; y: number } | null; lineText: string[] };
+        if (!initial.emptyLine) throw new Error("Live Preview smoke could not locate the empty list item.");
+
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(initial.emptyLine.x), y: Math.round(initial.emptyLine.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(initial.emptyLine.x), y: Math.round(initial.emptyLine.y), button: "left", clickCount: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const afterFirstDelete = await window.webContents.executeJavaScript(`({ text: [...document.querySelectorAll(".cm-line")].map((line) => line.textContent ?? ""), focused: document.activeElement?.classList.contains("cm-content") === true })`, true) as { text: string[]; focused: boolean };
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const afterSecondDelete = await window.webContents.executeJavaScript(`({ text: [...document.querySelectorAll(".cm-line")].map((line) => line.textContent ?? ""), focused: document.activeElement?.classList.contains("cm-content") === true })`, true) as { text: string[]; focused: boolean };
+
+        const selectionRect = await window.webContents.executeJavaScript(`(() => {
+          const line = [...document.querySelectorAll(".cm-line")].find((item) => item.textContent?.includes("测试粗体"));
+          const text = line?.firstChild;
+          if (!(text instanceof Text)) return null;
+          const range = document.createRange();
+          range.setStart(text, 0);
+          range.setEnd(text, Math.min(4, text.length));
+          const rect = range.getBoundingClientRect();
+          return { fromX: rect.left + 1, toX: rect.right - 1, y: rect.top + rect.height / 2 };
+        })()`, true) as { fromX: number; toX: number; y: number } | null;
+        if (!selectionRect) throw new Error("Live Preview smoke could not locate text for a native mouse selection.");
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(selectionRect.fromX), y: Math.round(selectionRect.y) });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(selectionRect.fromX), y: Math.round(selectionRect.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(selectionRect.fromX), y: Math.round(selectionRect.y), button: "left", clickCount: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(selectionRect.toX), y: Math.round(selectionRect.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(selectionRect.toX), y: Math.round(selectionRect.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const selectionMade = await window.webContents.executeJavaScript(`document.querySelectorAll(".cm-selectionBackground").length > 0`, true) as boolean;
+        const italicButton = await window.webContents.executeJavaScript(`(() => { const rect = document.querySelector('.live-preview-format-toolbar button[title^="切换斜体"]')?.getBoundingClientRect(); return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null; })()`, true) as { x: number; y: number } | null;
+        if (!italicButton) throw new Error("Live Preview smoke could not locate the italic toolbar command.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(italicButton.x), y: Math.round(italicButton.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(italicButton.x), y: Math.round(italicButton.y), button: "left", clickCount: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const italicVisible = await window.webContents.executeJavaScript(`Boolean(document.querySelector(".cm-live-emphasis"))`, true) as boolean;
+        const blockTypes = await window.webContents.executeJavaScript(`(async () => {
+          document.querySelector('.live-preview-format-toolbar button[title="一级标题"]')?.click();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const headingApplied = [...document.querySelectorAll(".cm-live-heading-1")].some((line) => line.textContent?.includes("测试粗体"));
+          document.querySelector('.live-preview-format-toolbar button[title="正文"]')?.click();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const normalApplied = ![...document.querySelectorAll(".cm-live-heading-1")].some((line) => line.textContent?.includes("测试粗体"));
+          return { headingApplied, normalApplied };
+        })()`, true) as { headingApplied: boolean; normalApplied: boolean };
+        const themeApplied = await window.webContents.executeJavaScript(`(async () => {
+          const toggle = document.querySelector(".wysiwyg-theme-toggle");
+          if (toggle?.getAttribute("aria-pressed") !== "true") toggle?.click();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return document.querySelector(".editor-host")?.classList.contains("wechat-theme-active") === true
+            && [...document.querySelectorAll("style")].some((style) => style.textContent?.includes(".cm-live-heading-1"));
+        })()`, true) as boolean;
+        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const final = await window.webContents.executeJavaScript(`({ source: document.querySelector(".cm-content")?.textContent ?? "", singleEditor: document.querySelectorAll(".cm-editor").length === 1 })`, true) as { source: string; singleEditor: boolean };
+
+        const firstChanged = JSON.stringify(initial.lineText) !== JSON.stringify(afterFirstDelete.text);
+        const secondChanged = JSON.stringify(afterFirstDelete.text) !== JSON.stringify(afterSecondDelete.text);
+        const valid = liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+          && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
+          && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
+          && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
+          && selectionMade && italicVisible && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied
+          && final.singleEditor && final.source.includes("*测试粗体*");
+        await finishSmoke("live-preview", valid, { liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, italicVisible, blockTypes, themeApplied, final, firstChanged, secondChanged });
+      })().catch((error: unknown) => {
+        const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
+        void finishSmoke("live-preview", false, { error: diagnostic });
+      });
+    });
+    window.webContents.once("did-fail-load", (_event, code, description) => { console.error(`Renderer load failed (${code}): ${description}`); void finishSmoke("live-preview", false); });
+  } else if (process.env.FANTASTIC_EDITOR_UI_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", () => {
       void (async () => {
         const uiReady = await window.webContents.executeJavaScript(`new Promise((resolve) => {
@@ -1040,6 +1186,7 @@ function createMainWindow(): BrowserWindow {
           editorText: document.querySelector(\".cm-content\")?.textContent ?? \"\",
           brandText: document.querySelector(\".brand-lockup\")?.textContent ?? \"\",
           hasSidebar: Boolean(document.querySelector(\".explorer-panel\")),
+          hasSidebarResizeHandle: Boolean(document.querySelector(".sidebar-resize-handle")),
           hasSplitHandle: Boolean(document.querySelector(".split-handle")),
           hasInsertImageButton: Boolean(document.querySelector(".insert-image-button")),
           hasSyncScrollButton: Boolean(document.querySelector("[data-testid=sync-scroll-toggle]")),
@@ -1047,23 +1194,36 @@ function createMainWindow(): BrowserWindow {
           hasUnsavedIndicator: Boolean(document.querySelector(".document-tab.active .dirty-dot, .document-tab.active i[aria-label=未保存]")),
           statusText: document.querySelector(".status-message")?.textContent ?? "",
           viewportFits: document.documentElement.scrollWidth === document.documentElement.clientWidth
-        })`, true) as { tabText: string; tabCount: number; editorText: string; brandText: string; hasSidebar: boolean; hasSplitHandle: boolean; hasInsertImageButton: boolean; hasSyncScrollButton: boolean; saveEnabled: boolean; hasUnsavedIndicator: boolean; statusText: string; viewportFits: boolean };
+        })`, true) as { tabText: string; tabCount: number; editorText: string; brandText: string; hasSidebar: boolean; hasSidebarResizeHandle: boolean; hasSplitHandle: boolean; hasInsertImageButton: boolean; hasSyncScrollButton: boolean; saveEnabled: boolean; hasUnsavedIndicator: boolean; statusText: string; viewportFits: boolean };
         const accessibility = await window.webContents.executeJavaScript(`(async () => {
           const separator = document.querySelector('.split-handle');
+          const sidebarSeparator = document.querySelector('.sidebar-resize-handle');
           const selectedTab = document.querySelector('.document-tab.active .tab-select');
           const status = document.querySelector('.status-message');
-          if (!(separator instanceof HTMLElement)) return { keyboardSeparator: false, selectedTab: false, liveStatus: false };
+          if (!(separator instanceof HTMLElement) || !(sidebarSeparator instanceof HTMLElement)) return { keyboardSeparator: false, keyboardSidebarSeparator: false, sidebarToggle: false, selectedTab: false, liveStatus: false };
           const before = Number(separator.getAttribute('aria-valuenow'));
           separator.focus();
           separator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
           await new Promise((resolve) => setTimeout(resolve, 50));
           const after = Number(separator.getAttribute('aria-valuenow'));
+          const sidebarBefore = Number(sidebarSeparator.getAttribute('aria-valuenow'));
+          sidebarSeparator.focus();
+          sidebarSeparator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const sidebarAfter = Number(document.querySelector('.sidebar-resize-handle')?.getAttribute('aria-valuenow'));
+          document.querySelector('[aria-label="切换资源管理器"]')?.click();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const sidebarHidden = !document.querySelector('.explorer-panel');
+          document.querySelector('[aria-label="切换资源管理器"]')?.click();
+          await new Promise((resolve) => setTimeout(resolve, 50));
           return {
             keyboardSeparator: separator.tabIndex === 0 && after > before,
+            keyboardSidebarSeparator: sidebarSeparator.tabIndex === 0 && sidebarAfter > sidebarBefore,
+            sidebarToggle: sidebarHidden && Boolean(document.querySelector('.explorer-panel')),
             selectedTab: selectedTab?.getAttribute('role') === 'tab' && selectedTab.getAttribute('aria-selected') === 'true',
             liveStatus: status?.getAttribute('role') === 'status' && status.getAttribute('aria-live') === 'polite',
           };
-        })()`, true) as { keyboardSeparator: boolean; selectedTab: boolean; liveStatus: boolean };
+        })()`, true) as { keyboardSeparator: boolean; keyboardSidebarSeparator: boolean; sidebarToggle: boolean; selectedTab: boolean; liveStatus: boolean };
         const recentBoundary = await window.webContents.executeJavaScript(`(async () => {
           const result = await window.fantasticEditor.listRecentFiles();
           return {
@@ -1100,8 +1260,8 @@ function createMainWindow(): BrowserWindow {
         const fontControl = await window.webContents.executeJavaScript(`(() => {
           const input = document.querySelector("[data-testid=preview-font-select]");
           if (!(input instanceof HTMLInputElement)) return { exists: false, applied: false, hasArial: false };
-          const presets = document.querySelector("#preview-font-presets");
-          const hasArial = presets instanceof HTMLDataListElement && Array.from(presets.options).some((option) => option.value === "Arial");
+          const presets = document.querySelector("[data-testid=preview-font-preset]");
+          const hasArial = presets instanceof HTMLSelectElement && Array.from(presets.options).some((option) => option.value === "Arial") && presets.options.length >= 7;
           const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
           setter?.call(input, "KaiTi");
           input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -1117,7 +1277,7 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 120));
-        await window.webContents.insertText("# Mermaid smoke\n\n剪贴板 HTML 测试\n\n跨块格式甲\n\n跨块格式乙\n\n跨块粘贴甲\n\n跨块粘贴乙\n\n混合前 [链接](https://example.com) 与 `代码`、$a+b$、![inline image](missing.png) 混合后\n\n下表为**中性情景**下的工作假设：\n\n| 期间 | 情景 |\n| --- | --- |\n| 2026Q3 | 预测 |\n\n> 引用原文\n\n- 列表原项\n- [ ] 待完成\n- 嵌套父项\n  - 嵌套子项\n  - [ ] 嵌套任务\n- 嵌套后项\n\n![smoke image](missing.png)\n\n$$\nx + y\n$$\n\n```ts\nconst value = 1;\n```\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
+        await window.webContents.insertText("# Mermaid smoke\n\n剪贴板 HTML 测试\n\n跨块格式甲\n\n跨块格式乙\n\n跨块粘贴甲\n\n跨块粘贴乙\n\n***\n\n***\n\n***\n\n混合前 [链接](https://example.com) 与 `代码`、$a+b$、![inline image](missing.png) 混合后\n\n下表为**中性情景**下的工作假设：\n\n| 期间 | 情景 |\n| --- | --- |\n| 2026Q3 | 预测 |\n\n> 引用原文\n\n- 列表原项\n- [ ] 待完成\n- 嵌套父项\n  - 嵌套子项\n  - [ ] 嵌套任务\n- 嵌套后项\n\n![smoke image](missing.png)\n\n$$\nx + y\n$$\n\n```ts\nconst value = 1;\n```\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n* \n* \n  * \n* \n");
         await new Promise((resolve) => setTimeout(resolve, 250));
         const mermaidRendered = await window.webContents.executeJavaScript(`new Promise((resolve) => {
           const deadline = Date.now() + 8000;
@@ -1245,6 +1405,19 @@ function createMainWindow(): BrowserWindow {
           let blockDuplicated = false;
           let blockDeleted = false;
           let blockKeyboardMoved = false;
+          let headingLevelsApplied = false;
+          let italicChineseApplied = false;
+          let italicChineseVisible = false;
+          let italicToggleOff = false;
+          let boldToggleOff = false;
+          let formatSelectionRetained = false;
+          let toolbarLinkApplied = false;
+          let blockToolbarPersistent = false;
+          let blockToolbarRepeatedMove = false;
+          let emptyListItemDeleted = false;
+          const repeatedBreaksCompacted = document.querySelector(".wysiwyg-thematic-break-group")?.textContent?.includes("×3") === true
+            && document.querySelectorAll(".wysiwyg-editor-layer.active hr").length === 0;
+          const headingLevelTrace = [];
           const selectAcrossParagraphs = (firstText, lastText) => {
             const paragraphs = [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")];
             const first = paragraphs.find((element) => element.textContent?.includes(firstText));
@@ -1269,6 +1442,31 @@ function createMainWindow(): BrowserWindow {
             selection?.addRange(range);
             return first;
           };
+          const applyHeadingLevel = async (level, title) => {
+            const heading = [...document.querySelectorAll(".wysiwyg-editor-layer.active h1, .wysiwyg-editor-layer.active h2, .wysiwyg-editor-layer.active h3")]
+              .find((element) => element.textContent?.includes("Mermaid smoke"));
+            if (!(heading instanceof HTMLElement)) return false;
+            const rect = heading.getBoundingClientRect();
+            heading.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
+            const buttonReady = await waitFor(() => [...document.querySelectorAll(".wysiwyg-toolbar button")].some((button) => button.getAttribute("title") === title));
+            const button = [...document.querySelectorAll(".wysiwyg-toolbar button")].find((candidate) => candidate.getAttribute("title") === title);
+            if (!buttonReady || !(button instanceof HTMLButtonElement)) return false;
+            button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            const applied = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("#".repeat(level) + " Mermaid smoke")
+              && [...document.querySelectorAll(".wysiwyg-editor-layer.active h" + level)].some((element) => element.textContent?.includes("Mermaid smoke")));
+            headingLevelTrace.push({
+              level,
+              applied,
+              source: document.querySelector(".cm-content")?.textContent ?? "",
+              renderedTag: [...document.querySelectorAll(".wysiwyg-editor-layer.active h1, .wysiwyg-editor-layer.active h2, .wysiwyg-editor-layer.active h3")]
+                .find((element) => element.textContent?.includes("Mermaid smoke"))?.tagName ?? "missing",
+              status: document.querySelector(".status-message")?.textContent ?? "",
+            });
+            return applied;
+          };
+          headingLevelsApplied = await applyHeadingLevel(2, "二级标题")
+            && await applyHeadingLevel(3, "三级标题")
+            && await applyHeadingLevel(1, "一级标题");
           const copyParagraph = [...document.querySelectorAll(".wysiwyg-editor-layer.active p[data-wysiwyg-editability=direct]")]
             .find((element) => (element.textContent ?? "").trim().length > 0);
           if (copyParagraph instanceof HTMLElement) {
@@ -1299,8 +1497,10 @@ function createMainWindow(): BrowserWindow {
               && allCopiedPlain.includes("const value = 1;");
           }
           const formatStart = selectAcrossParagraphs("跨块格式甲", "跨块格式乙");
-          if (formatStart) {
-            formatStart.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true }));
+          const boldToolbarButton = document.querySelector('.wysiwyg-toolbar button[title^="粗体"]');
+          if (formatStart && boldToolbarButton instanceof HTMLButtonElement) {
+            boldToolbarButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            boldToolbarButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
             crossBlockFormatted = await waitFor(() => {
               const text = document.querySelector(".cm-content")?.textContent ?? "";
               return text.includes("**跨块格式甲**") && text.includes("**跨块格式乙**");
@@ -1580,16 +1780,49 @@ function createMainWindow(): BrowserWindow {
           formatRange.selectNodeContents(paragraph);
           initialSelection?.removeAllRanges();
           initialSelection?.addRange(formatRange);
-          paragraph.dispatchEvent(new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true, cancelable: true }));
-          paragraph.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+          const directItalicButton = document.querySelector('.wysiwyg-toolbar button[title^="斜体"]');
+          if (directItalicButton instanceof HTMLButtonElement) {
+            directItalicButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            italicChineseApplied = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("*可视编辑已写回*"));
+            const italicElement = paragraph.querySelector("em, i");
+            italicChineseVisible = italicElement instanceof HTMLElement && getComputedStyle(italicElement).transform !== "none";
+            formatSelectionRetained = Boolean(window.getSelection() && !window.getSelection().isCollapsed && paragraph.contains(window.getSelection().anchorNode));
+            if (italicElement instanceof HTMLElement) {
+              const legacyDuplicate = document.createElement("em");
+              legacyDuplicate.className = "wysiwyg-italic-visual";
+              italicElement.replaceWith(legacyDuplicate);
+              legacyDuplicate.append(italicElement);
+              const legacyRange = document.createRange();
+              legacyRange.selectNodeContents(italicElement);
+              const legacySelection = window.getSelection();
+              legacySelection?.removeAllRanges();
+              legacySelection?.addRange(legacyRange);
+            }
+            directItalicButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            italicToggleOff = await waitFor(() => !paragraph.querySelector("em, i") && (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
+          }
+          const directBoldButton = document.querySelector('.wysiwyg-toolbar button[title^="粗体"]');
+          if (directBoldButton instanceof HTMLButtonElement) {
+            directBoldButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("**可视编辑已写回**"));
+            directBoldButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            boldToggleOff = await waitFor(() => !paragraph.querySelector("strong, b") && (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
+            directBoldButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+          }
           const edited = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
           const formatted = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("**可视编辑已写回**"));
           const afterEdit = document.querySelector(".cm-content")?.textContent ?? "";
+          const formattedParagraph = [...document.querySelectorAll(".wysiwyg-editor-layer.active .wysiwyg-content > p")].find((element) => element.textContent?.includes("可视编辑已写回"));
+          if (formattedParagraph instanceof HTMLElement) {
+            formattedParagraph.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+            formattedParagraph.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+            await waitFor(() => !(document.activeElement instanceof HTMLElement) || !formattedParagraph.contains(document.activeElement));
+          }
           window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }));
-          const undone = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("中性情景"));
+          const undone = await waitFor(() => !(document.querySelector(".cm-content")?.textContent ?? "").includes("**可视编辑已写回**"));
           const afterUndo = document.querySelector(".cm-content")?.textContent ?? "";
           window.dispatchEvent(new KeyboardEvent("keydown", { key: "y", ctrlKey: true, bubbles: true, cancelable: true }));
-          const redone = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("可视编辑已写回"));
+          const redone = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("**可视编辑已写回**"));
           const afterRedo = document.querySelector(".cm-content")?.textContent ?? "";
           const paragraphAfterRedoReady = await waitFor(() => Boolean([...document.querySelectorAll(".wysiwyg-editor-layer.active .wysiwyg-content > p")].find((element) => element.textContent?.includes("可视编辑已写回"))));
           const paragraphAfterRedo = [...document.querySelectorAll(".wysiwyg-editor-layer.active .wysiwyg-content > p")].find((element) => element.textContent?.includes("可视编辑已写回"));
@@ -1715,6 +1948,33 @@ function createMainWindow(): BrowserWindow {
           } catch (error) {
             multilinePasteError = [multilinePasteError, error instanceof Error ? error.message : String(error)].filter(Boolean).join(" | ");
           }
+          const toolbarLinkTargetReady = await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active h1")].some((element) => element.textContent?.includes("IMA 标题")));
+          const toolbarLinkTarget = [...document.querySelectorAll(".wysiwyg-editor-layer.active h1")].find((element) => element.textContent?.includes("IMA 标题"));
+          if (toolbarLinkTargetReady && toolbarLinkTarget instanceof HTMLElement) {
+            const rect = toolbarLinkTarget.getBoundingClientRect();
+            toolbarLinkTarget.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
+            const node = toolbarLinkTarget.firstChild;
+            if (node instanceof Text) {
+              const from = node.textContent?.indexOf("IMA 标题") ?? -1;
+              const range = document.createRange();
+              range.setStart(node, from);
+              range.setEnd(node, from + "IMA 标题".length);
+              const selection = window.getSelection();
+              selection?.removeAllRanges();
+              selection?.addRange(range);
+              document.querySelector('.wysiwyg-toolbar button[title^="添加链接"]')?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+              const inputReady = await waitFor(() => document.querySelector("[data-testid=wysiwyg-link-create-destination]") instanceof HTMLInputElement);
+              const input = document.querySelector("[data-testid=wysiwyg-link-create-destination]");
+              if (inputReady && input instanceof HTMLInputElement) {
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+                setter?.call(input, "https://example.com/toolbar");
+                input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+                input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+                toolbarLinkApplied = await waitFor(() => (document.querySelector(".cm-content")?.textContent ?? "").includes("[IMA 标题](https://example.com/toolbar)"))
+                  && Boolean(window.getSelection() && !window.getSelection().isCollapsed && toolbarLinkTarget.contains(window.getSelection().anchorNode));
+              }
+            }
+          }
           const diagramReady = await waitFor(() => {
             const content = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content");
             const candidate = content?.querySelector(".mermaid-diagram");
@@ -1775,13 +2035,16 @@ function createMainWindow(): BrowserWindow {
           if (headingForBlocks instanceof HTMLElement) {
             const rect = headingForBlocks.getBoundingClientRect();
             headingForBlocks.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
-            const blockToolbarReady = await waitFor(() => document.querySelector(".wysiwyg-block-toolbar select") instanceof HTMLSelectElement);
+            const blockToolbarReady = await waitFor(() => {
+              const select = document.querySelector(".wysiwyg-block-toolbar select");
+              return select instanceof HTMLSelectElement && !select.disabled;
+            });
             const insertSelect = document.querySelector(".wysiwyg-block-toolbar select");
             if (blockToolbarReady && insertSelect instanceof HTMLSelectElement) {
               const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
               setter?.call(insertSelect, "quote");
               insertSelect.dispatchEvent(new Event("change", { bubbles: true }));
-              [...document.querySelectorAll(".wysiwyg-block-toolbar button")].find((button) => button.textContent?.includes("下方插入"))?.click();
+              [...document.querySelectorAll(".wysiwyg-block-toolbar button")].find((button) => button.textContent?.includes("下方插入"))?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
               blockInserted = await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].some((element) => element.textContent?.includes("新引用")));
             }
           }
@@ -1789,7 +2052,10 @@ function createMainWindow(): BrowserWindow {
           if (insertedQuote instanceof HTMLElement) {
             const rect = insertedQuote.getBoundingClientRect();
             insertedQuote.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
-            const gripReady = await waitFor(() => document.querySelector(".wysiwyg-block-grip") instanceof HTMLButtonElement);
+            const gripReady = await waitFor(() => {
+              const button = document.querySelector(".wysiwyg-block-grip");
+              return button instanceof HTMLButtonElement && !button.disabled;
+            });
             const grip = document.querySelector(".wysiwyg-block-grip");
             const targetHeading = document.querySelector(".wysiwyg-editor-layer.active h1");
             if (gripReady && grip instanceof HTMLButtonElement && targetHeading instanceof HTMLElement) {
@@ -1812,13 +2078,33 @@ function createMainWindow(): BrowserWindow {
               const first = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content > :first-child");
               return !(first instanceof HTMLQuoteElement) && [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].filter((element) => element.textContent?.includes("新引用")).length === 1;
             });
+            blockToolbarPersistent = await waitFor(() => {
+              const activeBlock = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-block-active");
+              const enabledMove = [...document.querySelectorAll(".wysiwyg-block-toolbar button")]
+                .some((button) => (button.textContent?.trim() === "上移" || button.textContent?.trim() === "下移") && button instanceof HTMLButtonElement && !button.disabled);
+              return activeBlock?.textContent?.includes("新引用") === true && enabledMove;
+            });
+            const activeBeforeRepeat = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-block-active");
+            const beforeRepeatFrom = activeBeforeRepeat instanceof HTMLElement ? activeBeforeRepeat.dataset.sourceFrom : undefined;
+            const repeatMoveButton = [...document.querySelectorAll(".wysiwyg-block-toolbar button")]
+              .find((button) => (button.textContent?.trim() === "下移" || button.textContent?.trim() === "上移") && button instanceof HTMLButtonElement && !button.disabled);
+            if (repeatMoveButton instanceof HTMLButtonElement) {
+              repeatMoveButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+              blockToolbarRepeatedMove = await waitFor(() => {
+                const activeAfterRepeat = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-block-active");
+                return activeAfterRepeat instanceof HTMLElement
+                  && activeAfterRepeat.textContent?.includes("新引用") === true
+                  && activeAfterRepeat.dataset.sourceFrom !== beforeRepeatFrom
+                  && [...document.querySelectorAll(".wysiwyg-block-toolbar button")].some((button) => button instanceof HTMLButtonElement && !button.disabled);
+              });
+            }
           }
           await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].filter((element) => element.textContent?.includes("新引用")).length === 1);
           const quoteForDuplicate = [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].find((element) => element.textContent?.includes("新引用"));
           if (quoteForDuplicate instanceof HTMLElement) {
             const rect = quoteForDuplicate.getBoundingClientRect();
             quoteForDuplicate.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
-            await waitFor(() => [...document.querySelectorAll(".wysiwyg-block-toolbar button")].some((button) => button.textContent?.trim() === "复制"));
+            await waitFor(() => [...document.querySelectorAll(".wysiwyg-block-toolbar button")].some((button) => button.textContent?.trim() === "复制" && button instanceof HTMLButtonElement && !button.disabled));
             [...document.querySelectorAll(".wysiwyg-block-toolbar button")].find((button) => button.textContent?.trim() === "复制")?.click();
             blockDuplicated = await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].filter((element) => element.textContent?.includes("新引用")).length === 2);
           }
@@ -1827,13 +2113,32 @@ function createMainWindow(): BrowserWindow {
           if (quoteForDelete instanceof HTMLElement) {
             const rect = quoteForDelete.getBoundingClientRect();
             quoteForDelete.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
-            await waitFor(() => [...document.querySelectorAll(".wysiwyg-block-toolbar button")].some((button) => button.textContent?.trim() === "删除"));
+            await waitFor(() => [...document.querySelectorAll(".wysiwyg-block-toolbar button")].some((button) => button.textContent?.trim() === "删除" && button instanceof HTMLButtonElement && !button.disabled));
             const originalConfirm = window.confirm;
             window.confirm = () => true;
             [...document.querySelectorAll(".wysiwyg-block-toolbar button")].find((button) => button.textContent?.trim() === "删除")?.click();
             window.confirm = originalConfirm;
             blockDeleted = await waitFor(() => [...document.querySelectorAll(".wysiwyg-editor-layer.active blockquote")].filter((element) => element.textContent?.includes("新引用")).length === 1);
-          }          sourceButton.click();
+          }
+          const emptyItems = [...document.querySelectorAll('.wysiwyg-editor-layer.active [data-wysiwyg-editability=direct]')]
+            .filter((item) => item.closest("li") && !(item.textContent ?? "").trim());
+          const emptyItem = emptyItems[0];
+          if (emptyItem instanceof HTMLElement) {
+            const rect = emptyItem.getBoundingClientRect();
+            emptyItem.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.top + rect.height / 2 }));
+            if (await waitFor(() => emptyItem.isContentEditable)) {
+              emptyItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }));
+              const firstDeleted = await waitFor(() => [...document.querySelectorAll('.wysiwyg-editor-layer.active [data-wysiwyg-editability=direct]')]
+                .filter((item) => item.closest("li") && !(item.textContent ?? "").trim()).length === emptyItems.length - 1);
+              const nextItem = document.activeElement;
+              if (firstDeleted && nextItem instanceof HTMLElement && nextItem.closest("li")) {
+                nextItem.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true, repeat: true }));
+                emptyListItemDeleted = await waitFor(() => [...document.querySelectorAll('.wysiwyg-editor-layer.active [data-wysiwyg-editability=direct]')]
+                  .filter((item) => item.closest("li") && !(item.textContent ?? "").trim()).length === emptyItems.length - 2);
+              }
+            }
+          }
+          sourceButton.click();
           await new Promise((resolve) => setTimeout(resolve, 150));
           return {
             exists: true,
@@ -1871,6 +2176,18 @@ function createMainWindow(): BrowserWindow {
             blockDuplicated,
             blockDeleted,
             blockKeyboardMoved,
+            headingLevelsApplied,
+            headingLevelTrace,
+            italicChineseApplied,
+            italicChineseVisible,
+            italicToggleOff,
+            boldToggleOff,
+            formatSelectionRetained,
+            toolbarLinkApplied,
+            blockToolbarPersistent,
+            blockToolbarRepeatedMove,
+            repeatedBreaksCompacted,
+            emptyListItemDeleted,
             tableCellEdited,
             tableColumnInserted,
             tableAlignmentApplied,
@@ -1901,7 +2218,7 @@ function createMainWindow(): BrowserWindow {
           } catch (error) {
             return { exists: true, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
           }
-        })()`, true) as { exists: boolean; ready?: boolean; edited?: boolean; directInputReady?: boolean; caretInside?: boolean; browserInserted?: boolean; formatted?: boolean; paragraphBreaks?: boolean; mergedParagraphs?: boolean; compositionDeferred?: boolean; blankParagraphAdded?: boolean; blankParagraphDeduplicated?: boolean; blankParagraphDeleted?: boolean; multilinePasteHandled?: boolean; imageAltEdited?: boolean; formulaStructuredApplied?: boolean; codeStructuredApplied?: boolean; linkStructuredApplied?: boolean; inlineCodeStructuredApplied?: boolean; mixedInlineEdited?: boolean; mixedAtomsProtected?: boolean; protectedSelectionRejected?: boolean; crossBlockFormatted?: boolean; crossBlockPasted?: boolean; crossBlockProtectedRejected?: boolean; dualFormatCopy?: boolean; selectAllCopy?: boolean; externalHtmlPaste?: boolean; imaRichPaste?: boolean; blockInserted?: boolean; blockDragged?: boolean; blockDuplicated?: boolean; blockDeleted?: boolean; blockKeyboardMoved?: boolean; tableCellEdited?: boolean; tableColumnInserted?: boolean; tableAlignmentApplied?: boolean; tableRowAppended?: boolean; listItemEdited?: boolean; listDirectReady?: boolean; listBrowserInserted?: boolean; listIndented?: boolean; listOutdented?: boolean; nestedParentEdited?: boolean; nestedSubtreeIndented?: boolean; nestedSubtreeOutdented?: boolean; quoteEdited?: boolean; taskToggled?: boolean; undone?: boolean; redone?: boolean; sourceCardApplied?: boolean; visualWasActive?: boolean; sourceRestored?: boolean; afterEdit?: string; afterUndo?: string; afterRedo?: string };
+        })()`, true) as { exists: boolean; ready?: boolean; edited?: boolean; directInputReady?: boolean; caretInside?: boolean; browserInserted?: boolean; formatted?: boolean; italicChineseApplied?: boolean; italicChineseVisible?: boolean; italicToggleOff?: boolean; boldToggleOff?: boolean; formatSelectionRetained?: boolean; toolbarLinkApplied?: boolean; blockToolbarPersistent?: boolean; blockToolbarRepeatedMove?: boolean; repeatedBreaksCompacted?: boolean; emptyListItemDeleted?: boolean; paragraphBreaks?: boolean; mergedParagraphs?: boolean; compositionDeferred?: boolean; blankParagraphAdded?: boolean; blankParagraphDeduplicated?: boolean; blankParagraphDeleted?: boolean; multilinePasteHandled?: boolean; imageAltEdited?: boolean; formulaStructuredApplied?: boolean; codeStructuredApplied?: boolean; linkStructuredApplied?: boolean; inlineCodeStructuredApplied?: boolean; mixedInlineEdited?: boolean; mixedAtomsProtected?: boolean; protectedSelectionRejected?: boolean; crossBlockFormatted?: boolean; crossBlockPasted?: boolean; crossBlockProtectedRejected?: boolean; dualFormatCopy?: boolean; selectAllCopy?: boolean; externalHtmlPaste?: boolean; imaRichPaste?: boolean; blockInserted?: boolean; blockDragged?: boolean; blockDuplicated?: boolean; blockDeleted?: boolean; blockKeyboardMoved?: boolean; headingLevelsApplied?: boolean; tableCellEdited?: boolean; tableColumnInserted?: boolean; tableAlignmentApplied?: boolean; tableRowAppended?: boolean; listItemEdited?: boolean; listDirectReady?: boolean; listBrowserInserted?: boolean; listIndented?: boolean; listOutdented?: boolean; nestedParentEdited?: boolean; nestedSubtreeIndented?: boolean; nestedSubtreeOutdented?: boolean; quoteEdited?: boolean; taskToggled?: boolean; undone?: boolean; redone?: boolean; sourceCardApplied?: boolean; visualWasActive?: boolean; sourceRestored?: boolean; afterEdit?: string; afterUndo?: string; afterRedo?: string };
         const viewWorkflow = await window.webContents.executeJavaScript(`(async () => {
           try {
           const waitFor = async (predicate, timeout = 8000) => {
@@ -1919,6 +2236,8 @@ function createMainWindow(): BrowserWindow {
           await waitFor(() => Boolean(document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content")));
           const container = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-editor");
           const font = document.querySelector("[data-testid=wysiwyg-font-select]");
+          const fontPreset = document.querySelector("[data-testid=wysiwyg-font-preset]");
+          const defaultFont = document.querySelector(".wysiwyg-font-default");
           let scrollPreserved = false;
           if (container instanceof HTMLElement && font instanceof HTMLInputElement) {
             container.scrollTop = Math.min(700, Math.max(1, container.scrollHeight - container.clientHeight));
@@ -1942,7 +2261,7 @@ function createMainWindow(): BrowserWindow {
           document.querySelector('button[aria-label="仅编辑"]')?.click();
           sourceButton.click();
           await waitFor(() => Boolean(document.querySelector(".source-editor-layer.active")));
-          return { fontControl: font instanceof HTMLInputElement, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButton, searchButton };
+          return { fontControl: font instanceof HTMLInputElement && defaultFont instanceof HTMLButtonElement && fontPreset instanceof HTMLSelectElement && fontPreset.options.length >= 7, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButton, searchButton };
           } catch (error) {
             return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButton: false, searchButton: false, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
           }
@@ -1966,7 +2285,8 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
-          const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && mermaidRendered && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.directInputReady && wysiwyg.caretInside && wysiwyg.browserInserted && wysiwyg.formatted && wysiwyg.paragraphBreaks && wysiwyg.mergedParagraphs && wysiwyg.compositionDeferred && wysiwyg.blankParagraphAdded && wysiwyg.blankParagraphDeduplicated && wysiwyg.blankParagraphDeleted && wysiwyg.multilinePasteHandled && wysiwyg.imageAltEdited && wysiwyg.formulaStructuredApplied && wysiwyg.codeStructuredApplied && wysiwyg.linkStructuredApplied && wysiwyg.inlineCodeStructuredApplied && wysiwyg.mixedInlineEdited && wysiwyg.mixedAtomsProtected && wysiwyg.protectedSelectionRejected && wysiwyg.crossBlockFormatted && wysiwyg.crossBlockPasted && wysiwyg.crossBlockProtectedRejected && wysiwyg.dualFormatCopy && wysiwyg.selectAllCopy && wysiwyg.externalHtmlPaste && wysiwyg.imaRichPaste && wysiwyg.blockInserted && wysiwyg.blockDragged && wysiwyg.blockDuplicated && wysiwyg.blockDeleted && wysiwyg.blockKeyboardMoved && wysiwyg.tableCellEdited && wysiwyg.tableColumnInserted && wysiwyg.tableAlignmentApplied && wysiwyg.tableRowAppended && wysiwyg.listItemEdited && wysiwyg.listDirectReady && wysiwyg.listBrowserInserted && wysiwyg.listIndented && wysiwyg.listOutdented && wysiwyg.nestedParentEdited && wysiwyg.nestedSubtreeIndented && wysiwyg.nestedSubtreeOutdented && wysiwyg.quoteEdited && wysiwyg.taskToggled && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.previewMermaid && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButton && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        if (!after.hasSidebarResizeHandle || !accessibility.keyboardSidebarSeparator || !accessibility.sidebarToggle) throw new Error("Resource explorer resize or visibility smoke failed.");
+        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && mermaidRendered && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.directInputReady && wysiwyg.caretInside && wysiwyg.browserInserted && wysiwyg.formatted && wysiwyg.italicChineseApplied && wysiwyg.italicChineseVisible && wysiwyg.italicToggleOff && wysiwyg.boldToggleOff && wysiwyg.formatSelectionRetained && wysiwyg.toolbarLinkApplied && wysiwyg.headingLevelsApplied && wysiwyg.paragraphBreaks && wysiwyg.mergedParagraphs && wysiwyg.compositionDeferred && wysiwyg.blankParagraphAdded && wysiwyg.blankParagraphDeduplicated && wysiwyg.blankParagraphDeleted && wysiwyg.multilinePasteHandled && wysiwyg.imageAltEdited && wysiwyg.formulaStructuredApplied && wysiwyg.codeStructuredApplied && wysiwyg.linkStructuredApplied && wysiwyg.inlineCodeStructuredApplied && wysiwyg.mixedInlineEdited && wysiwyg.mixedAtomsProtected && wysiwyg.protectedSelectionRejected && wysiwyg.crossBlockFormatted && wysiwyg.crossBlockPasted && wysiwyg.crossBlockProtectedRejected && wysiwyg.dualFormatCopy && wysiwyg.selectAllCopy && wysiwyg.externalHtmlPaste && wysiwyg.imaRichPaste && wysiwyg.blockInserted && wysiwyg.blockDragged && wysiwyg.blockDuplicated && wysiwyg.blockDeleted && wysiwyg.blockKeyboardMoved && wysiwyg.blockToolbarPersistent && wysiwyg.blockToolbarRepeatedMove && wysiwyg.repeatedBreaksCompacted && wysiwyg.tableCellEdited && wysiwyg.tableColumnInserted && wysiwyg.tableAlignmentApplied && wysiwyg.tableRowAppended && wysiwyg.listItemEdited && wysiwyg.listDirectReady && wysiwyg.listBrowserInserted && wysiwyg.listIndented && wysiwyg.listOutdented && wysiwyg.nestedParentEdited && wysiwyg.nestedSubtreeIndented && wysiwyg.nestedSubtreeOutdented && wysiwyg.quoteEdited && wysiwyg.taskToggled && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.previewMermaid && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButton && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
         console.log(JSON.stringify({ uiReady, before, drag, after, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
       await finishSmoke("ui", valid === true, { uiReady, before, drag, after, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
       })().catch((error: unknown) => {
@@ -1985,10 +2305,25 @@ function createMainWindow(): BrowserWindow {
       void finishSmoke("basic", false);
     });
   } else {
-    window.once("ready-to-show", () => window.show());
+    showWhenLoaded = true;
   }
-  if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void window.loadFile(join(__dirname, "../renderer/index.html"));
+  let loadPromise: Promise<void>;
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const rendererUrl = new URL(process.env.ELECTRON_RENDERER_URL);
+    if (process.env.FANTASTIC_EDITOR_UI_SMOKE_TEST === "1") rendererUrl.searchParams.set("legacy-wysiwyg-smoke", "1");
+    loadPromise = window.loadURL(rendererUrl.toString());
+  } else {
+    loadPromise = window.loadFile(join(__dirname, "../renderer/index.html"), process.env.FANTASTIC_EDITOR_UI_SMOKE_TEST === "1"
+      ? { query: { "legacy-wysiwyg-smoke": "1" } }
+      : undefined);
+  }
+  if (showWhenLoaded) {
+    void loadPromise.then(() => {
+      if (!window.isDestroyed()) window.show();
+    }).catch((error: unknown) => {
+      console.error("Renderer failed to load.", error);
+    });
+  }
   return window;
 }
 

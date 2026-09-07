@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { SynchronizedPreview, type SynchronizedPreviewHandle } from "./SynchronizedPreview";
 import { applyResolutionToPreviewHtml } from "./preview-assets";
-import { applyPreviewDerivedUpdate, createPreviewSession } from "./preview-session";
+import { applyPreviewDerivedUpdate, createPreviewSession, formatDiagnostics } from "./preview-session";
 import { ParseWorkerClient } from "./workers/parse-worker-client";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { DEFAULT_PREVIEW_FONT, PREVIEW_FONT_PRESETS, DEFAULT_PREVIEW_FONT_SIZE, DEFAULT_READING_WIDTH, READING_WIDTH_OPTIONS, commitPreviewFontDraft, normalizePreviewFontName, normalizePreviewFontSize, normalizeReadingWidth, previewFontStack, readingWidthMaxWidth, type ReadingWidth } from "./preview-font";
@@ -12,7 +12,7 @@ import { WysiwygEditor, type WysiwygEditorHandle } from "./WysiwygEditor";
 import { computeWechatAcceptanceGates, createEmptyWechatAcceptance, updateWechatAcceptance, type WechatAcceptanceProgress } from "./wechat-acceptance";
 import { WechatThemePreview } from "./WechatThemePreview";
 import { WechatApiConfigDialog } from "./WechatApiConfigDialog";
-import { clampSplitRatio, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, splitRatioForKey } from "./accessibility";
+import { clampSidebarWidth, clampSplitRatio, DEFAULT_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MAX_SPLIT_RATIO, MIN_SIDEBAR_WIDTH, MIN_SPLIT_RATIO, sidebarWidthForKey, splitRatioForKey } from "./accessibility";
 import { adjacentTabIndex, moveTabIndexForKey, moveTabItem, tabIndexForNavigationKey } from "./tab-navigation";
 import { createDocumentPerformanceSnapshot, documentPerformanceDescription, documentPerformanceLabel, type DocumentPerformanceSnapshot } from "./document-performance";
 import { extractDocumentOutline, type OutlineEntry } from "./document-outline";
@@ -43,6 +43,14 @@ type RenameTarget =
 type ActiveWorkspace = NonNullable<OpenFolderResult["workspace"]>;
 
 const EMPTY_DOCUMENT = "# fantastic-editor\n\n打开一个本地 Markdown 文件，开始编辑。\n";
+const PREVIEW_FONT_LABELS: Record<(typeof PREVIEW_FONT_PRESETS)[number], string> = {
+  "Microsoft YaHei UI": "微软雅黑（默认）",
+  "Segoe UI Variable Text": "Segoe UI",
+  Arial: "Arial",
+  DengXian: "等线",
+  SimSun: "宋体",
+  KaiTi: "楷体",
+};
 const EMPTY_WECHAT_API_CONFIG: WechatApiConfigSummary = {
   appId: "",
   hasAppSecret: false,
@@ -93,8 +101,15 @@ export function App() {
   const [documentPerformance, setDocumentPerformance] = useState<DocumentPerformanceSnapshot | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(Number(window.localStorage.getItem("fantastic-editor-sidebar-width") ?? DEFAULT_SIDEBAR_WIDTH)));
   const [viewMode, setViewMode] = useState<"editor" | "split" | "preview">(() => window.localStorage.getItem("fantastic-editor-editor-mode") === "wysiwyg" ? "editor" : "split");
   const [editorMode, setEditorMode] = useState<"source" | "wysiwyg">(() => window.localStorage.getItem("fantastic-editor-editor-mode") === "wysiwyg" ? "wysiwyg" : "source");
+  const [liveLinkInputOpen, setLiveLinkInputOpen] = useState(false);
+  const [liveLinkUrl, setLiveLinkUrl] = useState("");
+  const legacyWysiwygEnabled = useRef(
+    window.localStorage.getItem("fantastic-editor-legacy-wysiwyg") === "true"
+      || new URLSearchParams(window.location.search).get("legacy-wysiwyg-smoke") === "1",
+  ).current;
   const previousSourceViewModeRef = useRef<"editor" | "split" | "preview">("split");
   const [splitRatio, setSplitRatio] = useState(50);
   const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem("fantastic-editor-theme") === "dark");
@@ -323,6 +338,7 @@ export function App() {
 
   useEffect(() => { window.localStorage.setItem("fantastic-editor-reading-width", readingWidth); }, [readingWidth]);
   useEffect(() => { window.localStorage.setItem("fantastic-editor-preview-font-size", String(previewFontSize)); }, [previewFontSize]);
+  useEffect(() => { window.localStorage.setItem("fantastic-editor-sidebar-width", String(sidebarWidth)); }, [sidebarWidth]);
 
   useEffect(() => {
     window.localStorage.setItem("fantastic-editor-wechat-theme", wechatThemeId);
@@ -340,7 +356,7 @@ export function App() {
       if (merged.status !== "accepted") return false;
       previewSessionRef.current = merged.session;
       setPreviewHtml(applyResolutionToPreviewHtml(basePreviewHtmlRef.current, merged.session));
-      setDiagnostics(merged.session.diagnostics.map((item) => `${item.code}: ${item.message}`));
+      setDiagnostics(formatDiagnostics(merged.session.diagnostics));
       setStatus(Object.keys(update.entries).length > 0
         ? "SVG 安全转换完成，预览已更新"
         : "SVG 安全转换未完成，请查看诊断信息");
@@ -368,7 +384,7 @@ export function App() {
         basePreviewHtmlRef.current = response.previewHtml;
         setPreviewHtml(response.previewHtml);
         setPreviewHtmlReady(true);
-        const parseDiagnostics = response.diagnostics.map((item) => `${item.code}: ${item.message}`);
+        const parseDiagnostics = formatDiagnostics(response.diagnostics);
         setDiagnostics(parseDiagnostics);
         setPreviewSyncIdentity(`${response.documentId}:${response.sourceHash}:${response.parserProfile}:${response.taskSequence}`);
         void (async () => {
@@ -414,7 +430,7 @@ export function App() {
           setOutputReady(true);
           setPreviewRetryAvailable(false);
           setPreviewHtml(applyResolutionToPreviewHtml(response.previewHtml, session));
-          setDiagnostics(session.diagnostics.map((item) => `${item.code}: ${item.message}`));
+          setDiagnostics(formatDiagnostics(session.diagnostics));
           setDocumentPerformance(createDocumentPerformanceSnapshot({
             characterCount: response.parsedDocument.sourceLength,
             resourceCount: response.parsedDocument.resourceReferences.length,
@@ -583,10 +599,6 @@ export function App() {
   }, [updateTabs]);
 
   const renameOpenFile = useCallback(async (tab: DocumentTab, newName: string) => {
-    if (tab.isUntitled) {
-      setStatus("未命名文档请先保存，再右键重命名。");
-      return;
-    }
     const result = await window.fantasticEditor.renameOpenFile({ sessionId: tab.sessionId, newName });
     if (result.status !== "renamed") {
       setStatus(result.error);
@@ -607,10 +619,6 @@ export function App() {
   }, [updateTabs]);
 
   const beginRenameOpenFile = useCallback((tab: DocumentTab) => {
-    if (tab.isUntitled) {
-      setStatus("未命名文档请先保存，再右键重命名。");
-      return;
-    }
     setRenameTarget({ kind: "open", sessionId: tab.sessionId });
     setRenameValue(tab.displayName);
   }, []);
@@ -680,11 +688,11 @@ export function App() {
   }, [dirty, selectWorkspaceFile, updateTabs, waitForRecoveryReady]);
 
   const commitPendingEditor = useCallback((): boolean => {
-    if (editorMode !== "wysiwyg") return true;
+    if (editorMode !== "wysiwyg" || !legacyWysiwygEnabled) return true;
     const committed = wysiwygEditorRef.current?.commitPending() ?? true;
     if (!committed) setStatus("所见即所得修改基于旧文档版本，未执行保存或切换。");
     return committed;
-  }, [editorMode]);
+  }, [editorMode, legacyWysiwygEnabled]);
 
   const repairCurrentWebMarkdown = useCallback(() => {
     if (!active) {
@@ -795,12 +803,12 @@ export function App() {
       const diagnostics = result.preflight.diagnostics;
       const blocking = diagnostics.find((item) => item.severity === "blocking");
       setStatus(blocking ? `导出预检失败：${blocking.message}` : (result.error ?? "导出预检失败，请查看诊断信息。"));
-      if (diagnostics.length > 0) setDiagnostics(diagnostics.map((item) => `${item.code}: ${item.message}`));
+      if (diagnostics.length > 0) setDiagnostics(formatDiagnostics(diagnostics));
       return;
     }
     setStatus(result.error ?? "导出失败，请查看诊断信息。");
     if (result.result?.diagnostics.length) {
-      setDiagnostics(result.result.diagnostics.map((item) => `${item.code}: ${item.message}`));
+      setDiagnostics(formatDiagnostics(result.result.diagnostics));
     }
   }, []);
 
@@ -1212,7 +1220,7 @@ export function App() {
 
   const importImages = useCallback(async (files?: File[], existingAnchorId?: string) => {
     setDragActive(false);
-    const insertionEditor = editorMode === "wysiwyg" ? wysiwygEditorRef.current : markdownEditorRef.current;
+    const insertionEditor = editorMode === "wysiwyg" && legacyWysiwygEnabled ? wysiwygEditorRef.current : markdownEditorRef.current;
     if (imageImportBusyRef.current) {
       if (existingAnchorId) insertionEditor?.discardInsertionAnchor(existingAnchorId);
       setStatus("已有图片导入任务正在进行，请稍候。");
@@ -1272,7 +1280,7 @@ export function App() {
       imageImportBusyRef.current = false;
       setImageImportBusy(false);
     }
-  }, [active, commitPendingEditor, editorMode, saveAs, updateTabs]);
+  }, [active, commitPendingEditor, editorMode, legacyWysiwygEnabled, saveAs, updateTabs]);
   const handleDrop = useCallback(async (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     setDragActive(false);
@@ -1306,13 +1314,16 @@ export function App() {
       synchronizedPreviewRef.current?.clearTransientState();
       setViewMode("editor");
       setStatus("已切换到所见即所得模式；Markdown 仍是唯一保存来源。");
+      if (!legacyWysiwygEnabled) window.requestAnimationFrame(() => markdownEditorRef.current?.focus());
     } else {
+      setLiveLinkInputOpen(false);
+      setLiveLinkUrl("");
       setViewMode(previousSourceViewModeRef.current);
       setStatus("已切换到源代码模式。");
       window.requestAnimationFrame(() => markdownEditorRef.current?.focus());
     }
     setEditorMode(nextMode);
-  }, [commitPendingEditor, editorMode, viewMode]);
+  }, [commitPendingEditor, editorMode, legacyWysiwygEnabled, viewMode]);
 
   const clearSearch = useCallback(() => {
     markdownEditorRef.current?.clearSearch?.();
@@ -1328,22 +1339,22 @@ export function App() {
     if (!query) { clearSearch(); return; }
     const result = viewMode === "preview"
       ? synchronizedPreviewRef.current?.find(query, direction, searchIndexRef.current)
-      : editorMode === "wysiwyg"
+      : editorMode === "wysiwyg" && legacyWysiwygEnabled
         ? wysiwygEditorRef.current?.find(query, direction, searchIndexRef.current)
         : markdownEditorRef.current?.find(query, direction, searchIndexRef.current);
     const normalized = result ?? { index: 0, total: 0 };
     searchIndexRef.current = normalized.index > 0 ? normalized.index - 1 : -1;
     setSearchResult(normalized);
-  }, [clearSearch, editorMode, searchQuery, viewMode]);
+  }, [clearSearch, editorMode, legacyWysiwygEnabled, searchQuery, viewMode]);
 
   const revealOutlineEntry = useCallback((entry: OutlineEntry) => {
     const revealed = viewMode === "preview"
       ? synchronizedPreviewRef.current?.revealSourceRange(entry.from, entry.to)
-      : editorMode === "wysiwyg"
+      : editorMode === "wysiwyg" && legacyWysiwygEnabled
         ? wysiwygEditorRef.current?.revealSourceRange(entry.from, entry.to)
         : markdownEditorRef.current?.revealSourceRange(entry.from, entry.to);
     setStatus(revealed ? `已跳转到 ${entry.label}` : "当前视图尚未完成渲染，暂时无法跳转。请稍候再试。");
-  }, [editorMode, viewMode]);
+  }, [editorMode, legacyWysiwygEnabled, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1377,7 +1388,7 @@ export function App() {
         if (current) void closeTab(current);
         return;
       }
-      if (editorMode === "wysiwyg" && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
+      if (editorMode === "wysiwyg" && legacyWysiwygEnabled && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
         event.preventDefault();
         if (!commitPendingEditor()) return;
         const redoRequested = event.key.toLowerCase() === "y" || event.shiftKey;
@@ -1394,7 +1405,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activateTabAtIndex, active, clearSearch, closeTab, commitPendingEditor, editorMode, newFile, openFile, save, saveAs, searchOpen, wechatThemePreviewOpen]);
+  }, [activateTabAtIndex, active, clearSearch, closeTab, commitPendingEditor, editorMode, legacyWysiwygEnabled, newFile, openFile, save, saveAs, searchOpen, wechatThemePreviewOpen]);
 
   const handlePreviewImageError = useCallback((event: SyntheticEvent<HTMLElement>) => {
     const image = event.target;
@@ -1467,18 +1478,34 @@ export function App() {
     setStatus(`编辑区宽度已调整为 ${Math.round(next)}%。`);
   }, [splitRatio]);
 
+  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const handleMove = (moveEvent: PointerEvent) => setSidebarWidth(clampSidebarWidth(startWidth + moveEvent.clientX - startX));
+    const handleUp = () => {
+      document.body.classList.remove("is-resizing-sidebar");
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+    };
+    document.body.classList.add("is-resizing-sidebar");
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp, { once: true });
+  }, [sidebarWidth]);
+
+  const resizeSidebarWithKey = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const next = sidebarWidthForKey(sidebarWidth, event.key, event.shiftKey);
+    if (next === null) return;
+    event.preventDefault();
+    setSidebarWidth(next);
+  }, [sidebarWidth]);
+
   const title = useMemo(() => `${active?.displayName ?? "欢迎"}${dirty ? " · 未保存" : ""}`, [active?.displayName, dirty]);
 
   return (
     <main className={`app-shell${darkMode ? " theme-dark" : ""}${dragActive ? " drag-active" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragActive(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }} onDrop={(event) => void handleDrop(event)}>
-      <datalist id="preview-font-presets">{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font} />)}</datalist>
       <header className="app-header">
         <div className="brand-lockup"><span className="brand-symbol">f</span><span className="brand-name">fantastic<span>editor</span></span></div>
-        <div className="header-file-actions">
-          <button type="button" className="icon-button" data-testid="new-document" title="新建文档 (Ctrl+N)" aria-label="新建文档" onClick={() => void newFile()}><Icon name="filePlus" /></button>
-          <button type="button" className="icon-button" title="打开文件 (Ctrl+O)" aria-label="打开文件" onClick={() => void openFile()}><Icon name="folderOpen" /></button>
-          <button type="button" className="icon-button" disabled={!active || !dirty} title="保存 (Ctrl+S)" aria-label="保存" onClick={() => void save()}><Icon name="save" /></button>
-        </div>
         <div className="header-document"><span className={`document-state${dirty ? " dirty" : ""}`} /><span>{title}</span><small>{active ? "本地文档" : "本地优先 Markdown 编辑器"}</small></div>
         <div className="header-tools">
           <button
@@ -1523,15 +1550,17 @@ export function App() {
 
       <div className="workbench">
         <aside className="activity-bar" aria-label="主导航">
-          <button type="button" className={sidebarVisible && sidebarPanel === "explorer" ? "active" : ""} aria-label="切换资源管理器" title="资源管理器" onClick={() => { setSidebarPanel("explorer"); setSidebarVisible(true); }}><Icon name="panelLeft" /></button>
-          <button type="button" className={sidebarVisible && sidebarPanel === "outline" ? "active" : ""} aria-label="切换文档大纲" title="文档大纲" onClick={() => { setSidebarPanel("outline"); setSidebarVisible(true); }}><Icon name="list" /></button>
-          <button type="button" aria-label="新建文档" title="新建文档" onClick={() => void newFile()}><Icon name="filePlus" /></button>
+          <button type="button" className={sidebarVisible && sidebarPanel === "explorer" ? "active" : ""} aria-label="切换资源管理器" aria-pressed={sidebarVisible && sidebarPanel === "explorer"} title="显示或隐藏资源管理器" onClick={() => { if (sidebarVisible && sidebarPanel === "explorer") setSidebarVisible(false); else { setSidebarPanel("explorer"); setSidebarVisible(true); } }}><Icon name="panelLeft" /></button>
+          <button type="button" className={sidebarVisible && sidebarPanel === "outline" ? "active" : ""} aria-label="切换文档大纲" aria-pressed={sidebarVisible && sidebarPanel === "outline"} title="显示或隐藏文档大纲" onClick={() => { if (sidebarVisible && sidebarPanel === "outline") setSidebarVisible(false); else { setSidebarPanel("outline"); setSidebarVisible(true); } }}><Icon name="list" /></button>
+          <button type="button" data-testid="new-document" aria-label="新建文档" title="新建文档 (Ctrl+N)" onClick={() => void newFile()}><Icon name="filePlus" /></button>
+          <button type="button" aria-label="打开文件" title="打开文件 (Ctrl+O)" onClick={() => void openFile()}><Icon name="folderOpen" /></button>
+          <button type="button" aria-label="保存" title="保存 (Ctrl+S)" disabled={!active || !dirty} onClick={() => void save()}><Icon name="save" /></button>
           <button type="button" aria-label="打开文件夹" title="打开文件夹" onClick={() => void openFolder()}><Icon name="folder" /></button>
         </aside>
 
         {sidebarVisible && sidebarPanel === "explorer" && (
-          <aside className="explorer-panel" aria-label="资源管理器">
-            <div className="explorer-title"><span>资源管理器</span><button type="button" title="打开文件夹" aria-label="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" size={16} /></button></div>
+          <aside className="explorer-panel" aria-label="资源管理器" style={{ flexBasis: `${sidebarWidth}px` }}>
+            <div className="explorer-title"><span>资源管理器</span><div className="explorer-title-actions"><button type="button" title="打开文件夹" aria-label="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" size={16} /></button></div></div>
             <section className="explorer-section">
               <div className="section-title"><span className="section-chevron">⌄</span><span>打开的编辑器</span><small>{tabs.length}</small></div>
               <div className="open-editors">
@@ -1543,7 +1572,7 @@ export function App() {
                         <input ref={renameInputRef} value={renameValue} aria-label="新的 Markdown 文件名" onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelRename(); } }} />
                       </form>
                     ) : (
-                      <button type="button" className={`open-editor-select${active?.sessionId === tab.sessionId ? " active" : ""}`} title="点击切换文档；再次点击展开或收起目录；右键重命名" onClick={() => void toggleOutlineForTab(tab)} onContextMenu={(event) => {
+                      <button type="button" className={`open-editor-select${active?.sessionId === tab.sessionId ? " active" : ""}`} title="点击切换文档；再次点击展开或收起目录；右键或双击重命名" onClick={() => void toggleOutlineForTab(tab)} onDoubleClick={(event) => { event.preventDefault(); beginRenameOpenFile(tab); }} onContextMenu={(event) => {
                         event.preventDefault();
                         beginRenameOpenFile(tab);
                       }}>
@@ -1582,11 +1611,13 @@ export function App() {
           </aside>
         )}
         {sidebarVisible && sidebarPanel === "outline" && (
-          <aside className="explorer-panel outline-panel" aria-label="文档大纲">
-            <div className="explorer-title"><span>文档大纲</span><small>{extractDocumentOutline(outlineDocument).length}</small></div>
+          <aside className="explorer-panel outline-panel" aria-label="文档大纲" style={{ flexBasis: `${sidebarWidth}px` }}>
+            <div className="explorer-title"><span>文档大纲</span><div className="explorer-title-actions"><small>{extractDocumentOutline(outlineDocument).length}</small></div></div>
             <DocumentOutline entries={extractDocumentOutline(outlineDocument)} stale={Boolean(active && !outlineDocument)} onReveal={revealOutlineEntry} />
           </aside>
         )}
+
+        {sidebarVisible && <div className="sidebar-resize-handle" role="separator" aria-label="调整资源管理器宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖动调整宽度；方向键微调" onPointerDown={startSidebarResize} onKeyDown={resizeSidebarWithKey}><span /></div>}
 
         <section className="main-area">
           <nav className="document-tabs" data-testid="document-tabs" aria-label="打开的文档">
@@ -1625,6 +1656,31 @@ export function App() {
                       <button type="button" className={editorMode === "wysiwyg" ? "active" : ""} aria-pressed={editorMode === "wysiwyg"} disabled={imageImportBusy} onClick={() => switchEditorMode("wysiwyg")}>所见即所得</button>
                     </div>
                     {editorMode === "wysiwyg" && <>
+                      {!legacyWysiwygEnabled && <div className="live-preview-format-toolbar" role="toolbar" aria-label="文字和内容块格式" onMouseDown={(event) => event.preventDefault()}>
+                        <button type="button" title="正文" onClick={() => markdownEditorRef.current?.setBlockType(0)}>正文</button>
+                        <button type="button" title="一级标题" onClick={() => markdownEditorRef.current?.setBlockType(1)}>H1</button>
+                        <button type="button" title="二级标题" onClick={() => markdownEditorRef.current?.setBlockType(2)}>H2</button>
+                        <button type="button" title="三级标题" onClick={() => markdownEditorRef.current?.setBlockType(3)}>H3</button>
+                        <button type="button" title="切换粗体（Ctrl+B）" onClick={() => markdownEditorRef.current?.toggleSelectionMark("bold")}><strong>B</strong></button>
+                        <button type="button" title="切换斜体（Ctrl+I）" onClick={() => markdownEditorRef.current?.toggleSelectionMark("italic")}><em>I</em></button>
+                        <button type="button" title="切换删除线" onClick={() => markdownEditorRef.current?.toggleSelectionMark("strike")}><s>S</s></button>
+                        <button type="button" title="添加链接" onClick={() => setLiveLinkInputOpen(true)}>链接</button>
+                        <button type="button" title="上移当前行或选中内容，可连续点击" onClick={() => markdownEditorRef.current?.moveSelection("up")}>上移</button>
+                        <button type="button" title="下移当前行或选中内容，可连续点击" onClick={() => markdownEditorRef.current?.moveSelection("down")}>下移</button>
+                      </div>}
+                      {!legacyWysiwygEnabled && liveLinkInputOpen && <form className="live-preview-link-editor" onSubmit={(event) => {
+                        event.preventDefault();
+                        if (!markdownEditorRef.current?.insertLink(liveLinkUrl)) {
+                          setStatus("链接地址格式不正确，请使用 http、https、mailto、# 或站内路径。");
+                          return;
+                        }
+                        setLiveLinkInputOpen(false);
+                        setLiveLinkUrl("");
+                      }}>
+                        <input autoFocus aria-label="新链接地址" placeholder="https://…" value={liveLinkUrl} onChange={(event) => setLiveLinkUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setLiveLinkInputOpen(false); setLiveLinkUrl(""); window.requestAnimationFrame(() => markdownEditorRef.current?.focus()); } }} />
+                        <button type="submit">应用</button>
+                        <button type="button" onClick={() => { setLiveLinkInputOpen(false); setLiveLinkUrl(""); markdownEditorRef.current?.focus(); }}>取消</button>
+                      </form>}
                       <button
                         type="button"
                         className={`wysiwyg-theme-toggle${wechatThemeInWysiwyg ? " active" : ""}`}
@@ -1636,17 +1692,19 @@ export function App() {
                           setStatus(next ? `已在所见即所得区启用公众号主题：${wechatThemeResolved.name}。Markdown 内容不会改变。` : "已关闭所见即所得区的公众号主题显示。");
                         }}
                       >{wechatThemeInWysiwyg ? "公众号主题 · 开" : "公众号主题 · 关"}</button>
-                      <label className="preview-font-control" title="输入本机已安装的字体名称，按 Enter 或移出焦点应用"><span>字体</span><input data-testid="wysiwyg-font-select" list="preview-font-presets" value={previewFontDraft} onChange={(event) => { const value = event.target.value; setPreviewFontDraft(value); if (PREVIEW_FONT_PRESETS.includes(value as typeof PREVIEW_FONT_PRESETS[number])) applyPreviewFontDraft(value); }} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }} /></label>
-                      <label className="preview-reading-control" title="调整所见即所得阅读宽度"><span>宽度</span><select aria-label="所见即所得阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-                      <div className="preview-font-size-control" role="group" aria-label="所见即所得字号"><button type="button" title="减小字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
+                      {!legacyWysiwygEnabled && <>
+                        <button type="button" className="wysiwyg-font-default" title="恢复默认字体：微软雅黑" aria-label="恢复默认字体" onClick={() => { setPreviewFontDraft(DEFAULT_PREVIEW_FONT); applyPreviewFontDraft(DEFAULT_PREVIEW_FONT); }}>↺</button>
+                        <label className="preview-font-preset" title="选择常用字体"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
+                        <label className="preview-font-control" title="输入任意本机已安装字体"><span>自定义字体</span><input data-testid="wysiwyg-font-select" placeholder="输入字体名称" value={previewFontDraft} onChange={(event) => setPreviewFontDraft(event.target.value)} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } }} /></label>
+                      </>}
                     </>}
-                    <small>{editorMode === "source" ? "Markdown" : "Markdown 实时写回"}</small>
                     <button type="button" className="insert-image-button" disabled={imageImportBusy} title="在当前位置插入图片" aria-label="插入图片" onClick={() => void importImages()}><Icon name="imagePlus" size={15} />插入图片</button>
                   </div>
                 </div>
                 <div className="editor-mode-body">
-                  <div className={`source-editor-layer${editorMode === "source" ? " active" : ""}`} aria-hidden={editorMode !== "source"}>
+                  <div className={`source-editor-layer${!legacyWysiwygEnabled || editorMode === "source" ? " active" : ""}`} aria-hidden={legacyWysiwygEnabled && editorMode !== "source"}>
                     <MarkdownEditor
+                      key={active.sessionId}
                       ref={markdownEditorRef}
                       value={draft}
                       onViewportAnchorChange={(anchor) => { if (editorMode === "source") synchronizedPreviewRef.current?.updateViewportAnchor(anchor); }}
@@ -1655,9 +1713,14 @@ export function App() {
                       onDropRejected={(message) => { setDragActive(false); setStatus(message); }}
                       onStatus={setStatus}
                       onChange={applyDraftChange}
+                      livePreview={editorMode === "wysiwyg" && !legacyWysiwygEnabled}
+                      fontFamily={previewFontStack(previewFontName)}
+                      readingMaxWidth={readingWidthMaxWidth(readingWidth)}
+                      fontSize={previewFontSize}
+                      {...(editorMode === "wysiwyg" && wechatThemeInWysiwyg ? { wechatThemeDefinition: wechatThemeResolved.definition } : {})}
                     />
                   </div>
-                  <div className={`wysiwyg-editor-layer${editorMode === "wysiwyg" ? " active" : ""}`} aria-hidden={editorMode !== "wysiwyg"}>
+                  {legacyWysiwygEnabled && <div className={`wysiwyg-editor-layer${editorMode === "wysiwyg" ? " active" : ""}`} aria-hidden={editorMode !== "wysiwyg"}>
                     <WysiwygEditor
                       ref={wysiwygEditorRef}
                       value={draft}
@@ -1666,6 +1729,13 @@ export function App() {
                       fontFamily={previewFontStack(previewFontName)}
                       readingMaxWidth={readingWidthMaxWidth(readingWidth)}
                       previewFontSize={previewFontSize}
+                      toolbarControls={<>
+                        <button type="button" className="wysiwyg-font-default" title="恢复默认字体：微软雅黑" aria-label="恢复默认字体" onClick={() => { setPreviewFontDraft(DEFAULT_PREVIEW_FONT); applyPreviewFontDraft(DEFAULT_PREVIEW_FONT); }}>↺</button>
+                        <label className="preview-font-preset" title="选择常用字体"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
+                        <label className="preview-font-control" title="输入任意本机已安装字体；按 Enter 或移出焦点应用"><span>自定义字体</span><input data-testid="wysiwyg-font-select" placeholder="输入字体名称" value={previewFontDraft} onChange={(event) => setPreviewFontDraft(event.target.value)} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }} /></label>
+                        <label className="preview-reading-control" title="调整所见即所得阅读宽度"><span>宽度</span><select aria-label="所见即所得阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+                        <div className="preview-font-size-control" role="group" aria-label="所见即所得字号"><button type="button" title="减小字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
+                      </>}
                       {...(wechatThemeInWysiwyg ? { wechatThemeDefinition: wechatThemeResolved.definition } : {})}
                       darkMode={darkMode}
                       imageImportBusy={imageImportBusy}
@@ -1681,7 +1751,7 @@ export function App() {
                       onErrorCapture={handlePreviewImageError}
                       onLoadCapture={handlePreviewImageLoad}
                     />
-                  </div>
+                  </div>}
                 </div>
               </div>
               {viewMode === "split" && <div className="split-handle" role="separator" aria-label="调整编辑与预览宽度；使用左右方向键调整" aria-orientation="vertical" aria-valuemin={MIN_SPLIT_RATIO} aria-valuemax={MAX_SPLIT_RATIO} aria-valuenow={Math.round(splitRatio)} tabIndex={0} onKeyDown={resizeWithKeyboard} onPointerDown={startResize}><span /></div>}
@@ -1689,13 +1759,13 @@ export function App() {
                 <div className="pane-header">
                   <span><Icon name="eye" size={15} />实时预览</span>
                   <div className="pane-actions">
+                    <label className="preview-font-preset" title="选择实时预览和导出的常用正文字体"><span>字体</span><select data-testid="preview-font-preset" aria-label="预览常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
                     <label className="preview-font-control" title="设置实时预览和导出的正文字体">
-                      <span>字体</span>
+                      <span>自定义</span>
                       <input
                         data-testid="preview-font-select"
-                        list="preview-font-presets"
                         value={previewFontDraft}
-                        onChange={(event) => { const value = event.target.value; setPreviewFontDraft(value); if (PREVIEW_FONT_PRESETS.includes(value as typeof PREVIEW_FONT_PRESETS[number])) applyPreviewFontDraft(value); }}
+                        onChange={(event) => setPreviewFontDraft(event.target.value)}
                         onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)}
                         onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }}
                       />
@@ -1811,7 +1881,7 @@ export function App() {
           <button type="button" className="acceptance-save" disabled={!wechatAcceptanceGates.completed} onClick={() => void saveWechatAcceptanceReport()}>保存人工验收记录</button>
         </aside>
       )}
-      {diagnostics.length > 0 && <aside className="diagnostics" role="region" aria-live="polite" aria-atomic="true" aria-label="文档诊断"><div className="diagnostics-header"><strong>文档诊断 · {diagnostics.length} 项</strong><span><button type="button" onClick={retryPreview}>重新解析</button><button type="button" onClick={() => setDiagnostics([])}>清除提示</button></span></div>{diagnostics.map((item) => <div key={item}>{item}</div>)}</aside>}
+      {diagnostics.length > 0 && <aside className="diagnostics" role="region" aria-live="polite" aria-atomic="true" aria-label="文档诊断"><div className="diagnostics-header"><strong>文档诊断 · {diagnostics.length} 项</strong><span><button type="button" onClick={retryPreview}>重新解析</button><button type="button" onClick={() => setDiagnostics([])}>清除提示</button></span></div>{diagnostics.map((item, index) => <div className="diagnostic-item" key={`${index}:${item}`}>{item}</div>)}</aside>}
       {wechatThemePreviewOpen && active && (
         <WechatThemePreview
           html={previewHtml}

@@ -222,6 +222,14 @@ describe("SingleFileResourceResolver", () => {
       "RESOURCE_OUTSIDE_AUTHORIZED_ROOT",
       "REMOTE_IMAGE_BLOCKED",
     ]);
+    expect(result.diagnostics[0]).toMatchObject({
+      message: expect.stringContaining("找不到图片文件"),
+      suggestedActions: [expect.stringContaining("相对于 Markdown 文件")],
+    });
+    expect(result.diagnostics[1]).toMatchObject({
+      message: expect.stringContaining("图片路径被安全策略拦截"),
+      suggestedActions: [expect.stringContaining("打开文件夹")],
+    });
     expect(await readFile(join(environment.temporaryRoot, "outside.png"), "utf8")).toBe("outside");
   });
 

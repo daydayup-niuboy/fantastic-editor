@@ -32,6 +32,20 @@ export interface MarkdownBlockSelectionFragment {
 
 export type MarkdownSelectionMark = "bold" | "italic" | "strike";
 
+const MARKDOWN_SELECTION_MARKERS: Record<MarkdownSelectionMark, string> = {
+  bold: "**",
+  italic: "*",
+  strike: "~~",
+};
+
+export function wrapMarkdownSelectionMark(value: string, mark: MarkdownSelectionMark): string {
+  const marker = MARKDOWN_SELECTION_MARKERS[mark];
+  if (value.startsWith(marker) && value.endsWith(marker) && value.length >= marker.length * 2) {
+    return value.slice(marker.length, value.length - marker.length);
+  }
+  return `${marker}${value}${marker}`;
+}
+
 function isValidBlockSelectionFragment(fragment: MarkdownBlockSelectionFragment, textLength: number): boolean {
   return isValidSourceRange(fragment.range, textLength)
     && Number.isInteger(fragment.selectionFrom)
@@ -72,8 +86,7 @@ export function createCrossBlockFormatChange(
   fragments: readonly MarkdownBlockSelectionFragment[],
   mark: MarkdownSelectionMark,
 ): WysiwygTextChange | null {
-  if (fragments.length < 2) return null;
-  const marker = mark === "bold" ? "**" : mark === "italic" ? "*" : "~~";
+  if (fragments.length < 1) return null;
   let previousTo = -1;
   for (const fragment of fragments) {
     if (!isValidBlockSelectionFragment(fragment, text.length)
@@ -88,7 +101,7 @@ export function createCrossBlockFormatChange(
   for (const fragment of fragments) {
     parts.push(text.slice(cursor, fragment.range.from));
     parts.push(fragment.source.slice(0, fragment.selectionFrom));
-    parts.push(marker, fragment.source.slice(fragment.selectionFrom, fragment.selectionTo), marker);
+    parts.push(wrapMarkdownSelectionMark(fragment.source.slice(fragment.selectionFrom, fragment.selectionTo), mark));
     parts.push(fragment.source.slice(fragment.selectionTo));
     cursor = fragment.range.to;
   }
@@ -107,6 +120,16 @@ export function sourceRangeFromElement(element: Element | null, textLength: numb
 export function preserveTrailingLineBreaks(originalSource: string, replacement: string): string {
   const trailing = /\n+$/.exec(originalSource)?.[0] ?? "";
   return replacement.replace(/\n+$/g, "") + trailing;
+}
+
+export function replaceMarkdownHeadingLevel(source: string, headingLevel: number): string {
+  if (!Number.isInteger(headingLevel) || headingLevel < 0 || headingLevel > 6) return source;
+  const trailing = /\n+$/.exec(source)?.[0] ?? "";
+  const body = source.slice(0, source.length - trailing.length);
+  const setext = /^([\s\S]*?)\n {0,3}(?:=+|-+)[ \t]*$/.exec(body);
+  const content = (setext?.[1] ?? body.replace(/^ {0,3}#{1,6}[ \t]+/, "")).trim();
+  const replacement = headingLevel === 0 ? content : `${"#".repeat(headingLevel)} ${content}`;
+  return replacement + trailing;
 }
 
 export function createMarkdownBlockInsertion(text: string, position: number, block: string): string {
@@ -251,6 +274,12 @@ export function markdownListItemDetails(source: string): MarkdownListItemDetails
     checked: /[xX]/.test(match[3] ?? ""),
     content: match[4] ?? "",
   };
+}
+
+export function deleteEmptyMarkdownListItem(source: string): string | null {
+  const details = markdownListItemDetails(source);
+  if (!details || details.content.trim() || source.split("\n").slice(1).some((line) => line.trim())) return null;
+  return "";
 }
 
 export function replaceMarkdownListItemOwnContent(

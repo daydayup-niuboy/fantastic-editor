@@ -8,6 +8,7 @@ import {
   replaceMarkdownListItemOwnContent,
   markdownListItemDetails,
   createMarkdownListSibling,
+  deleteEmptyMarkdownListItem,
   exitMarkdownListItemLevel,
   createMarkdownBlockInsertion,
   createCrossBlockFormatChange,
@@ -33,6 +34,8 @@ import {
   escapeMarkdownText,
   isValidSourceRange,
   preserveTrailingLineBreaks,
+  replaceMarkdownHeadingLevel,
+  wrapMarkdownSelectionMark,
 } from "./wysiwyg-transactions";
 
 describe("WYSIWYG text transactions", () => {
@@ -77,6 +80,31 @@ describe("WYSIWYG text transactions", () => {
     ], "bold")?.insert).toBe("# 第**一段**\n\n**第二段**\n\n> **第三**段\n");
     expect(normalizeCrossBlockPlainText("# 标题\r\n2. 项目\n普通 *文字*"))
       .toBe("\\# 标题\n\n2\\. 项目\n\n普通 \\*文字\\*");
+  });
+  it("formats a single Chinese selection and converts Chinese heading levels", () => {
+    const text = "中文段落\n";
+    expect(createCrossBlockFormatChange(text, [
+      { range: { from: 0, to: text.length }, source: text, selectionFrom: 0, selectionTo: 4 },
+    ], "bold")?.insert).toBe("**中文段落**\n");
+    expect(createCrossBlockFormatChange(text, [
+      { range: { from: 0, to: text.length }, source: text, selectionFrom: 0, selectionTo: 4 },
+    ], "italic")?.insert).toBe("*中文段落*\n");
+    expect(createCrossBlockFormatChange(text, [
+      { range: { from: 0, to: text.length }, source: text, selectionFrom: 0, selectionTo: 4 },
+    ], "strike")?.insert).toBe("~~中文段落~~\n");
+    expect(replaceMarkdownHeadingLevel("# 中文标题\n\n", 2)).toBe("## 中文标题\n\n");
+    expect(replaceMarkdownHeadingLevel("## 中文标题\n", 3)).toBe("### 中文标题\n");
+    expect(replaceMarkdownHeadingLevel("### 中文标题\n", 1)).toBe("# 中文标题\n");
+    expect(replaceMarkdownHeadingLevel("# 中文标题\n", 0)).toBe("中文标题\n");
+    expect(wrapMarkdownSelectionMark("中文段落", "italic")).toBe("*中文段落*");
+    expect(wrapMarkdownSelectionMark("*中文段落*", "italic")).toBe("中文段落");
+    expect(wrapMarkdownSelectionMark("*中文段落*", "bold")).toBe("***中文段落***");
+    expect(createCrossBlockFormatChange("*可视编辑已写回*\n", [
+      { range: { from: 0, to: 10 }, source: "*可视编辑已写回*\n", selectionFrom: 0, selectionTo: 9 },
+    ], "italic")?.insert).toBe("可视编辑已写回\n");
+    expect(createCrossBlockFormatChange("*可视编辑已写回*\n", [
+      { range: { from: 0, to: 10 }, source: "*可视编辑已写回*\n", selectionFrom: 0, selectionTo: 9 },
+    ], "bold")?.insert).toBe("***可视编辑已写回***\n");
   });
   it("preserves the original block trailing line breaks", () => {
     expect(preserveTrailingLineBreaks("原文\n\n", "新内容\n")).toBe("新内容\n\n");
@@ -174,6 +202,13 @@ describe("WYSIWYG text transactions", () => {
     expect(replaceMarkdownFormulaLatex("$$\n  x + y  \n$$\n", "a^2 + b^2")).toBe("$$\n  a^2 + b^2  \n$$\n");
     expect(replaceMarkdownFormulaLatex("\\(x\\)", "y_1")).toBe("\\(y_1\\)");
     expect(replaceMarkdownFormulaLatex("$x$", "bad$delimiter")).toBeNull();
+  });
+
+  it("deletes only an empty leaf list item", () => {
+    expect(deleteEmptyMarkdownListItem("- \n")).toBe("");
+    expect(deleteEmptyMarkdownListItem("- [ ] \n")).toBe("");
+    expect(deleteEmptyMarkdownListItem("- 有内容\n")).toBeNull();
+    expect(deleteEmptyMarkdownListItem("- \n  - 子项\n")).toBeNull();
   });
 
   it("edits fenced code content and language while preserving metadata and growing colliding fences", () => {

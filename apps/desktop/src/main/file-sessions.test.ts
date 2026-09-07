@@ -106,6 +106,21 @@ describe("FileSessionManager", () => {
     expect(await manager.closeSession(untitled.session!.sessionId)).toEqual({ status: "closed" });
   });
 
+  it("renames an untitled session without writing a file and reuses the name for Save As", async () => {
+    const manager = new FileSessionManager();
+    const untitled = await manager.createUntitled();
+    const sessionId = untitled.session!.sessionId;
+
+    expect(await manager.renameOpenFile({ sessionId, newName: "草稿" })).toMatchObject({
+      status: "renamed",
+      displayName: "草稿.md",
+    });
+    expect(manager.getSuggestedSaveName(sessionId)).toBe("草稿.md");
+    expect((await manager.renameOpenFile({ sessionId, newName: "草稿.txt" })).status).toBe("failed");
+    expect((await manager.save({ sessionId, editorText: "# 草稿\n" })).status).toBe("failed");
+    expect(await manager.closeSession(sessionId)).toEqual({ status: "closed" });
+  });
+
   it("saves a completely blank untitled Markdown document through Save As", async () => {
     const directory = await createTemporaryDirectory();
     const manager = new FileSessionManager();

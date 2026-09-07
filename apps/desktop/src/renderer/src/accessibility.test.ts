@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, clampSplitRatio, splitRatioForKey } from "./accessibility";
+import { DEFAULT_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, MAX_SPLIT_RATIO, MIN_SIDEBAR_WIDTH, MIN_SPLIT_RATIO, clampSidebarWidth, clampSplitRatio, sidebarWidthForKey, splitRatioForKey } from "./accessibility";
 
 describe("accessibility interaction helpers", () => {
   it("clamps split ratios to the supported visual range", () => {
@@ -14,5 +14,16 @@ describe("accessibility interaction helpers", () => {
     expect(splitRatioForKey(50, "Home")).toBe(MIN_SPLIT_RATIO);
     expect(splitRatioForKey(50, "End")).toBe(MAX_SPLIT_RATIO);
     expect(splitRatioForKey(50, "Enter")).toBeNull();
+  });
+
+  it("clamps and keyboard-resizes the resource explorer", () => {
+    expect(clampSidebarWidth(Number.NaN)).toBe(DEFAULT_SIDEBAR_WIDTH);
+    expect(clampSidebarWidth(100)).toBe(MIN_SIDEBAR_WIDTH);
+    expect(clampSidebarWidth(800)).toBe(MAX_SIDEBAR_WIDTH);
+    expect(sidebarWidthForKey(222, "ArrowLeft")).toBe(212);
+    expect(sidebarWidthForKey(222, "ArrowRight", true)).toBe(262);
+    expect(sidebarWidthForKey(222, "Home")).toBe(MIN_SIDEBAR_WIDTH);
+    expect(sidebarWidthForKey(222, "End")).toBe(MAX_SIDEBAR_WIDTH);
+    expect(sidebarWidthForKey(222, "Enter")).toBeNull();
   });
 });

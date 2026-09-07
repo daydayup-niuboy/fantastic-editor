@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveOfficialWechatTheme } from "@fantastic-editor/shared";
-import { buildWechatThemeProjectionCss } from "./wechat-theme-projection";
+import { buildCodeMirrorWechatThemeProjectionCss, buildWechatThemeProjectionCss } from "./wechat-theme-projection";
 
 describe("buildWechatThemeProjectionCss", () => {
   it("scopes the resolved WeChat theme to the WYSIWYG content", () => {
@@ -11,5 +11,15 @@ describe("buildWechatThemeProjectionCss", () => {
     expect(css).toContain(".wysiwyg-editor.wechat-theme-active .wysiwyg-content h1{");
     expect(css).toContain(definition.styles.blockquote);
     expect(css).not.toContain(".markdown-preview h1{");
+  });
+
+  it("projects the same theme onto CodeMirror live preview classes", () => {
+    const definition = resolveOfficialWechatTheme("minimal-ink");
+    const css = buildCodeMirrorWechatThemeProjectionCss(definition);
+
+    expect(css).toContain(".editor-host.wechat-theme-active .cm-editor.cm-live-preview .cm-content{");
+    expect(css).toContain(".cm-live-heading-1{");
+    expect(css).toContain(definition.styles.h1);
+    expect(css).toContain(definition.styles.p);
   });
 });

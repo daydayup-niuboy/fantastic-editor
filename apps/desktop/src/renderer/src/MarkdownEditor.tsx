@@ -1,16 +1,19 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type DragEvent } from "react";
-import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
+import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type DragEvent } from "react";
+import { defaultKeymap, history, historyKeymap, moveLineDown, moveLineUp, redo, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
+import { Strikethrough } from "@lezer/markdown";
 import { search } from "@codemirror/search";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
-import type { ImportedAssetReceipt } from "@fantastic-editor/shared";
+import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
 import { buildClipboardPayload } from "@fantastic-editor/document-core";
 import { createImageMarkdown, mapImageInsertionAnchor, type ImageInsertionAnchor } from "./image-insertion";
 import { resolveClipboardPaste, type PasteIntent } from "./clipboard-paste";
 import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync";
-import { applyWysiwygTextChange, type WysiwygTextChange } from "./wysiwyg-transactions";
+import { applyWysiwygTextChange, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
+import { livePreviewExtension } from "./live-preview";
+import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projection";
 import type { SearchNavigationResult } from "./visible-text-search";
 
 interface MarkdownEditorProps {
@@ -21,6 +24,11 @@ interface MarkdownEditorProps {
   onViewportAnchorChange?(anchor: EditorViewportAnchor): void;
   onSelectionChange?(selection: EditorSourceSelection | null): void;
   onStatus?(message: string): void;
+  livePreview?: boolean;
+  fontFamily?: string;
+  readingMaxWidth?: string;
+  fontSize?: number;
+  wechatThemeDefinition?: WechatThemeDefinition;
 }
 
 export interface MarkdownEditorHandle {
@@ -36,6 +44,10 @@ export interface MarkdownEditorHandle {
   revealSourceRange(from: number, to: number): boolean;
   clearSearch(): void;
   focus(): void;
+  toggleSelectionMark(mark: MarkdownSelectionMark): boolean;
+  insertLink(url: string): boolean;
+  moveSelection(direction: "up" | "down"): boolean;
+  setBlockType(level: 0 | 1 | 2 | 3): boolean;
 }
 
 const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|svg)$/i;
@@ -43,7 +55,7 @@ const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 const VIEWPORT_TRACKING_RATIO = 0.3;
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
-  { value, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus },
+  { value, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -55,6 +67,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onStatusRef = useRef(onStatus);
   const literalPasteUntilRef = useRef(0);
+  const livePreviewCompartmentRef = useRef(new Compartment());
   onChangeRef.current = onChange;
   onViewportAnchorChangeRef.current = onViewportAnchorChange;
   onSelectionChangeRef.current = onSelectionChange;
@@ -182,6 +195,106 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       viewRef.current?.requestMeasure();
       viewRef.current?.focus();
     },
+    toggleSelectionMark(mark) {
+      const view = viewRef.current;
+      if (!view) return false;
+      const selection = view.state.selection.main;
+      const marker = mark === "bold" ? "**" : mark === "italic" ? "*" : "~~";
+      if (selection.empty) {
+        view.dispatch({
+          changes: { from: selection.from, insert: marker + marker },
+          selection: { anchor: selection.from + marker.length },
+          userEvent: "input.format",
+        });
+      } else {
+        const firstLine = view.state.doc.lineAt(selection.from);
+        const lastOffset = selection.to > selection.from && selection.to === view.state.doc.lineAt(selection.to).from ? selection.to - 1 : selection.to;
+        const lastLine = view.state.doc.lineAt(lastOffset);
+        const fragments: Array<{ from: number; to: number }> = [];
+        for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber += 1) {
+          const line = view.state.doc.line(lineNumber);
+          const prefixLength = /^(?: {0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+)/.exec(line.text)?.[0].length ?? 0;
+          const from = Math.max(selection.from, line.from + prefixLength);
+          const to = Math.min(selection.to, line.to);
+          if (to > from) fragments.push({ from, to });
+        }
+        if (fragments.length === 0) return false;
+        const isFormatted = (fragment: { from: number; to: number }) => fragment.from >= marker.length
+          && fragment.to + marker.length <= view.state.doc.length
+          && view.state.sliceDoc(fragment.from - marker.length, fragment.from) === marker
+          && view.state.sliceDoc(fragment.to, fragment.to + marker.length) === marker;
+        const allFormatted = fragments.every(isFormatted);
+        const changes = fragments.flatMap((fragment) => allFormatted
+          ? [
+              { from: fragment.from - marker.length, to: fragment.from, insert: "" },
+              { from: fragment.to, to: fragment.to + marker.length, insert: "" },
+            ]
+          : isFormatted(fragment) ? [] : [
+              { from: fragment.from, insert: marker },
+              { from: fragment.to, insert: marker },
+            ]);
+        const changeSet = view.state.changes(changes);
+        view.dispatch({
+          changes: changeSet,
+          selection: {
+            anchor: changeSet.mapPos(selection.anchor, selection.anchor <= selection.head ? 1 : -1),
+            head: changeSet.mapPos(selection.head, selection.head >= selection.anchor ? -1 : 1),
+          },
+          userEvent: "input.format",
+        });
+      }
+      view.focus();
+      return true;
+    },
+    insertLink(url) {
+      const view = viewRef.current;
+      if (!view || !/^(?:https?:\/\/|mailto:|#|\/|\.\/|\.\.\/)/i.test(url.trim())) return false;
+      const selection = view.state.selection.main;
+      const label = selection.empty ? "链接文字" : view.state.sliceDoc(selection.from, selection.to);
+      const insert = `[${label}](${url.trim()})`;
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert },
+        selection: { anchor: selection.from + 1, head: selection.from + 1 + label.length },
+        userEvent: "input.link",
+      });
+      view.focus();
+      return true;
+    },
+    moveSelection(direction) {
+      const view = viewRef.current;
+      if (!view) return false;
+      const moved = direction === "up" ? moveLineUp(view) : moveLineDown(view);
+      if (moved) view.focus();
+      return moved;
+    },
+    setBlockType(level) {
+      const view = viewRef.current;
+      if (!view) return false;
+      const selection = view.state.selection.main;
+      const firstLine = view.state.doc.lineAt(selection.from);
+      const lastOffset = selection.to > selection.from && selection.to === view.state.doc.lineAt(selection.to).from ? selection.to - 1 : selection.to;
+      const lastLine = view.state.doc.lineAt(lastOffset);
+      const changes: Array<{ from: number; to: number; insert: string }> = [];
+      for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber += 1) {
+        const line = view.state.doc.line(lineNumber);
+        if (!line.text.trim()) continue;
+        const heading = /^( {0,3})#{1,6}[ \t]+/.exec(line.text);
+        const from = line.from + (heading?.[1]?.length ?? 0);
+        const to = line.from + (heading?.[0]?.length ?? 0);
+        changes.push({ from, to, insert: level === 0 ? "" : `${"#".repeat(level)} ` });
+      }
+      if (changes.length === 0) return false;
+      const changeSet = view.state.changes(changes);
+      const mappedAnchor = changeSet.mapPos(selection.anchor, selection.empty || selection.anchor <= selection.head ? 1 : -1);
+      const mappedHead = selection.empty ? mappedAnchor : changeSet.mapPos(selection.head, selection.head >= selection.anchor ? -1 : 1);
+      view.dispatch({
+        changes: changeSet,
+        selection: { anchor: mappedAnchor, head: mappedHead },
+        userEvent: "input.heading",
+      });
+      view.focus();
+      return true;
+    },
   }));
 
   useEffect(() => {
@@ -220,7 +333,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         doc: value,
         extensions: [
           lineNumbers(), highlightSpecialChars(), history(), drawSelection(), highlightActiveLine(), search(),
-          bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown(),
+          bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough] }),
+          livePreviewCompartmentRef.current.of(livePreview ? livePreviewExtension : []),
           keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
           EditorView.domEventHandlers({
             keydown: (event) => {
@@ -323,8 +437,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
   useEffect(() => {
     const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: livePreviewCompartmentRef.current.reconfigure(livePreview ? livePreviewExtension : []),
+    });
+    view.requestMeasure();
+  }, [livePreview]);
+
+  useEffect(() => {
+    const view = viewRef.current;
     if (!view || view.state.doc.toString() === value) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value },
+      annotations: Transaction.addToHistory.of(false),
+    });
   }, [value]);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -347,10 +473,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     onImageDrop?.(images, anchorId);
   };
 
-  return <div className="editor-host" ref={hostRef} onDragOverCapture={(event) => {
+  const editorStyle = {
+    "--live-font-family": fontFamily,
+    "--live-reading-width": readingMaxWidth,
+    "--live-font-size": fontSize ? `${fontSize}px` : undefined,
+  } as CSSProperties;
+
+  return <><div className={`editor-host${wechatThemeDefinition ? " wechat-theme-active" : ""}`} ref={hostRef} style={editorStyle} onDragOverCapture={(event) => {
     if ([...event.dataTransfer.items].some((item) => item.kind === "file")) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     }
-  }} onDropCapture={handleDrop} />;
+  }} onDropCapture={handleDrop} />{livePreview && wechatThemeDefinition && <style>{buildCodeMirrorWechatThemeProjectionCss(wechatThemeDefinition)}</style>}</>;
 });

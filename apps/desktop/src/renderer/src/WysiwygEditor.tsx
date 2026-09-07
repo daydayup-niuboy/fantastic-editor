@@ -8,7 +8,9 @@ import {
   type DragEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent,
+  type ReactNode,
   type ReactEventHandler,
   type CSSProperties,
 } from "react";
@@ -25,6 +27,7 @@ import {
   createMarkdownBlockInsertion,
   createMarkdownBlockMove,
   createMarkdownListSibling,
+  deleteEmptyMarkdownListItem,
   exitMarkdownListItemLevel,
   createCrossBlockFormatChange,
   createCrossBlockReplacement,
@@ -46,6 +49,7 @@ import {
   replaceMarkdownInlineCode,
   replaceMarkdownInlineLink,
   replaceMarkdownListItemOwnContent,
+  replaceMarkdownHeadingLevel,
   replacePrefixedMarkdownContent,
   transformMarkdownTable,
   shiftMarkdownListItemIndent,
@@ -68,6 +72,7 @@ interface WysiwygEditorProps {
   fontFamily: string;
   readingMaxWidth?: string;
   previewFontSize?: number;
+  toolbarControls?: ReactNode;
   wechatThemeDefinition?: WechatThemeDefinition;
   darkMode: boolean;
   imageImportBusy: boolean;
@@ -151,7 +156,7 @@ const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 const SOURCE_SELECTOR = "[data-source-from][data-source-to]";
 const INLINE_ATOM_SELECTOR = ".preview-formula-inline, [data-source-kind=image], [data-source-kind=inline-code], [data-source-kind=inline-link]";
 const INTERACTIVE_INLINE_ATOM_SELECTOR = INLINE_ATOM_SELECTOR;
-const COMPLEX_SELECTOR = "li, blockquote, table, pre, .preview-formula-block, .preview-formula-inline, .mermaid-diagram, [data-source-kind=image], [data-wysiwyg-editability=source]";
+const COMPLEX_SELECTOR = "li, blockquote, table, pre, hr, .wysiwyg-thematic-break-group, .preview-formula-block, .preview-formula-inline, .mermaid-diagram, [data-source-kind=image], [data-wysiwyg-editability=source]";
 const inlineSourceByElement = new WeakMap<HTMLElement, string>();
 
 function escapeLinkDestination(value: string): string {
@@ -188,6 +193,76 @@ function serializeInlineNode(node: Node, sourceText?: string): string {
     case "DIV":
     case "P": return `\n\n${content()}`;
     default: return content();
+  }
+}
+
+function toggleVisibleSelectionMark(element: HTMLElement, mark: MarkdownSelectionMark): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1 || !selectionBelongsTo(element)) return false;
+  const selected = selection.getRangeAt(0);
+  const parent = selected.commonAncestorContainer instanceof Element
+    ? selected.commonAncestorContainer
+    : selected.commonAncestorContainer.parentElement;
+  const selector = mark === "bold" ? "strong, b" : mark === "italic" ? "em, i" : "del, s";
+  const existing = parent?.closest<HTMLElement>(selector);
+  if (existing instanceof HTMLElement && element.contains(existing) && existing.textContent === selected.toString()) {
+    let outermost = existing;
+    for (let parentMark = outermost.parentElement?.closest<HTMLElement>(selector);
+      parentMark && element.contains(parentMark) && parentMark.textContent === selected.toString();
+      parentMark = outermost.parentElement?.closest<HTMLElement>(selector)) outermost = parentMark;
+    for (const nested of [...outermost.querySelectorAll<HTMLElement>(selector)].reverse()) nested.replaceWith(...nested.childNodes);
+    outermost.replaceWith(...outermost.childNodes);
+    return true;
+  }
+  if (existing instanceof HTMLElement && element.contains(existing)) {
+    return document.execCommand(mark === "bold" ? "bold" : mark === "italic" ? "italic" : "strikeThrough");
+  }
+  const wrapper = document.createElement(mark === "bold" ? "strong" : mark === "italic" ? "em" : "del");
+  try {
+    selected.surroundContents(wrapper);
+  } catch {
+    wrapper.append(selected.extractContents());
+    selected.insertNode(wrapper);
+  }
+  const restored = document.createRange();
+  restored.selectNodeContents(wrapper);
+  selection.removeAllRanges();
+  selection.addRange(restored);
+  return true;
+}
+
+function refreshItalicVisual(root: ParentNode): void {
+  const italics = [...root.querySelectorAll<HTMLElement>("em, i")];
+  for (const italic of italics) italic.classList.remove("wysiwyg-italic-visual");
+  for (const italic of italics) {
+    if (!italic.parentElement?.closest("em, i")) italic.classList.add("wysiwyg-italic-visual");
+  }
+}
+
+function compactRepeatedThematicBreaks(content: HTMLElement, textLength: number): void {
+  for (const first of [...content.querySelectorAll<HTMLHRElement>("hr[data-source-from][data-source-to]")]) {
+    if (!first.isConnected || first.previousElementSibling instanceof HTMLHRElement) continue;
+    const run: HTMLHRElement[] = [first];
+    for (let next = first.nextElementSibling; next instanceof HTMLHRElement; next = next.nextElementSibling) run.push(next);
+    if (run.length === 1) {
+      first.dataset.wysiwygEditability = "source";
+      first.title = "Markdown 分隔线；点击后可移动、删除或编辑源码";
+      continue;
+    }
+    const from = sourceRangeFromElement(first, textLength)?.from;
+    const to = sourceRangeFromElement(run[run.length - 1]!, textLength)?.to;
+    if (from === undefined || to === undefined) continue;
+    const group = document.createElement("div");
+    group.className = "wysiwyg-thematic-break-group";
+    group.dataset.sourceFrom = String(from);
+    group.dataset.sourceTo = String(to);
+    group.dataset.sourceKind = "thematic-break-group";
+    group.dataset.sourceBlock = "true";
+    group.dataset.wysiwygEditability = "source";
+    group.textContent = `连续分隔线 ×${run.length}（疑似旧格式残留，点击后可删除）`;
+    group.title = "连续 Markdown 分隔线已在编辑视图中折叠；原文未自动修改";
+    first.replaceWith(group);
+    for (const item of run.slice(1)) item.remove();
   }
 }
 
@@ -239,6 +314,8 @@ function directEditableElement(target: Element, textLength: number): HTMLElement
   const cell = target.closest<HTMLElement>("th, td");
   if (cell && sourceRangeFromElement(cell, textLength, true) && !containsUnsafeDirectContent(cell)) return cell;
   const item = target.closest<HTMLElement>("li");
+  const nestedOwnContent = item?.querySelector<HTMLElement>(":scope > [data-wysiwyg-list-own-content]");
+  if (nestedOwnContent && sourceRangeFromElement(nestedOwnContent, textLength) && !containsUnsafeDirectContent(nestedOwnContent)) return nestedOwnContent;
   if (item && sourceRangeFromElement(item, textLength)
     && !item.querySelector(":scope > ul, :scope > ol")
     && !containsUnsafeDirectContent(item)) return item;
@@ -275,6 +352,7 @@ function blockLabel(element: HTMLElement): string {
   if (element.matches("table")) return "表格";
   if (element.matches("pre")) return element.querySelector("code.language-mermaid") ? "Mermaid" : "代码块";
   if (element.matches(".preview-formula-block")) return "公式";
+  if (element.matches("hr, .wysiwyg-thematic-break-group")) return "分隔线";
   if (element.matches("[data-source-kind=image]")) return "图片";
   return "内容块";
 }
@@ -318,7 +396,7 @@ function boundaryElement(node: Node): Element | null {
 }
 
 function boundaryInsideStructuredInline(node: Node, block: HTMLElement): boolean {
-  const structured = boundaryElement(node)?.closest("strong, b, em, i, del, s, a, code, .wysiwyg-inline-atom");
+  const structured = boundaryElement(node)?.closest("a, code, .wysiwyg-inline-atom");
   return Boolean(structured && structured !== block && block.contains(structured));
 }
 
@@ -360,7 +438,11 @@ function blockSelectionFragment(
   const rawInline = serializedInlineChildren(element, sourceText);
   const leadingTrim = /^\s*/.exec(rawInline)?.[0].length ?? 0;
   const inline = rawInline.replace(/^\s+|\s+$/g, "");
-  if (!inline) return null;
+  if (!inline) {
+    return deleteEmptyMarkdownListItem(originalSource) === ""
+      ? { range, source: originalSource, selectionFrom: 0, selectionTo: originalSource.length }
+      : null;
+  }
   const source = serializeDirectBlock(element, originalSource, undefined, sourceText);
   const inlineStart = source.indexOf(inline);
   if (inlineStart < 0) return null;
@@ -379,6 +461,39 @@ function blockSelectionFragment(
   }
   if (selectionTo < selectionFrom) return null;
   return { range, source, selectionFrom, selectionTo };
+}
+
+function visibleSelectionOffsets(element: HTMLElement, selection: Selection): { from: number; to: number } | null {
+  if (selection.isCollapsed || selection.rangeCount !== 1 || !selectionBelongsTo(element)) return null;
+  const selected = selection.getRangeAt(0);
+  const prefix = document.createRange();
+  prefix.selectNodeContents(element);
+  prefix.setEnd(selected.startContainer, selected.startOffset);
+  return { from: prefix.toString().length, to: prefix.toString().length + selected.toString().length };
+}
+
+function restoreVisibleSelection(element: HTMLElement, offsets: { from: number; to: number }): boolean {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let cursor = 0;
+  let start: { node: Text; offset: number } | null = null;
+  let end: { node: Text; offset: number } | null = null;
+  for (let node = walker.nextNode(); node instanceof Text; node = walker.nextNode()) {
+    const length = node.textContent?.length ?? 0;
+    if (length === 0) continue;
+    const next = cursor + length;
+    if (!start && offsets.from <= next) start = { node, offset: Math.max(0, offsets.from - cursor) };
+    if (offsets.to <= next) { end = { node, offset: Math.max(0, offsets.to - cursor) }; break; }
+    cursor = next;
+  }
+  if (!start || !end) return false;
+  element.focus({ preventScroll: true });
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  return true;
 }
 
 function currentCrossBlockSelection(content: HTMLElement, sourceText: string): CrossBlockSelectionDetails | null {
@@ -575,21 +690,23 @@ function prepareNestedListOwnContent(content: HTMLElement, textLength: number): 
       if (node === nested) break;
       ownNodes.push(node);
     }
-    if (ownNodes.length === 0) continue;
     const wrapper = document.createElement("span");
     wrapper.dataset.wysiwygListOwnContent = "true";
     wrapper.dataset.sourceFrom = String(itemRange.from);
     wrapper.dataset.sourceTo = String(itemRange.to);
     wrapper.dataset.sourceKind = "list-item-own-content";
     wrapper.contentEditable = "false";
+    if (ownNodes.every((node) => !(node.textContent ?? "").trim())) wrapper.classList.add("wysiwyg-empty-list-own-content");
     for (const node of ownNodes) wrapper.append(node);
     item.insertBefore(wrapper, nested);
   }
 }
 function decorateEditability(content: HTMLElement, text: string): void {
   const textLength = text.length;
+  compactRepeatedThematicBreaks(content, textLength);
   prepareNestedListOwnContent(content, textLength);
   prepareInlineAtoms(content, text);
+  refreshItalicVisual(content);
   for (const element of content.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6, p, li, th, td, [data-wysiwyg-list-own-content]")) {
     if (directEditableElement(element, textLength) === element) {
       element.dataset.wysiwygEditability = "direct";
@@ -641,7 +758,7 @@ function imageInsertionText(text: string, position: number, receipts: readonly I
 }
 
 export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>(function WysiwygEditor(
-  { value, html, htmlReady, fontFamily, readingMaxWidth = "820px", previewFontSize = 14, wechatThemeDefinition, darkMode, imageImportBusy, onApplyTextChange, onImageDrop, onRequestImageReplacement, onDropRejected, onStatus, onErrorCapture, onLoadCapture },
+  { value, html, htmlReady, fontFamily, readingMaxWidth = "820px", previewFontSize = 14, toolbarControls, wechatThemeDefinition, darkMode, imageImportBusy, onApplyTextChange, onImageDrop, onRequestImageReplacement, onDropRejected, onStatus, onErrorCapture, onLoadCapture },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -654,6 +771,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
   const imageEditRef = useRef<ImageEditState | null>(null);
   const sourceTextRef = useRef("");
   const imageAnchorsRef = useRef(new Map<string, ImageAnchor>());
+  const linkSelectionRef = useRef<Range | null>(null);
+  const linkDraftRef = useRef<string | null>(null);
   const anchorSequenceRef = useRef(0);
   const renderSequenceRef = useRef(0);
   const structuredPreviewSequenceRef = useRef(0);
@@ -661,6 +780,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
   const pendingCompositionBlurRef = useRef(false);
   const literalPasteUntilRef = useRef(0);
   const activeBlockRef = useRef<HTMLElement | null>(null);
+  const pendingBlockSelectionRef = useRef<WysiwygSourceRange | null>(null);
+  const pendingListCaretRef = useRef<number | null>(null);
   const draggedBlockRangeRef = useRef<{ range: WysiwygSourceRange; expectedText: string } | null>(null);
   const blockDropTargetRef = useRef<BlockDropTarget | null>(null);
   const [sourceEdit, setSourceEdit] = useState<SourceEditState | null>(null);
@@ -670,6 +791,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
   const [listEditContext, setListEditContext] = useState<ListEditContext | null>(null);
   const [blockEditContext, setBlockEditContext] = useState<BlockEditContext | null>(null);
   const [blockInsertKind, setBlockInsertKind] = useState<MarkdownBlockPreset>("paragraph");
+  const [linkDraft, setLinkDraft] = useState<string | null>(null);
 
   valueRef.current = value;
   htmlRef.current = html;
@@ -689,20 +811,27 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     window.requestAnimationFrame(renderHtml);
   };
 
-  const commitDirectEdit = (headingLevel?: number): boolean => {
+  const commitDirectEdit = (headingLevel?: number, detachBeforeApply = false): boolean => {
     const edit = directEditRef.current;
     if (!edit) return true;
     if (isComposingRef.current) {
       onStatus?.("中文输入尚未确认，请先完成输入法组合文本。");
       return false;
     }
-    const serialized = serializeDirectBlock(edit.element, edit.originalSource, headingLevel);
+    const directSource = serializeDirectBlock(edit.element, edit.originalSource);
+    const serialized = headingLevel === undefined ? directSource : replaceMarkdownHeadingLevel(directSource, headingLevel);
     const insert = edit.isNewBlock
       ? createMarkdownBlockInsertion(edit.expectedText, edit.range.from, serialized)
       : serialized;
     if ((!edit.isNewBlock && insert === edit.originalSource) || (edit.isNewBlock && !insert)) return true;
+    // Heading conversion can synchronously rerender CodeMirror and blur the old
+    // contentEditable node. Detach that session first so blur cannot write the
+    // pre-conversion heading back over the canonical Markdown.
+    const detached = detachBeforeApply && directEditRef.current === edit;
+    if (detached) directEditRef.current = null;
     const next = onApplyTextChange({ ...edit.range, insert, expectedText: edit.expectedText });
     if (next === null) {
+      if (detached) directEditRef.current = edit;
       onStatus?.("所见即所得编辑基于旧文档版本，已拒绝写入；请重新选择该段落。");
       return false;
     }
@@ -868,6 +997,36 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     setBlockEditContext(null);
     content.innerHTML = htmlRef.current;
     decorateEditability(content, valueRef.current);
+    const pendingListCaret = pendingListCaretRef.current;
+    if (pendingListCaret !== null) {
+      const candidates = [...content.querySelectorAll<HTMLElement>('[data-wysiwyg-editability="direct"]')]
+        .filter((element) => listItemForEditable(element))
+        .map((element) => ({ element, range: sourceRangeFromElement(element, valueRef.current.length) }))
+        .filter((candidate): candidate is { element: HTMLElement; range: WysiwygSourceRange } => candidate.range !== null);
+      const match = candidates.find(({ range }) => range.from <= pendingListCaret && pendingListCaret < range.to)
+        ?? candidates.find(({ range }) => range.from >= pendingListCaret)
+        ?? candidates.reverse().find(({ range }) => range.to <= pendingListCaret);
+      pendingListCaretRef.current = null;
+      if (match && selectBlock(match.element) === "direct") {
+        const caret = document.createRange();
+        caret.selectNodeContents(match.element);
+        caret.collapse(true);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(caret);
+      }
+    }
+    const pendingBlockSelection = pendingBlockSelectionRef.current;
+    if (pendingBlockSelection) {
+      const match = [...content.querySelectorAll<HTMLElement>(SOURCE_SELECTOR)].find((element) => {
+        const range = sourceRangeFromElement(blockElementForEditable(element), valueRef.current.length);
+        return Boolean(range && range.from === pendingBlockSelection.from && range.to === pendingBlockSelection.to);
+      });
+      if (match) {
+        pendingBlockSelectionRef.current = null;
+        activateStructuralBlock(match);
+      }
+    }
     if (containerRef.current) containerRef.current.scrollTop = scrollTop;
     void renderMermaidPreview(content, { darkMode, fontFamily }).then(() => {
       if (sequence !== renderSequenceRef.current) return;
@@ -1311,13 +1470,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     return finishDirectEdit() && finishSourceEdit() && finishImageEdit();
   };
 
-  const finishBlockAction = (change: WysiwygTextChange, message: string): boolean => {
+  const finishBlockAction = (change: WysiwygTextChange, message: string, nextSelection?: WysiwygSourceRange): boolean => {
     const next = onApplyTextChange(change);
     if (next === null) {
       onStatus?.("内容块基于旧文档版本，已拒绝结构修改；请重新选择后重试。");
       return false;
     }
     valueRef.current = next;
+    pendingBlockSelectionRef.current = nextSelection ?? null;
     activeBlockRef.current = null;
     draggedBlockRangeRef.current = null;
     clearBlockDropTarget();
@@ -1349,7 +1509,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     if (!targetRange) { onStatus?.("当前方向没有可移动到的同级内容块。"); return true; }
     const change = createMarkdownBlockMove(valueRef.current, current.range, targetRange, direction === "up" ? "before" : "after");
     if (!change) { onStatus?.("当前块与目标结构重叠，未执行移动。"); return true; }
-    return finishBlockAction(change, `内容块已${direction === "up" ? "上移" : "下移"}；可用一次撤销恢复。`);
+    const movingSource = valueRef.current.slice(current.range.from, current.range.to);
+    const movedOffset = direction === "up" ? change.insert.indexOf(movingSource) : change.insert.lastIndexOf(movingSource);
+    const nextSelection = { from: change.from + movedOffset, to: change.from + movedOffset + movingSource.length };
+    return finishBlockAction(change, `内容块已${direction === "up" ? "上移" : "下移"}；当前块保持选中，可继续操作。`, nextSelection);
   };
 
   const duplicateActiveBlock = (): boolean => {
@@ -1358,7 +1521,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     if (!current) return false;
     const source = valueRef.current.slice(current.range.from, current.range.to);
     const insert = markdownBlockDuplicateInsertion(source);
-    return finishBlockAction({ from: current.range.to, to: current.range.to, insert, expectedText: valueRef.current }, "已复制当前内容块；副本位于原块下方。");
+    const duplicateFrom = current.range.to + insert.lastIndexOf(source);
+    return finishBlockAction({ from: current.range.to, to: current.range.to, insert, expectedText: valueRef.current }, "已复制当前内容块；副本保持选中，可继续操作。", { from: duplicateFrom, to: duplicateFrom + source.length });
   };
 
   const deleteActiveBlock = (): boolean => {
@@ -1374,9 +1538,11 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     if (!finishEditorsForBlockAction()) return false;
     const current = activeBlockAndRange();
     if (!current) return false;
-    const insert = createMarkdownBlockInsertion(valueRef.current, current.range.to, markdownBlockPreset(blockInsertKind));
+    const block = markdownBlockPreset(blockInsertKind);
+    const insert = createMarkdownBlockInsertion(valueRef.current, current.range.to, block);
     if (!insert) return false;
-    return finishBlockAction({ from: current.range.to, to: current.range.to, insert, expectedText: valueRef.current }, "已在当前块下方插入新内容；可继续点击编辑。");
+    const insertedFrom = current.range.to + insert.indexOf(block);
+    return finishBlockAction({ from: current.range.to, to: current.range.to, insert, expectedText: valueRef.current }, "已在当前块下方插入新内容；新内容保持选中。", { from: insertedFrom, to: insertedFrom + block.length });
   };
 
   const moveDraggedBlock = (target: HTMLElement, position: "before" | "after"): boolean => {
@@ -1492,6 +1658,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     return true;
   };
 
+
   const crossBlockSelectionAfterCommit = (): CrossBlockSelectionDetails | null => {
     const content = contentRef.current;
     if (isComposingRef.current || !directEditRef.current || !content) return null;
@@ -1530,6 +1697,68 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     }
     const label = mark === "bold" ? "粗体" : mark === "italic" ? "斜体" : "删除线";
     return finishCrossBlockTransaction(change, `已对跨块选择设置${label}；可用一次撤销恢复。`);
+  };
+
+  const formatCurrentDirectSelection = (mark: MarkdownSelectionMark): boolean => {
+    const edit = directEditRef.current;
+    const selection = window.getSelection();
+    if (!edit || !selection || selection.isCollapsed || selection.rangeCount !== 1 || !selectionBelongsTo(edit.element)) return false;
+    const offsets = visibleSelectionOffsets(edit.element, selection);
+    if (!offsets || !toggleVisibleSelectionMark(edit.element, mark)) return false;
+    refreshItalicVisual(edit.element);
+    if (!commitDirectEdit()) return false;
+    restoreVisibleSelection(edit.element, offsets);
+    const label = mark === "bold" ? "粗体" : mark === "italic" ? "斜体" : "删除线";
+    onStatus?.(`已切换当前选择的${label}状态并写回 Markdown。`);
+    return true;
+  };
+
+  const restoreLinkSelection = (): DirectEditState | null => {
+    const edit = directEditRef.current;
+    const range = linkSelectionRef.current;
+    if (!edit || !range || !range.startContainer.isConnected || !range.endContainer.isConnected) return null;
+    edit.element.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return edit;
+  };
+
+  const openLinkEditor = (): void => {
+    const edit = directEditRef.current;
+    const selection = window.getSelection();
+    if (!edit || !selection || selection.isCollapsed || selection.rangeCount !== 1 || !selectionBelongsTo(edit.element)
+      || selectionIntersectsInlineAtom(edit.element)) {
+      onStatus?.("请先在一个可直接编辑的文本块中选中链接文字。");
+      return;
+    }
+    linkSelectionRef.current = selection.getRangeAt(0).cloneRange();
+    linkDraftRef.current = "https://";
+    setLinkDraft("https://");
+  };
+
+  const closeLinkEditor = (): void => {
+    const edit = restoreLinkSelection();
+    linkDraftRef.current = null;
+    linkSelectionRef.current = null;
+    setLinkDraft(null);
+    if (edit) onStatus?.("已取消添加链接；原选区已恢复。");
+  };
+
+  const applyLinkEditor = (): void => {
+    const href = linkDraftRef.current?.trim() ?? "";
+    if (!/^(?:https?:|mailto:|#|\/)/i.test(href) || /[\u0000-\u001f\u007f]/.test(href)) {
+      onStatus?.("链接地址必须使用 http、https、mailto、# 或站内路径。");
+      return;
+    }
+    if (!restoreLinkSelection() || !document.execCommand("createLink", false, href) || !commitDirectEdit()) {
+      onStatus?.("链接未能写回，请重新选择文字后重试。");
+      return;
+    }
+    linkDraftRef.current = null;
+    linkSelectionRef.current = null;
+    setLinkDraft(null);
+    onStatus?.("链接已写回 Markdown；链接文字选区已保留。");
   };
   const handleDirectKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
@@ -1590,6 +1819,23 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
         return;
       }
     }
+    const currentListItem = listItemForEditable(edit.element);
+    if (currentListItem && (event.key === "Backspace" || event.key === "Delete")) {
+      const emptyOwnContent = !(edit.element.textContent ?? "").trim();
+      const insert = deleteEmptyMarkdownListItem(edit.originalSource)
+        ?? (emptyOwnContent && edit.element.dataset.wysiwygListOwnContent === "true" ? exitMarkdownListItemLevel(edit.originalSource) : null);
+      if (insert !== null) {
+        event.preventDefault();
+        pendingListCaretRef.current = edit.range.from;
+        directEditRef.current = null;
+        if (!finishCrossBlockTransaction({ ...edit.range, insert, expectedText: edit.expectedText }, "已删除空列表层级；可继续按退格清理，可用一次撤销恢复。")) {
+          pendingListCaretRef.current = null;
+          directEditRef.current = edit;
+        }
+        setListEditContext(null);
+        return;
+      }
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       edit.element.contentEditable = "false";
@@ -1622,12 +1868,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       }
       if (key === "k") {
         event.preventDefault();
-        const href = window.prompt("输入链接地址", "https://");
-        if (href) {
-          edit.element.focus({ preventScroll: true });
-          document.execCommand("createLink", false, href);
-          onStatus?.("链接已应用；离开当前块时写回 Markdown。");
-        }
+        openLinkEditor();
         return;
       }
     }
@@ -1641,7 +1882,6 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       onStatus?.("跨块修改请先缩小选择范围，或切换到源代码模式。");
       return;
     }
-    const currentListItem = listItemForEditable(edit.element);
     if (currentListItem && event.key === "Tab") {
       event.preventDefault();
       shiftCurrentListItem(event.shiftKey ? "outdent" : "indent");
@@ -1678,30 +1918,40 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     }
   };
 
-  const runCommand = (command: "bold" | "italic" | "strikeThrough" | "createLink", value?: string) => {
+  const runCommand = (command: "bold" | "italic" | "strikeThrough") => {
     const edit = directEditRef.current;
     if (!edit) {
       onStatus?.("请先选择一个可直接编辑的标题或段落。");
       return;
     }
     if (window.getSelection()?.isCollapsed === false && !selectionBelongsTo(edit.element)) {
-      if (command === "bold" || command === "italic" || command === "strikeThrough") {
-        formatCurrentCrossBlockSelection(command === "strikeThrough" ? "strike" : command);
-      } else {
-        onStatus?.("跨块选择不能创建单个链接；请缩小到一个文本块。");
-      }
+      formatCurrentCrossBlockSelection(command === "strikeThrough" ? "strike" : command);
       return;
     }
     if (selectionIntersectsInlineAtom(edit.element)) {
       onStatus?.("不能跨受保护的公式、图片、链接或行内代码应用格式。");
       return;
     }
+    if (window.getSelection()?.isCollapsed === false
+      && formatCurrentDirectSelection(command === "strikeThrough" ? "strike" : command)) return;
     edit.element.focus({ preventScroll: true });
     if (isComposingRef.current) {
       onStatus?.("请先确认中文输入，再应用格式。");
       return;
     }
-    document.execCommand(command, false, value);
+    document.execCommand(command);
+  };
+
+  // Toolbar mousedown intentionally preserves the editor selection; execute before it can blur.
+  const runToolbarPointerAction = (event: PointerEvent<HTMLButtonElement>, action: () => void): void => {
+    event.preventDefault();
+    action();
+  };
+
+  const runToolbarKeyboardAction = (event: ReactMouseEvent<HTMLButtonElement>, action: () => void): void => {
+    if (event.detail !== 0) return;
+    event.preventDefault();
+    action();
   };
 
   const setBlockType = (headingLevel: number) => {
@@ -1714,11 +1964,13 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       onStatus?.("列表、引用和表格单元格不能转换为标题。");
       return;
     }
-    if (!commitDirectEdit(headingLevel)) return;
+    if (!commitDirectEdit(headingLevel, true)) return;
+    pendingBlockSelectionRef.current = { ...edit.range };
     edit.element.contentEditable = "false";
     edit.element.classList.remove("wysiwyg-direct-edit");
     directEditRef.current = null;
     setActiveEditKind(null);
+    onStatus?.(headingLevel > 0 ? `已转换为 H${headingLevel} 标题。` : "已转换为正文。");
     window.requestAnimationFrame(renderHtml);
   };
 
@@ -1931,40 +2183,54 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       if (updateBlockDropTarget(event)) return;
     }}>
       {wechatThemeDefinition && <style>{buildWechatThemeProjectionCss(wechatThemeDefinition)}</style>}
-      <div className="wysiwyg-toolbar" role="toolbar" aria-label="所见即所得格式工具栏" onMouseDown={(event) => event.preventDefault()}>
-        <button type="button" title="粗体（Ctrl+B）" onClick={() => runCommand("bold")}><strong>B</strong></button>
-        <button type="button" title="斜体（Ctrl+I）" onClick={() => runCommand("italic")}><em>I</em></button>
-        <button type="button" title="删除线" onClick={() => runCommand("strikeThrough")}><s>S</s></button>
-        <button type="button" title="正文" onClick={() => setBlockType(0)}>正文</button>
-        <button type="button" title="一级标题" onClick={() => setBlockType(1)}>H1</button>
-        <button type="button" title="二级标题" onClick={() => setBlockType(2)}>H2</button>
-        <button type="button" title="三级标题" onClick={() => setBlockType(3)}>H3</button>
-        <button type="button" title="添加链接（Ctrl+K）" onClick={() => {
-          const href = window.prompt("输入链接地址", "https://");
-          if (href) runCommand("createLink", href);
-        }}>链接</button>
-        <span>{activeEditKind === "direct" ? "直接编辑中 · 可跨安全文本块框选、剪切、粘贴和批量格式化" : activeEditKind === "image" ? "图片编辑中 · 可修改说明、替换或删除" : activeEditKind === "source" ? "结构化内容编辑中 · Ctrl+Enter 应用" : "正文、列表、引用和表格单元格可直接编辑；公式、流程图和代码块支持专用面板"}</span>
-      </div>
-      {blockEditContext && (
-        <div className="wysiwyg-block-toolbar" role="toolbar" aria-label="内容块操作工具栏" onMouseDown={(event) => event.preventDefault()}>
+      <div className="wysiwyg-toolbar" role="toolbar" aria-label="所见即所得常驻工具栏">
+        <div className="wysiwyg-toolbar-primary">
+          <button type="button" title="粗体（Ctrl+B）" onPointerDown={(event) => runToolbarPointerAction(event, () => runCommand("bold"))} onClick={(event) => runToolbarKeyboardAction(event, () => runCommand("bold"))}><strong>B</strong></button>
+          <button type="button" title="斜体（Ctrl+I）" onPointerDown={(event) => runToolbarPointerAction(event, () => runCommand("italic"))} onClick={(event) => runToolbarKeyboardAction(event, () => runCommand("italic"))}><em>I</em></button>
+          <button type="button" title="删除线" onPointerDown={(event) => runToolbarPointerAction(event, () => runCommand("strikeThrough"))} onClick={(event) => runToolbarKeyboardAction(event, () => runCommand("strikeThrough"))}><s>S</s></button>
+          <button type="button" title="正文" onPointerDown={(event) => runToolbarPointerAction(event, () => setBlockType(0))} onClick={(event) => runToolbarKeyboardAction(event, () => setBlockType(0))}>正文</button>
+          <button type="button" title="一级标题" onPointerDown={(event) => runToolbarPointerAction(event, () => setBlockType(1))} onClick={(event) => runToolbarKeyboardAction(event, () => setBlockType(1))}>H1</button>
+          <button type="button" title="二级标题" onPointerDown={(event) => runToolbarPointerAction(event, () => setBlockType(2))} onClick={(event) => runToolbarKeyboardAction(event, () => setBlockType(2))}>H2</button>
+          <button type="button" title="三级标题" onPointerDown={(event) => runToolbarPointerAction(event, () => setBlockType(3))} onClick={(event) => runToolbarKeyboardAction(event, () => setBlockType(3))}>H3</button>
+          <button type="button" title="添加链接（Ctrl+K）" onPointerDown={(event) => runToolbarPointerAction(event, openLinkEditor)} onClick={(event) => runToolbarKeyboardAction(event, openLinkEditor)}>链接</button>
+          {toolbarControls && <div className="wysiwyg-toolbar-settings">{toolbarControls}</div>}
+          {linkDraft !== null && <span className="wysiwyg-link-create">
+            <input
+              autoFocus
+              data-testid="wysiwyg-link-create-destination"
+              aria-label="新链接地址"
+              value={linkDraft}
+              onChange={(event) => { linkDraftRef.current = event.target.value; setLinkDraft(event.target.value); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") { event.preventDefault(); applyLinkEditor(); }
+                if (event.key === "Escape") { event.preventDefault(); closeLinkEditor(); }
+              }}
+            />
+            <button type="button" onClick={applyLinkEditor}>应用</button>
+            <button type="button" onClick={closeLinkEditor}>取消</button>
+          </span>}
+          <span className="wysiwyg-toolbar-status">{activeEditKind === "direct" ? "直接编辑中" : activeEditKind === "image" ? "图片编辑中" : activeEditKind === "source" ? "结构化内容编辑中" : "选择文字或内容块后操作"}</span>
+        </div>
+        <div className="wysiwyg-block-toolbar" role="group" aria-label="常驻内容块操作" onMouseDown={(event) => event.preventDefault()}>
           <button
             type="button"
             className="wysiwyg-block-grip"
-            draggable
-            aria-label={`拖动${blockEditContext.label}`}
+            disabled={!blockEditContext}
+            draggable={Boolean(blockEditContext)}
+            aria-label={`拖动${blockEditContext?.label ?? "内容块"}`}
             title="拖动内容块"
             onMouseDown={(event) => event.stopPropagation()}
             onDragStart={startActiveBlockDrag}
             onDragEnd={() => { draggedBlockRangeRef.current = null; clearBlockDropTarget(); }}
           >⋮⋮</button>
-          <span>{blockEditContext.label}</span>
-          <button type="button" disabled={!blockEditContext.canMoveUp} onClick={() => moveActiveBlock("up")}>上移</button>
-          <button type="button" disabled={!blockEditContext.canMoveDown} onClick={() => moveActiveBlock("down")}>下移</button>
-          <button type="button" onClick={duplicateActiveBlock}>复制</button>
-          <button type="button" className="danger" onClick={deleteActiveBlock}>删除</button>
+          <span>{blockEditContext?.label ?? "未选择内容块"}</span>
+          <button type="button" disabled={!blockEditContext?.canMoveUp} onPointerDown={(event) => runToolbarPointerAction(event, () => moveActiveBlock("up"))} onClick={(event) => runToolbarKeyboardAction(event, () => moveActiveBlock("up"))}>上移</button>
+          <button type="button" disabled={!blockEditContext?.canMoveDown} onPointerDown={(event) => runToolbarPointerAction(event, () => moveActiveBlock("down"))} onClick={(event) => runToolbarKeyboardAction(event, () => moveActiveBlock("down"))}>下移</button>
+          <button type="button" disabled={!blockEditContext} onPointerDown={(event) => runToolbarPointerAction(event, duplicateActiveBlock)} onClick={(event) => runToolbarKeyboardAction(event, duplicateActiveBlock)}>复制</button>
+          <button type="button" disabled={!blockEditContext} className="danger" onPointerDown={(event) => runToolbarPointerAction(event, deleteActiveBlock)} onClick={(event) => runToolbarKeyboardAction(event, deleteActiveBlock)}>删除</button>
           <label>
             <span className="sr-only">插入内容类型</span>
-            <select value={blockInsertKind} onMouseDown={(event) => event.stopPropagation()} onChange={(event) => setBlockInsertKind(event.target.value as MarkdownBlockPreset)}>
+            <select disabled={!blockEditContext} value={blockInsertKind} onMouseDown={(event) => event.stopPropagation()} onChange={(event) => setBlockInsertKind(event.target.value as MarkdownBlockPreset)}>
               <option value="paragraph">正文</option>
               <option value="heading">标题</option>
               <option value="bullet-list">列表</option>
@@ -1976,30 +2242,31 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
               <option value="image">图片引用</option>
             </select>
           </label>
-          <button type="button" onClick={insertBlockAfterActive}>下方插入</button>
+          <button type="button" disabled={!blockEditContext} onPointerDown={(event) => runToolbarPointerAction(event, insertBlockAfterActive)} onClick={(event) => runToolbarKeyboardAction(event, insertBlockAfterActive)}>下方插入</button>
         </div>
-      )}      {listEditContext && (
+      </div>
+      {listEditContext && (
         <div className="wysiwyg-list-toolbar" role="toolbar" aria-label="列表结构工具栏" onMouseDown={(event) => event.preventDefault()}>
           <span>{listEditContext.nested ? "嵌套列表项" : "顶层列表项"} · 结构操作包含全部子项</span>
-          <button type="button" onClick={() => shiftCurrentListItem("indent")}>缩进</button>
-          <button type="button" onClick={() => shiftCurrentListItem("outdent")}>提升</button>
-          <button type="button" disabled={!listEditContext.canMoveUp} onClick={() => moveCurrentListSubtree("up")}>上移</button>
-          <button type="button" disabled={!listEditContext.canMoveDown} onClick={() => moveCurrentListSubtree("down")}>下移</button>
-          <button type="button" onClick={insertListSiblingAfterCurrent}>新建同级项</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => shiftCurrentListItem("indent"))} onClick={(event) => runToolbarKeyboardAction(event, () => shiftCurrentListItem("indent"))}>缩进</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => shiftCurrentListItem("outdent"))} onClick={(event) => runToolbarKeyboardAction(event, () => shiftCurrentListItem("outdent"))}>提升</button>
+          <button type="button" disabled={!listEditContext.canMoveUp} onPointerDown={(event) => runToolbarPointerAction(event, () => moveCurrentListSubtree("up"))} onClick={(event) => runToolbarKeyboardAction(event, () => moveCurrentListSubtree("up"))}>上移</button>
+          <button type="button" disabled={!listEditContext.canMoveDown} onPointerDown={(event) => runToolbarPointerAction(event, () => moveCurrentListSubtree("down"))} onClick={(event) => runToolbarKeyboardAction(event, () => moveCurrentListSubtree("down"))}>下移</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, insertListSiblingAfterCurrent)} onClick={(event) => runToolbarKeyboardAction(event, insertListSiblingAfterCurrent)}>新建同级项</button>
         </div>
       )}
       {tableEditContext && (
         <div className="wysiwyg-table-toolbar" role="toolbar" aria-label="表格结构工具栏" onMouseDown={(event) => event.preventDefault()}>
           <span>表格：第 {tableEditContext.rowIndex + 1} 行，第 {tableEditContext.columnIndex + 1} 列</span>
-          <button type="button" onClick={() => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "before" })}>上方插行</button>
-          <button type="button" onClick={() => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "after" })}>下方插行</button>
-          <button type="button" disabled={tableEditContext.isHeader} onClick={() => applyCurrentTableOperation({ kind: "delete-row", rowIndex: tableEditContext.rowIndex })}>删除行</button>
-          <button type="button" onClick={() => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "before" })}>左侧插列</button>
-          <button type="button" onClick={() => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "after" })}>右侧插列</button>
-          <button type="button" disabled={tableEditContext.columnCount <= 1} onClick={() => applyCurrentTableOperation({ kind: "delete-column", columnIndex: tableEditContext.columnIndex })}>删除列</button>
-          <button type="button" title="左对齐" onClick={() => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "left" })}>左齐</button>
-          <button type="button" title="居中对齐" onClick={() => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "center" })}>居中</button>
-          <button type="button" title="右对齐" onClick={() => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "right" })}>右齐</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "before" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "before" }))}>上方插行</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "after" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "insert-row", rowIndex: tableEditContext.rowIndex, position: "after" }))}>下方插行</button>
+          <button type="button" disabled={tableEditContext.isHeader} onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "delete-row", rowIndex: tableEditContext.rowIndex }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "delete-row", rowIndex: tableEditContext.rowIndex }))}>删除行</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "before" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "before" }))}>左侧插列</button>
+          <button type="button" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "after" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "insert-column", columnIndex: tableEditContext.columnIndex, position: "after" }))}>右侧插列</button>
+          <button type="button" disabled={tableEditContext.columnCount <= 1} onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "delete-column", columnIndex: tableEditContext.columnIndex }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "delete-column", columnIndex: tableEditContext.columnIndex }))}>删除列</button>
+          <button type="button" title="左对齐" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "left" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "left" }))}>左齐</button>
+          <button type="button" title="居中对齐" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "center" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "center" }))}>居中</button>
+          <button type="button" title="右对齐" onPointerDown={(event) => runToolbarPointerAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "right" }))} onClick={(event) => runToolbarKeyboardAction(event, () => applyCurrentTableOperation({ kind: "set-alignment", columnIndex: tableEditContext.columnIndex, alignment: "right" }))}>右齐</button>
         </div>
       )}
       {imageEdit && (
@@ -2235,6 +2502,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) literalPasteUntilRef.current = 0;
           const edit = directEditRef.current;
           if (!edit || edit.element.contains(event.relatedTarget as Node | null)) return;
+          if (linkDraftRef.current !== null) return;
           if (isComposingRef.current) {
             pendingCompositionBlurRef.current = true;
             return;

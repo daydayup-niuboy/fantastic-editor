@@ -316,6 +316,12 @@ export class FileSessionManager {
     this.#temporaryBaseDirectory = path;
   }
 
+  getSuggestedSaveName(sessionId: string): string {
+    const session = this.#sessions.get(sessionId);
+    if (!session) return "document.md";
+    return session.displayNameOverride ?? (session.isUntitled ? "document.md" : basename(session.path));
+  }
+
   getActiveResolutionContext(): SingleFileResolutionContext | undefined {
     const active = this.#activeSessionId ? this.#sessions.get(this.#activeSessionId) : undefined;
     return active ? this.getResolutionContext(active.documentId) : undefined;
@@ -651,7 +657,16 @@ export class FileSessionManager {
   async renameOpenFile(request: RenameOpenFileRequest): Promise<RenameOpenFileResult> {
     const session = this.#sessions.get(request.sessionId);
     if (!session) return { status: "failed", error: "文件会话已失效，请重新打开文件。" };
-    if (session.isUntitled) return { status: "failed", error: "未命名文档请先保存，再右键重命名。" };
+    if (session.isUntitled) {
+      try {
+        const newName = normalizeWorkspaceRename(request.newName);
+        if (session.displayNameOverride === newName) return { status: "failed", error: "新文件名与当前名称相同。" };
+        session.displayNameOverride = newName;
+        return { status: "renamed", displayName: newName, workspaceRevision: session.workspaceRevision };
+      } catch (error) {
+        return { status: "failed", error: error instanceof Error ? error.message : "重命名 Markdown 文档失败。" };
+      }
+    }
     if (session.workspaceMode === "folder-workspace") {
       const workspace = this.#folderWorkspace;
       const file = workspace && [...workspace.files.values()].find((item) => {

@@ -29,6 +29,7 @@ const scenarios = [
   { id: "formula", env: { FANTASTIC_EDITOR_FORMULA_SMOKE_TEST: "1" }, timeout: 45_000 },
   { id: "mermaid", env: { FANTASTIC_EDITOR_MERMAID_SMOKE_TEST: "1" }, timeout: 45_000 },
   { id: "ui", env: { FANTASTIC_EDITOR_UI_SMOKE_TEST: "1" }, timeout: 180_000 },
+  { id: "live-preview", env: { FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST: "1" }, timeout: 60_000 },
 ];
 
 const scenarioResults = [];

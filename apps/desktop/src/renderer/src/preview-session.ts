@@ -78,6 +78,13 @@ function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   return result;
 }
 
+export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] {
+  return diagnostics.map((item) => {
+    const suggestion = item.suggestedActions?.join("；");
+    return `${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`;
+  });
+}
+
 export function createPreviewSession(
   parse: ParseWorkerSuccess,
   resolved: ResolveResult,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseDocument } from "@fantastic-editor/document-core";
 import type { PreviewDerivedUpdate, ResolveResult } from "@fantastic-editor/shared";
-import { applyPreviewDerivedUpdate, createPreviewSession } from "./preview-session.js";
+import { applyPreviewDerivedUpdate, createPreviewSession, formatDiagnostics } from "./preview-session.js";
 import type { ParseWorkerSuccess } from "./workers/parse-worker-protocol";
 
 const SOURCE_HASH = "unused";
@@ -78,6 +78,17 @@ async function fixture(): Promise<{ parse: ParseWorkerSuccess; resolved: Resolve
 }
 
 describe("PreviewSession", () => {
+  it("formats resource reasons and suggested actions for users", () => {
+    expect(formatDiagnostics([{
+      id: "diagnostic-1",
+      code: "RESOURCE_MISSING",
+      severity: "blocking",
+      category: "resource",
+      message: "找不到图片文件。",
+      suggestedActions: ["请检查路径。"],
+    }])).toEqual(["找不到图片文件。 建议：请检查路径。（错误代码：RESOURCE_MISSING）"]);
+  });
+
   it("combines only fully matching parse, resolution and manifest identities", async () => {
     const value = await fixture();
     const accepted = createPreviewSession(value.parse, value.resolved);

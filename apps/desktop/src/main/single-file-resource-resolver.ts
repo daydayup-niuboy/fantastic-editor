@@ -194,6 +194,7 @@ function diagnostic(
   code: string,
   message: string,
   category: Diagnostic["category"] = "resource",
+  suggestedActions?: string[],
 ): Diagnostic {
   return {
     id: `diagnostic-${reference.referenceKey}-${code}`,
@@ -204,6 +205,7 @@ function diagnostic(
     source: reference.source,
     nodeId: reference.nodeId,
     referenceKey: reference.referenceKey,
+    ...(suggestedActions?.length ? { suggestedActions } : {}),
   };
 }
 
@@ -387,7 +389,13 @@ export class SingleFileResourceResolver {
     if (reference.resolvedRef.length > 4096 || DRIVE_RELATIVE.test(reference.resolvedRef)) {
       return {
         record: emptyRecord(reference, context.workspaceRevision, "blocked", ["drive-relative-or-overlong"]),
-        diagnostic: diagnostic(reference, "WINDOWS_DRIVE_RELATIVE_PATH_BLOCKED", "盘符相对路径或超长路径已被阻止。", "security"),
+        diagnostic: diagnostic(
+          reference,
+          "WINDOWS_DRIVE_RELATIVE_PATH_BLOCKED",
+          "图片路径被拦截：盘符相对路径或超长路径不安全。",
+          "security",
+          ["请使用工作区内的相对路径，或完整的 Windows 绝对路径（例如 C:\\文档\\图片.png）。"],
+        ),
       };
     }
 
@@ -437,7 +445,13 @@ export class SingleFileResourceResolver {
     if (!isWithinRoot(context.authorizationRootRealPath, candidate)) {
       return {
         record: emptyRecord(reference, context.workspaceRevision, "blocked", ["lexical-root-check-failed"]),
-        diagnostic: diagnostic(reference, "RESOURCE_OUTSIDE_AUTHORIZED_ROOT", "资源位于当前会话授权目录之外。", "security"),
+        diagnostic: diagnostic(
+          reference,
+          "RESOURCE_OUTSIDE_AUTHORIZED_ROOT",
+          "图片路径被安全策略拦截：图片不在当前文档目录或已打开的工作区内。",
+          "security",
+          ["请把图片移入文档目录，或通过“打开文件夹”打开文档和图片的共同父目录。"],
+        ),
       };
     }
 
@@ -449,7 +463,13 @@ export class SingleFileResourceResolver {
       if (code === "ENOENT" || code === "ENOTDIR") {
         return {
           record: emptyRecord(reference, context.workspaceRevision, "missing", ["lexical-root-check-passed"]),
-          diagnostic: diagnostic(reference, "RESOURCE_MISSING", "找不到本地图片资源。"),
+          diagnostic: diagnostic(
+            reference,
+            "RESOURCE_MISSING",
+            "找不到图片文件：文件不存在，或 Markdown 中的路径、文件名不正确。",
+            "resource",
+            ["请确认图片仍在原位置，并优先使用相对于 Markdown 文件的路径。"],
+          ),
         };
       }
       return {
@@ -460,7 +480,13 @@ export class SingleFileResourceResolver {
     if (!isWithinRoot(context.authorizationRootRealPath, candidateRealPath)) {
       return {
         record: emptyRecord(reference, context.workspaceRevision, "blocked", ["realpath-root-check-failed"]),
-        diagnostic: diagnostic(reference, "RESOURCE_REALPATH_OUTSIDE_AUTHORIZED_ROOT", "资源真实路径越出当前授权目录。", "security"),
+        diagnostic: diagnostic(
+          reference,
+          "RESOURCE_REALPATH_OUTSIDE_AUTHORIZED_ROOT",
+          "图片路径被安全策略拦截：链接或重定向后的真实位置越出了当前工作区。",
+          "security",
+          ["请把图片文件直接放入当前文档目录或已打开的工作区。"],
+        ),
       };
     }
 
@@ -468,7 +494,13 @@ export class SingleFileResourceResolver {
     if (!mimeType) {
       return {
         record: emptyRecord(reference, context.workspaceRevision, "unsupported", ["unsupported-extension"]),
-        diagnostic: diagnostic(reference, "UNSUPPORTED_IMAGE_FORMAT", "P0 不支持该本地图片格式。", "compatibility"),
+        diagnostic: diagnostic(
+          reference,
+          "UNSUPPORTED_IMAGE_FORMAT",
+          "图片格式不受支持。",
+          "compatibility",
+          ["请使用 PNG、JPG/JPEG、GIF、WebP 或 SVG 图片。"],
+        ),
       };
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "@fantastic-editor/desktop",
-  "version": "0.3.0-rc.2",
+  "version": "0.3.0-rc.3",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -19,6 +19,7 @@
     "@codemirror/view": "^6.39.16",
     "@fantastic-editor/document-core": "*",
     "@fantastic-editor/shared": "*",
+    "@lezer/markdown": "^1.7.2",
     "@resvg/resvg-js": "^2.6.2",
     "docx": "^9.7.1",
     "katex": "^0.18.4",
