@@ -13,13 +13,13 @@ export type ReadingWidth = "narrow" | "comfortable" | "wide" | "full";
 
 export const READING_WIDTH_OPTIONS: readonly { id: ReadingWidth; label: string; maxWidth: string }[] = [
   { id: "narrow", label: "窄", maxWidth: "680px" },
-  { id: "comfortable", label: "舒适", maxWidth: "820px" },
+  { id: "comfortable", label: "舒适", maxWidth: "720px" },
   { id: "wide", label: "宽", maxWidth: "1040px" },
   { id: "full", label: "全宽", maxWidth: "none" },
 ];
 
 export const DEFAULT_READING_WIDTH: ReadingWidth = "comfortable";
-export const DEFAULT_PREVIEW_FONT_SIZE = 14;
+export const DEFAULT_PREVIEW_FONT_SIZE = 17;
 
 export function normalizeReadingWidth(value: unknown): ReadingWidth {
   return READING_WIDTH_OPTIONS.some((item) => item.id === value) ? value as ReadingWidth : DEFAULT_READING_WIDTH;
@@ -33,7 +33,7 @@ export function normalizePreviewFontSize(value: unknown): number {
 
 export function readingWidthMaxWidth(value: unknown): string {
   const normalized = normalizeReadingWidth(value);
-  return READING_WIDTH_OPTIONS.find((item) => item.id === normalized)?.maxWidth ?? "820px";
+  return READING_WIDTH_OPTIONS.find((item) => item.id === normalized)?.maxWidth ?? "720px";
 }
 
 export function normalizePreviewFontName(value: unknown): string {

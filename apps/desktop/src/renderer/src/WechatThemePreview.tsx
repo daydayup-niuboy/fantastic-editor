@@ -15,6 +15,7 @@ interface WechatThemePreviewProps {
   onExportCustom(): void;
   onImportCustom(storage: "workspace" | "global"): void;
   onClose(): void;
+  display?: "dialog" | "panel";
 }
 
 function withoutLeadingPreviewTitle(html: string): string {
@@ -53,7 +54,7 @@ function WechatAuditProbe({ width, html, fontFamily, onResult }: { width: Mobile
   return <article ref={ref} className="wechat-themed-content" style={{ width, fontFamily }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose }: WechatThemePreviewProps) {
+export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose, display = "dialog" }: WechatThemePreviewProps) {
   const [viewportWidth, setViewportWidth] = useState<MobileWidth>(375);
   const [reports, setReports] = useState<AuditReports>(() => emptyReports());
   const [customizing, setCustomizing] = useState(false);
@@ -131,6 +132,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
+    if (display !== "dialog") return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -157,7 +159,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
       window.removeEventListener("keydown", handleKeyDown);
       previouslyFocused?.focus();
     };
-  }, []);
+  }, [display]);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -169,7 +171,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
   }, [fontFamily, themedHtml, viewportWidth]);
 
   return (
-    <div className="wechat-preview-overlay" role="dialog" aria-modal="true" aria-labelledby="wechat-preview-title" aria-describedby="wechat-preview-description" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className={display === "dialog" ? "wechat-preview-overlay" : "wechat-preview-panel"} role={display === "dialog" ? "dialog" : "region"} aria-modal={display === "dialog" ? true : undefined} aria-labelledby="wechat-preview-title" aria-describedby="wechat-preview-description" onMouseDown={(event) => { if (display === "dialog" && event.target === event.currentTarget) onClose(); }}>
       <section className={`wechat-preview-dialog${customizing ? " has-customizer" : ""}`} ref={dialogRef}>
         <header>
           <div><strong id="wechat-preview-title">公众号主题预览</strong><small id="wechat-preview-description">与复制正文共用同一主题编译器；首个 H1 将作为公众号标题，不在正文中重复。</small></div>

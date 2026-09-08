@@ -19,7 +19,10 @@ describe("buildWechatThemeProjectionCss", () => {
 
     expect(css).toContain(".editor-host.wechat-theme-active .cm-editor.cm-live-preview .cm-content{");
     expect(css).toContain(".cm-live-heading-1{");
-    expect(css).toContain(definition.styles.h1);
-    expect(css).toContain(definition.styles.p);
+    expect(css).toContain("font-size:1.68em;");
+    expect(css).toContain("line-height:1.9;");
+    expect(css).not.toContain("margin:");
+    expect(css).not.toContain("padding:");
+    expect(css).not.toContain("max-width:");
   });
 });

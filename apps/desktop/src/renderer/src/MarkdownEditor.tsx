@@ -5,7 +5,7 @@ import { Strikethrough } from "@lezer/markdown";
 import { search } from "@codemirror/search";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
+import { EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
 import { buildClipboardPayload } from "@fantastic-editor/document-core";
 import { createImageMarkdown, mapImageInsertionAnchor, type ImageInsertionAnchor } from "./image-insertion";
@@ -34,6 +34,7 @@ interface MarkdownEditorProps {
 export interface MarkdownEditorHandle {
   createInsertionAnchor(coordinates?: { x: number; y: number }): string | null;
   discardInsertionAnchor(anchorId: string): void;
+  selectionScreenRect(): { left: number; top: number; bottom: number } | null;
   insertImages(anchorId: string, receipts: readonly ImportedAssetReceipt[]): boolean;
   applyTextChange(change: WysiwygTextChange): string | null;
   undo(): boolean;
@@ -88,6 +89,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   useImperativeHandle(ref, () => ({
     createInsertionAnchor: createAnchor,
     discardInsertionAnchor(anchorId) { anchorsRef.current.delete(anchorId); },
+    selectionScreenRect() {
+      const view = viewRef.current;
+      if (!view) return null;
+      const selection = view.state.selection.main;
+      if (selection.empty) return null;
+      const start = view.coordsAtPos(selection.from);
+      const end = view.coordsAtPos(selection.to);
+      if (!start || !end) return null;
+      return {
+        left: (start.left + end.right) / 2,
+        top: Math.min(start.top, end.top),
+        bottom: Math.max(start.bottom, end.bottom),
+      };
+    },
     insertImages(anchorId, receipts) {
       const view = viewRef.current;
       const anchor = anchorsRef.current.get(anchorId);
@@ -332,7 +347,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       state: EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(), highlightSpecialChars(), history(), drawSelection(), highlightActiveLine(), search(),
+          lineNumbers(), highlightSpecialChars(), history(), highlightActiveLine(), search(),
           bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough] }),
           livePreviewCompartmentRef.current.of(livePreview ? livePreviewExtension : []),
           keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
