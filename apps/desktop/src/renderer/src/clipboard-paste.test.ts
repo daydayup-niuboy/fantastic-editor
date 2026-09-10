@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildClipboardPayload } from "@fantastic-editor/document-core";
-import { resolveClipboardPaste } from "./clipboard-paste";
+import { buildEditorClipboardPayload, resolveClipboardPaste } from "./clipboard-paste";
+
+it("preserves locally copied image source without trusting external image HTML", () => {
+  const markdown = "![IGBT 典型结构对比](./assets/IGBT-典型结构对比-f212ebc8.png)";
+  const payload = buildEditorClipboardPayload(markdown);
+  expect(payload.plain).toBe(markdown);
+  expect(payload.html).not.toContain("<img");
+  expect(resolveClipboardPaste({ plainText: payload.plain, htmlText: payload.html ?? "" }).markdown).toBe(markdown);
+  expect(resolveClipboardPaste({ plainText: payload.plain, htmlText: `<html><!--StartFragment-->${payload.html}<!--EndFragment--></html>` }).markdown).toBe(markdown);
+  expect(resolveClipboardPaste({ plainText: markdown, htmlText: "<p>external</p>" }).markdown).not.toContain("./assets/");
+});
 
 describe("clipboard paste resolver", () => {
   it("prefers a verified fantastic-editor payload over HTML", () => {

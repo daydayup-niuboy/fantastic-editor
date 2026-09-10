@@ -1746,6 +1746,7 @@ export function App() {
                 <div className="editor-mode-body">
                   <div className={`source-editor-layer${!legacyWysiwygEnabled || editorMode === "source" ? " active" : ""}`} aria-hidden={legacyWysiwygEnabled && editorMode !== "source"}>
                     <MarkdownEditor
+                      {...(previewHtmlReady ? { imagePreviewHtml: previewHtml } : {})}
                       key={active.sessionId}
                       ref={markdownEditorRef}
                       value={draft}

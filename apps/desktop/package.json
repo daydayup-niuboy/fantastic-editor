@@ -1,6 +1,6 @@
 {
   "name": "@fantastic-editor/desktop",
-  "version": "0.3.0-rc.3",
+  "version": "0.3.0-rc.5",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",

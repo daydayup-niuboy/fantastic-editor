@@ -4,6 +4,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, typ
 
 export type LivePreviewTokenKind =
   | "hide"
+  | "code-line"
   | "heading-1"
   | "heading-2"
   | "heading-3"
@@ -60,6 +61,14 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
     to,
     enter(node) {
       const name = node.type.name;
+      if (name === "FencedCode" || name === "CodeBlock") {
+        for (let line = state.doc.lineAt(node.from); line.from <= node.to;) {
+          if (line.from >= from && line.from <= to) tokens.push({ from: line.from, to: line.from, kind: "code-line" });
+          if (line.to >= node.to || line.number === state.doc.lines) break;
+          line = state.doc.line(line.number + 1);
+        }
+        return false;
+      }
       const headingMatch = /^ATXHeading([1-6])$/.exec(name);
       if (headingMatch) {
         const line = state.doc.lineAt(node.from);

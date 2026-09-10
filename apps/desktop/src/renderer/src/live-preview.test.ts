@@ -13,6 +13,11 @@ function createState(doc: string, anchor = doc.length): EditorState {
 }
 
 describe("CodeMirror live preview decorations", () => {
+  it("styles fenced code without interpreting HTML or inline Markdown", () => {
+    const tokens = collectLivePreviewTokens(createState('```html\n<path />\n**literal**\n```\n正文'));
+    expect(tokens.filter(token => token.kind === "code-line")).toHaveLength(4);
+    expect(tokens.some(token => token.kind === "strong")).toBe(false);
+  });
   it("hides supported Markdown delimiters away from the caret", () => {
     const doc = "# 标题\n\n**粗体** *斜体* ~~删除~~ [链接](https://example.com)\n\n- 项目\n";
     const tokens = collectLivePreviewTokens(createState(doc));

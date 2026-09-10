@@ -1,4 +1,5 @@
 import {
+  buildClipboardPayload as buildExternalClipboardPayload,
   clipboardPlainHash,
   escapePlainTextForMarkdown,
   MAX_PASTE_PLAIN_CODE_UNITS,
@@ -8,6 +9,17 @@ import {
 import { htmlToMarkdown, normalizeExternalMarkdown } from "./html-to-markdown";
 
 export type PasteIntent = "normal" | "literal";
+
+// Keep only the last local copy. HTML markers alone are not proof of local origin.
+let localCopy: { plain: string; html: string; markdown: string } | null = null;
+
+export function buildEditorClipboardPayload(markdown: string) {
+  const payload = buildExternalClipboardPayload(markdown);
+  // Plain text is source, while the external HTML keeps its existing safety policy.
+  const plain = normalizeLineEndings(markdown);
+  localCopy = { plain, html: payload.html ?? "", markdown: plain };
+  return { ...payload, plain };
+}
 
 export interface ResolvedClipboardPaste {
   markdown: string;
@@ -96,6 +108,9 @@ export function resolveClipboardPaste(input: {
   if (limited.rejected) return { markdown: "", source: "empty", warnings: ["剪贴板纯文本超过 1 MiB 限制，已拒绝粘贴。"], rejected: true };
   if (input.intent === "literal") {
     return { markdown: escapePlainTextForMarkdown(limited.text), source: "literal", warnings: [], rejected: false };
+  }
+  if (localCopy && limited.text === localCopy.plain && (htmlInput === localCopy.html || (localCopy.html !== "" && htmlInput.includes(localCopy.html)))) {
+    return { markdown: localCopy.markdown, source: "internal", warnings: [], rejected: false };
   }
   const marker = markerFromHtml(htmlInput);
   const markerPresent = /\bdata-fantastic-clipboard\s*=/i.test(htmlInput);

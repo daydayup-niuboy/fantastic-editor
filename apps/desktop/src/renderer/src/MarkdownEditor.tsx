@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type DragEvent } from "react";
-import { defaultKeymap, history, historyKeymap, moveLineDown, moveLineUp, redo, undo } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, moveLineUp, redo, undo } from "@codemirror/commands";
+import { moveLineDownWithSpace } from "./move-line-down";
 import { markdown } from "@codemirror/lang-markdown";
 import { Strikethrough } from "@lezer/markdown";
 import { search } from "@codemirror/search";
@@ -7,16 +8,20 @@ import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@cod
 import { Compartment, EditorState, Transaction } from "@codemirror/state";
 import { EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
-import { buildClipboardPayload } from "@fantastic-editor/document-core";
+import { buildEditorClipboardPayload as buildClipboardPayload } from "./clipboard-paste";
 import { createImageMarkdown, mapImageInsertionAnchor, type ImageInsertionAnchor } from "./image-insertion";
 import { resolveClipboardPaste, type PasteIntent } from "./clipboard-paste";
 import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync";
 import { applyWysiwygTextChange, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
 import { livePreviewExtension } from "./live-preview";
+import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
+import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
+import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projection";
 import type { SearchNavigationResult } from "./visible-text-search";
 
 interface MarkdownEditorProps {
+  imagePreviewHtml?: string;
   value: string;
   onChange(value: string): void;
   onImageDrop?(files: File[], anchorId: string): void;
@@ -56,7 +61,7 @@ const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 const VIEWPORT_TRACKING_RATIO = 0.3;
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
-  { value, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition },
+  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -278,7 +283,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     moveSelection(direction) {
       const view = viewRef.current;
       if (!view) return false;
-      const moved = direction === "up" ? moveLineUp(view) : moveLineDown(view);
+      const moved = direction === "up" ? moveLineUp(view) : moveLineDownWithSpace(view);
       if (moved) view.focus();
       return moved;
     },
@@ -349,7 +354,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         extensions: [
           lineNumbers(), highlightSpecialChars(), history(), highlightActiveLine(), search(),
           bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough] }),
-          livePreviewCompartmentRef.current.of(livePreview ? livePreviewExtension : []),
+          livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas] : []),
           keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
           EditorView.domEventHandlers({
             keydown: (event) => {
@@ -454,7 +459,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: livePreviewCompartmentRef.current.reconfigure(livePreview ? livePreviewExtension : []),
+      effects: livePreviewCompartmentRef.current.reconfigure(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas] : []),
     });
     view.requestMeasure();
   }, [livePreview]);
@@ -467,6 +472,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       annotations: Transaction.addToHistory.of(false),
     });
   }, [value]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !livePreview) return;
+    view.dispatch({ effects: [
+      setImageSnapshot.of(imagePreviewHtml ? imageSnapshotFromHtml(value, imagePreviewHtml) : null),
+      setTableSnapshot.of(imagePreviewHtml ? tableSnapshotFromHtml(value, imagePreviewHtml) : null),
+      setFormulaSnapshot.of(imagePreviewHtml ? formulaSnapshotFromHtml(value, imagePreviewHtml) : null),
+    ] });
+  }, [value, imagePreviewHtml, livePreview]);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     const files = [...event.dataTransfer.files];

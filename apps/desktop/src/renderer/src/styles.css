@@ -318,6 +318,21 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .editor-host .cm-live-preview .cm-live-heading-5,
 .editor-host .cm-live-preview .cm-live-heading-6 { font-size: 1em; font-weight: 680; }
 .editor-host .cm-live-preview .cm-live-strong { font-weight: 700; }
+.cm-live-image { display: inline-block; max-width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; vertical-align: middle; white-space: normal; }
+.cm-live-image img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; }
+.cm-live-image img[hidden] { display: none; }
+.cm-live-preview .cm-line.cm-live-code-line { font-family: Consolas, "Cascadia Mono", monospace !important; font-size: 14px !important; line-height: 1.55 !important; background: rgba(127,127,127,.09); padding-top: 0 !important; padding-bottom: 0 !important; border-left: 3px solid var(--border); }
+.cm-live-formula { cursor: pointer; }
+.cm-live-formula-block { max-width: 100%; overflow-x: auto; padding: 8px 0; }
+.cm-live-formula:focus-visible { outline: 2px solid currentColor; }
+.cm-live-table { max-width: 100%; overflow-x: auto; padding: 8px 0; }
+.cm-live-table table { border-collapse: collapse; width: 100%; }
+.cm-live-table th, .cm-live-table td { border: 1px solid var(--border); padding: 6px 10px; }
+.cm-live-table td button, .cm-live-table th button { display: block; width: 100%; text-align: inherit; font: inherit; color: inherit; background: transparent; border: 0; white-space: pre-wrap; cursor: text; }
+.cm-live-table-tools { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; font-size: 12px; }
+.cm-live-table-tools button, .cm-live-table-tools select { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 4px; }
+.cm-live-image-caption { display: block; font-size: 12px; color: var(--muted); }
+.cm-live-image button { margin: 4px 6px 0 0; cursor: pointer; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
 .editor-host .cm-live-preview .cm-live-emphasis { font-style: italic; }
 .editor-host .cm-live-preview .cm-live-strike { text-decoration: line-through; }
 .editor-host .cm-live-preview .cm-live-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }

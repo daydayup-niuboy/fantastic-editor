@@ -1186,8 +1186,60 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
 
         const firstChanged = JSON.stringify(initial.lineText) !== JSON.stringify(afterFirstDelete.text);
+        await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("![图片测试](missing-image.png)\n\n末尾");
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        await window.webContents.executeJavaScript(`document.querySelector('[data-testid=editor-mode-switch] button:last-child')?.click()`, true);
+        const imageWorkflow = await window.webContents.executeJavaScript(`(async () => {
+          const wait = async (check) => { for (let i = 0; i < 80; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
+          const shown = await wait(() => Boolean(document.querySelector('.cm-live-image')));
+          const message = document.querySelector('.cm-live-image-caption')?.textContent ?? '';
+          const edit = [...document.querySelectorAll('.cm-live-image button')].find(b => b.textContent === '编辑图片引用');
+          edit?.click();
+          const sourceSelected = await wait(() => document.getSelection()?.toString().includes('![图片测试]'));
+          return { shown, message, sourceSelected };
+        })()`, true) as { shown: boolean; message: string; sourceSelected: boolean };
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const imageDeleted = await window.webContents.executeJavaScript(`!document.querySelector('.cm-content')?.textContent?.includes('missing-image.png')`, true) as boolean;
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const imageRestored = await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent?.includes('missing-image.png') === true`, true) as boolean;
         const secondChanged = JSON.stringify(afterFirstDelete.text) !== JSON.stringify(afterSecondDelete.text);
-        const valid = liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("| A | B |\n| --- | --- |\n| C | D |\n\n末尾");
+        const tableWorkflow = await window.webContents.executeJavaScript(`(async () => {
+          const wait = async (fn) => { for (let i = 0; i < 80; i++) { if (fn()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
+          const shown = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
+          [...document.querySelectorAll('.cm-live-table-tools button')].find(b => b.textContent === '下方插入行')?.click();
+          const inserted = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 3);
+          return { shown, inserted };
+        })()`, true) as { shown: boolean; inserted: boolean };
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+        const tableUndoEdit = await window.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-table tr').length !== 2; i++) await new Promise(r => setTimeout(r, 50));
+          const undone = document.querySelectorAll('.cm-live-table tr').length === 2;
+          document.querySelector('.cm-live-table td button')?.click();
+          return { undone, selected: window.getSelection()?.toString() === 'C' };
+        })()`, true) as { undone: boolean; selected: boolean };
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("$N = 2F + 1$\n\n$$\n\\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}\n$$\n\n```html\n<path />\n```\n\n末尾");
+        const formulaWorkflow = await window.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-formula .katex').length !== 2; i++) await new Promise(r => setTimeout(r, 50));
+          const rendered = document.querySelectorAll('.cm-live-formula .katex').length === 2;
+          const code = document.querySelector('.cm-live-code-line');
+          const codeStyled = Boolean(code && getComputedStyle(code).fontFamily.includes('Consolas') && getComputedStyle(code).fontSize === '14px');
+          document.querySelector('.cm-live-formula')?.click();
+          return { rendered, codeStyled, selected: window.getSelection()?.toString() === '$N = 2F + 1$' };
+        })()`, true) as { rendered: boolean; codeStyled: boolean; selected: boolean };
+        const valid = formulaWorkflow.rendered && formulaWorkflow.codeStyled && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableUndoEdit.undone && tableUndoEdit.selected && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
@@ -1195,7 +1247,7 @@ function createMainWindow(): BrowserWindow {
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarFloating, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { formulaWorkflow, tableWorkflow, tableUndoEdit, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarFloating, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });

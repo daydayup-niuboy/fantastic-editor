@@ -15,7 +15,8 @@ import {
   type CSSProperties,
 } from "react";
 import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
-import { buildClipboardPayload, escapePlainTextForMarkdown, sanitizeClipboardMarkdown } from "@fantastic-editor/document-core";
+import { escapePlainTextForMarkdown, sanitizeClipboardMarkdown } from "@fantastic-editor/document-core";
+import { buildEditorClipboardPayload as buildClipboardPayload } from "./clipboard-paste";
 import katex from "katex";
 import { createImageMarkdown } from "./image-insertion";
 import { renderMermaidPreview } from "./mermaid-preview";
