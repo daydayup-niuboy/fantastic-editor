@@ -6,24 +6,24 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前版本：**0.3.0-rc.5**（Windows x64，2026-09-12 构建）。
+当前版本：**0.3.0-rc.6**（Windows x64，2026-09-12 构建）。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.5/fantastic-editor-0.3.0-rc.5-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.5/fantastic-editor-0.3.0-rc.5-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.5)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.6/fantastic-editor-0.3.0-rc.6-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.6/fantastic-editor-0.3.0-rc.6-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.6)
 
 本项目暂未采购商业代码签名证书，两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| 安装版 | 136703417 | `46FF93B54A91BA841FE55635BFC3D7B5593502B9476C5D3D2F1843E289132878` |
-| 便携版 | 136445383 | `3573D3D7FD74766375975EC79969832E474CEE17B9E6657A7A30B6EF5A10D107` |
+| 安装版 | 136705531 | `9B64356EC9C33D79172DBE7BE23B4EA34EE407DE57CEF021B8DE3E8C0CC119F6` |
+| 便携版 | 136447501 | `EAB2BAC61D847EC3967E71094765A6EB9A95D6C4FC2485CFFD897DC8BEED821C` |
 
 ## 编辑与预览
 
 顶部可切换“写作、源码、分栏”。写作模式使用 CodeMirror Live Preview，与源码模式共享同一份 Markdown、光标、选区和撤销历史。标题、粗体、斜体、删除线、链接、引用及列表提供实时样式；光标或选区进入语法时会显示对应 Markdown 标记，便于直接修改。
 
-写作区顶部常驻格式栏可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等本机字体选项，自定义字体可输入已安装字体名称；字体文件不随软件分发。
+写作区顶部常驻格式栏可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等常用选项；选择“自定义”可定位 `.ttf` 或 `.otf` 文件，安装到 Windows 当前用户字体库并立即应用，字体文件不随软件分发。
 
 Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格可连续增删行列及调整列对齐，含图片或不规则表格安全降级为 Markdown 源码。最终渲染可在分栏或“导出 → 只读预览”检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
 

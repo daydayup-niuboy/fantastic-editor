@@ -85,6 +85,7 @@ const api: FantasticEditorApi = {
       return { status: "failed" as const, error: error instanceof Error ? error.message : "读取拖入图片失败。" };
     }
   },
+  selectAndInstallFont: () => ipcRenderer.invoke(IPC_CHANNELS.selectAndInstallFont),
   commitParse: (request: ParseCommitRequest) => ipcRenderer.invoke(IPC_CHANNELS.commitParse, request),
   resolveResources: (request: ResolveRequest) => ipcRenderer.invoke(IPC_CHANNELS.resolveResources, request),
   onPreviewDerivedUpdate: (listener: (update: PreviewDerivedUpdate) => void) => {

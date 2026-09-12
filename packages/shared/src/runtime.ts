@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   saveCurrentFileAs: "file:save-current-as",
   selectAndImportImages: "image:select-and-import",
   importDroppedImages: "image:import-dropped",
+  selectAndInstallFont: "font:select-and-install",
   commitParse: "document:commit-parse",
   resolveResources: "resource:resolve",
   previewDerivedUpdate: "preview:derived-update",

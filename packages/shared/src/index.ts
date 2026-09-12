@@ -665,6 +665,7 @@ export interface FantasticEditorApi {
   saveCurrentFileAs(request: SaveFileRequest): Promise<SaveFileResult>;
   selectAndImportImages(request: ImageImportSessionRequest): Promise<ImportImagesResult>;
   importDroppedImages(request: ImageImportSessionRequest, files: unknown[]): Promise<ImportImagesResult>;
+  selectAndInstallFont(): Promise<SelectAndInstallFontResult>;
   commitParse(request: ParseCommitRequest): Promise<ParseCommitResult>;
   resolveResources(request: ResolveRequest): Promise<ResolveResult>;
   onPreviewDerivedUpdate(listener: (update: PreviewDerivedUpdate) => void): () => void;
@@ -687,3 +688,8 @@ export interface FantasticEditorApi {
   exportWechatTheme(request: ExportWechatThemeRequest): Promise<ExportWechatThemeResult>;
   importWechatTheme(request: ImportWechatThemeRequest): Promise<ImportWechatThemeResult>;
 }
+
+export type SelectAndInstallFontResult =
+  | { status: "installed"; fontFamily: string; bytes: Uint8Array }
+  | { status: "cancelled" }
+  | { status: "failed"; error: string };

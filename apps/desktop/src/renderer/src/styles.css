@@ -710,11 +710,10 @@ kbd { padding: 3px 6px; color: var(--faint); background: var(--surface); border:
   .wechat-preview-workspace { grid-template-columns: 1fr; }
   .wechat-audit-panel { width: min(414px, 100%); justify-self: center; }
 }
-.preview-font-control, .preview-font-preset, .preview-reading-control { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding-left: 7px; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; font-size: 9px; font-weight: 650; letter-spacing: .01em; text-transform: none; }
-.preview-font-control input { width: 118px; height: 22px; padding: 0 5px; color: var(--text); background: var(--surface); border: 0; border-radius: 4px; outline: none; font: inherit; }
+.preview-font-preset, .preview-reading-control { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding-left: 7px; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; font-size: 9px; font-weight: 650; letter-spacing: .01em; text-transform: none; }
 .preview-font-preset select, .preview-reading-control select { height: 22px; padding: 0 20px 0 3px; color: var(--text); background: var(--surface); border: 0; border-radius: 4px; outline: none; font: inherit; cursor: pointer; }
 .preview-font-preset select { min-width: 98px; }
-.preview-font-control:focus-within, .preview-font-preset:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.preview-font-preset:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
 .preview-reading-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
 .preview-font-size-control { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
 .preview-font-size-control button { width: 21px; height: 22px; padding: 0; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }

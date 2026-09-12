@@ -67,6 +67,7 @@ import { WechatDraftConnector, configFromEnvironment } from "./wechat-draft-conn
 import { WechatApiConfigStore } from "./wechat-api-config-store.js";
 import { parseMarkdownOpenArgs } from "./external-open.js";
 import { WechatThemeRepository } from "./wechat-theme-repository.js";
+import { installFontForCurrentUser } from "./font-installer.js";
 
 
 // Some Windows graphics drivers crash Chromium during startup with a native
@@ -662,6 +663,24 @@ function registerIpc(): void {
       outputService.clear();
     }
     return imported;
+  });
+  ipcMain.handle(IPC_CHANNELS.selectAndInstallFont, async (event) => {
+    requireTrustedRenderer(event);
+    if (process.platform !== "win32") return { status: "failed", error: "当前版本只支持在 Windows 安装自定义字体。" } as const;
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return { status: "failed", error: "主窗口已关闭，无法选择字体。" } as const;
+    const selection = await dialog.showOpenDialog(window, {
+      title: "选择并安装字体",
+      properties: ["openFile"],
+      filters: [{ name: "字体文件", extensions: ["ttf", "otf"] }],
+    });
+    if (selection.canceled || !selection.filePaths[0]) return { status: "cancelled" } as const;
+    try {
+      const installed = await installFontForCurrentUser(selection.filePaths[0], join(app.getPath("userData"), "fonts"));
+      return { status: "installed", ...installed } as const;
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "安装字体失败。" } as const;
+    }
   });
   ipcMain.handle(IPC_CHANNELS.commitParse, (event, request: ParseCommitRequest) => {
     requireTrustedRenderer(event);
@@ -1408,14 +1427,12 @@ function createMainWindow(): BrowserWindow {
           return { created, reorderedLeft, reorderedRight, previous, next, closed };
         })()`, true) as { created: boolean; reorderedLeft: boolean; reorderedRight: boolean; previous: boolean; next: boolean; closed: boolean };
         const fontControl = await window.webContents.executeJavaScript(`(() => {
-          const input = document.querySelector("[data-testid=preview-font-select]");
-          if (!(input instanceof HTMLInputElement)) return { exists: false, applied: false, hasArial: false };
           const presets = document.querySelector("[data-testid=preview-font-preset]");
-          const hasArial = presets instanceof HTMLSelectElement && Array.from(presets.options).some((option) => option.value === "Arial") && presets.options.length >= 7;
-          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-          setter?.call(input, "KaiTi");
-          input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-          input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+          if (!(presets instanceof HTMLSelectElement)) return { exists: false, applied: false, hasArial: false };
+          const hasArial = Array.from(presets.options).some((option) => option.value === "Arial") && presets.options.length >= 7;
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+          setter?.call(presets, "KaiTi");
+          presets.dispatchEvent(new Event("change", { bubbles: true }));
           return { exists: true, applied: true, hasArial };
         })()`, true) as { exists: boolean; applied: boolean; hasArial: boolean };
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -2387,17 +2404,15 @@ function createMainWindow(): BrowserWindow {
           visualButton.click();
           await waitFor(() => Boolean(document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content")));
           const container = document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-editor");
-          const font = document.querySelector("[data-testid=wysiwyg-font-select]");
           const fontPreset = document.querySelector("[data-testid=wysiwyg-font-preset]");
           const defaultFont = document.querySelector(".wysiwyg-font-default");
           let scrollPreserved = false;
-          if (container instanceof HTMLElement && font instanceof HTMLInputElement) {
+          if (container instanceof HTMLElement && fontPreset instanceof HTMLSelectElement) {
             container.scrollTop = Math.min(700, Math.max(1, container.scrollHeight - container.clientHeight));
             const before = container.scrollTop;
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-            setter?.call(font, font.value === "KaiTi" ? "Arial" : "KaiTi");
-            font.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
-            font.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+            setter?.call(fontPreset, fontPreset.value === "KaiTi" ? "Arial" : "KaiTi");
+            fontPreset.dispatchEvent(new Event("change", { bubbles: true }));
             await new Promise((resolve) => setTimeout(resolve, 500));
             scrollPreserved = before > 0 && container.scrollTop > 0;
           }
@@ -2414,7 +2429,7 @@ function createMainWindow(): BrowserWindow {
           document.querySelector('button[aria-label="写作模式"]')?.click();
           sourceButton.click();
           await waitFor(() => Boolean(document.querySelector(".source-editor-layer.active")));
-          return { fontControl: font instanceof HTMLInputElement && defaultFont instanceof HTMLButtonElement && fontPreset instanceof HTMLSelectElement && fontPreset.options.length >= 7, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButton, searchButton };
+          return { fontControl: defaultFont instanceof HTMLButtonElement && fontPreset instanceof HTMLSelectElement && fontPreset.options.length >= 7, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButton, searchButton };
           } catch (error) {
             return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButton: false, searchButton: false, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
           }

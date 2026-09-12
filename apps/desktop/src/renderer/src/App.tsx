@@ -51,6 +51,7 @@ const PREVIEW_FONT_LABELS: Record<(typeof PREVIEW_FONT_PRESETS)[number], string>
   SimSun: "宋体",
   KaiTi: "楷体",
 };
+const CUSTOM_FONT_ACTION = "__select_custom_font__";
 const EMPTY_WECHAT_API_CONFIG: WechatApiConfigSummary = {
   appId: "",
   hasAppSecret: false,
@@ -1504,6 +1505,37 @@ export function App() {
     setStatus(`正文字体已切换为 ${next}。`);
   }, [previewFontName]);
 
+  const selectPreviewFont = useCallback(async (value: string) => {
+    if (value !== CUSTOM_FONT_ACTION) {
+      applyPreviewFontDraft(value);
+      return;
+    }
+    setStatus("请选择 TrueType（.ttf）或 OpenType（.otf）字体文件。");
+    const result = await window.fantasticEditor.selectAndInstallFont();
+    if (result.status === "cancelled") return;
+    if (result.status === "failed") {
+      setStatus(`自定义字体安装失败：${result.error}`);
+      return;
+    }
+    try {
+      const bytes = result.bytes;
+      const source = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      const font = await new FontFace(result.fontFamily, source).load();
+      document.fonts.add(font);
+      applyPreviewFontDraft(result.fontFamily);
+      setStatus(`已安装并应用字体：${result.fontFamily}。后续启动可直接调用。`);
+    } catch {
+      applyPreviewFontDraft(result.fontFamily);
+      setStatus(`字体 ${result.fontFamily} 已安装；如未立即显示，请重启软件后使用。`);
+    }
+  }, [applyPreviewFontDraft]);
+
+  const previewFontOptions = <>
+    <option value={CUSTOM_FONT_ACTION}>自定义…</option>
+    {!PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) && <option value={previewFontName}>{previewFontName}</option>}
+    {PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}
+  </>;
+
   const resizeWithKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     const next = splitRatioForKey(splitRatio, event.key, event.shiftKey);
     if (next === null) return;
@@ -1737,8 +1769,7 @@ export function App() {
                       >{wechatThemeInWysiwyg ? "公众号主题 · 开" : "公众号主题 · 关"}</button>
                       {!legacyWysiwygEnabled && <>
                         <button type="button" className="wysiwyg-font-default" title="恢复默认字体：微软雅黑" aria-label="恢复默认字体" onClick={() => { setPreviewFontDraft(DEFAULT_PREVIEW_FONT); applyPreviewFontDraft(DEFAULT_PREVIEW_FONT); }}>↺</button>
-                        <label className="preview-font-preset" title="选择常用字体"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
-                        <label className="preview-font-control" title="输入任意本机已安装字体"><span>自定义字体</span><input data-testid="wysiwyg-font-select" placeholder="输入字体名称" value={previewFontDraft} onChange={(event) => setPreviewFontDraft(event.target.value)} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } }} /></label>
+                        <label className="preview-font-preset" title="选择常用字体；选择“自定义”可安装本机字体文件"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
                       </>}
                     </>}
                     <button type="button" className="insert-image-button" disabled={imageImportBusy} title="在当前位置插入图片" aria-label="插入图片" onClick={() => void importImages()}><Icon name="imagePlus" size={15} />插入图片</button>
@@ -1777,8 +1808,7 @@ export function App() {
                       previewFontSize={previewFontSize}
                       toolbarControls={<>
                         <button type="button" className="wysiwyg-font-default" title="恢复默认字体：微软雅黑" aria-label="恢复默认字体" onClick={() => { setPreviewFontDraft(DEFAULT_PREVIEW_FONT); applyPreviewFontDraft(DEFAULT_PREVIEW_FONT); }}>↺</button>
-                        <label className="preview-font-preset" title="选择常用字体"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
-                        <label className="preview-font-control" title="输入任意本机已安装字体；按 Enter 或移出焦点应用"><span>自定义字体</span><input data-testid="wysiwyg-font-select" placeholder="输入字体名称" value={previewFontDraft} onChange={(event) => setPreviewFontDraft(event.target.value)} onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }} /></label>
+                        <label className="preview-font-preset" title="选择常用字体；选择“自定义”可安装本机字体文件"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
                         <label className="preview-reading-control" title="调整所见即所得阅读宽度"><span>宽度</span><select aria-label="所见即所得阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
                         <div className="preview-font-size-control" role="group" aria-label="所见即所得字号"><button type="button" title="减小字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
                       </>}
@@ -1805,17 +1835,7 @@ export function App() {
                 <div className="pane-header">
                   <span><Icon name="eye" size={15} />实时预览</span>
                   <div className="pane-actions">
-                    <label className="preview-font-preset" title="选择实时预览和导出的常用正文字体"><span>字体</span><select data-testid="preview-font-preset" aria-label="预览常用字体" value={PREVIEW_FONT_PRESETS.includes(previewFontName as typeof PREVIEW_FONT_PRESETS[number]) ? previewFontName : ""} onChange={(event) => { if (event.target.value) { setPreviewFontDraft(event.target.value); applyPreviewFontDraft(event.target.value); } }}><option value="">自定义</option>{PREVIEW_FONT_PRESETS.map((font) => <option key={font} value={font}>{PREVIEW_FONT_LABELS[font]}</option>)}</select></label>
-                    <label className="preview-font-control" title="设置实时预览和导出的正文字体">
-                      <span>自定义</span>
-                      <input
-                        data-testid="preview-font-select"
-                        value={previewFontDraft}
-                        onChange={(event) => setPreviewFontDraft(event.target.value)}
-                        onBlur={(event) => applyPreviewFontDraft(event.currentTarget.value)}
-                        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyPreviewFontDraft(event.currentTarget.value); event.currentTarget.blur(); } else if (event.key === "Escape") { event.currentTarget.value = previewFontName; setPreviewFontDraft(previewFontName); event.currentTarget.blur(); } }}
-                      />
-                    </label>
+                    <label className="preview-font-preset" title="选择预览字体；选择“自定义”可安装本机字体文件"><span>字体</span><select data-testid="preview-font-preset" aria-label="预览字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
                     <label className="preview-reading-control" title="仅影响实时预览和所见即所得阅读区，不改变导出结果"><span>宽度</span><select aria-label="阅读宽度" value={readingWidth} onChange={(event) => setReadingWidth(normalizeReadingWidth(event.target.value))}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
                     <div className="preview-font-size-control" role="group" aria-label="预览字号"><button type="button" title="减小预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
                     <button
