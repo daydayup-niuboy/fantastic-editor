@@ -6,26 +6,26 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前版本：**0.3.0-rc.3**（Windows x64，2026-09-08 构建）。
+当前版本：**0.3.0-rc.5**（Windows x64，2026-09-12 构建）。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.3/fantastic-editor-0.3.0-rc.3-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.3/fantastic-editor-0.3.0-rc.3-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.3)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.5/fantastic-editor-0.3.0-rc.5-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.5/fantastic-editor-0.3.0-rc.5-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.5)
 
 本项目暂未采购商业代码签名证书，两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| 安装版 | 136700653 | `DE76B4B037586CD1FA696D231C2BA732A164994404BD698ACC5BBAC5EBE851BF` |
-| 便携版 | 136442609 | `D006E08542AD06FE35933160735E34773604C99F1C8832624E02477667E89AEC` |
+| 安装版 | 136703417 | `46FF93B54A91BA841FE55635BFC3D7B5593502B9476C5D3D2F1843E289132878` |
+| 便携版 | 136445383 | `3573D3D7FD74766375975EC79969832E474CEE17B9E6657A7A30B6EF5A10D107` |
 
 ## 编辑与预览
 
 顶部可切换“写作、源码、分栏”。写作模式使用 CodeMirror Live Preview，与源码模式共享同一份 Markdown、光标、选区和撤销历史。标题、粗体、斜体、删除线、链接、引用及列表提供实时样式；光标或选区进入语法时会显示对应 Markdown 标记，便于直接修改。
 
-选择文字后显示浮动格式栏，可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等本机字体选项，自定义字体可输入已安装字体名称；字体文件不随软件分发。
+写作区顶部常驻格式栏可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等本机字体选项，自定义字体可输入已安装字体名称；字体文件不随软件分发。
 
-Live Preview 第一阶段的表格、图片、公式和 Mermaid 等复杂结构仍可通过 Markdown 源码编辑，渲染效果可在分栏或“发布 → 只读预览”检查。旧版独立结构化编辑面板不属于当前默认写作模式。
+Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格可连续增删行列及调整列对齐，含图片或不规则表格安全降级为 Markdown 源码。最终渲染可在分栏或“导出 → 只读预览”检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
 
 支持单文件与文件夹工作区、多标签、拖拽打开、标签排序、最近文件及未保存草稿恢复。资源管理器可拖动调整宽度或隐藏，文档大纲可跳转标题；“打开的编辑器”中的未命名文档可右键或双击改显示名，首次另存为沿用该名称。已保存 Markdown 支持安全重命名。
 
@@ -37,13 +37,13 @@ Live Preview 第一阶段的表格、图片、公式和 Mermaid 等复杂结构�
 
 图片可拖到编辑区指定位置，或通过“插入图片”导入。应用将已授权图片复制到文档同级 `assets/` 并插入相对引用；未命名文档导入图片前需先保存。资源诊断会说明路径未授权、文件不存在等原因。撤销或删除图片引用不会自动删除磁盘图片。
 
-“发布”菜单可导出 PDF、Word（DOCX）、单文件离线 HTML，或准备公众号内容。预览和输出支持 KaTeX 公式与 Mermaid 图表。PDF 和 DOCX 使用 A4 页面；离线 HTML 内嵌已授权图片、样式及公式字体。输出前执行资源与安全检查。
+“导出”菜单提供只读预览、PDF、Word（DOCX）和单文件离线 HTML；“复制到公众号”位于左侧活动栏。预览和输出支持 KaTeX 公式与 Mermaid 图表。PDF 和 DOCX 使用 A4 页面；离线 HTML 内嵌已授权图片、样式及公式字体。输出前执行资源与安全检查。
 
 ## 微信公众号
 
 左侧“公众号”打开排版与手机预览面板，可选择预置/自定义主题，准备内容并同步到草稿箱。“公众号主题 · 开/关”控制主题是否同步到写作区。该编辑区投影仅保留受控视觉样式；完整发布排版以公众号手机预览为准。
 
-在右侧“接口与封面设置”或“设置与关于 → 公众号接口设置”填写 AppID、AppSecret 和默认封面。软件检测微信接口与 IP 白名单；遇到 `40164 invalid ip` 会显示微信识别的公网 IP、提供复制及白名单设置提示。AppSecret 通过 Windows 系统加密保存，不回显明文。
+在右侧“接口与封面设置”填写 AppID、AppSecret 和默认封面；没有打开文档时点击左侧“公众号”会直接进入同一设置窗口。软件检测微信接口与 IP 白名单；遇到 `40164 invalid ip` 会显示微信识别的公网 IP、提供复制及白名单设置提示。AppSecret 通过 Windows 系统加密保存，不回显明文。
 
 准备内容后，一键同步会批量上传正文图片、公式、Mermaid 和封面，创建草稿并回读校验。真实公众号草稿已通过人工验收。显式单篇发布接口也已接入，必须二次确认；真实发布验收尚未完成。当前仅支持单账号，不支持多账号、群发或定时群发。
 
@@ -66,7 +66,7 @@ npm install
 npm start
 ```
 
-开发模式使用 `npm run dev`。完整发布门禁使用 `npm run release:gate`，生成安装版与便携版并执行测试、类型检查、隐私扫描、产物校验、8 组生产冒烟及安装—启动—卸载检查。本次 RC.3 已通过 53 个测试文件、273 项测试及完整发布门禁。
+开发模式使用 `npm run dev`。完整发布门禁使用 `npm run release:gate`，生成安装版与便携版并执行测试、类型检查、隐私扫描、产物校验、8 组生产冒烟及安装—启动—卸载检查。本次 RC.5 已通过 57 个测试文件、289 项测试及完整发布门禁。
 
 签名流程保留在 `npm run dist:signed`，仅在获得有效证书后使用。证书、环境配置与本地开发记录不提交公开仓库。
 

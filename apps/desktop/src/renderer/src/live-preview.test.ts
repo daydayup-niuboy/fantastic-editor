@@ -29,6 +29,19 @@ describe("CodeMirror live preview decorations", () => {
     expect(tokens.some((token) => token.kind === "list-marker" && token.text === "• ")).toBe(true);
   });
 
+  it("keeps heading markers hidden while the heading text is active", () => {
+    const doc = "# 正在编辑的标题";
+    const tokens = collectLivePreviewTokens(createState(doc, doc.indexOf("标题")));
+    expect(tokens).toContainEqual({ from: 0, to: 2, kind: "hide" });
+    expect(tokens.some((token) => token.kind === "heading-1")).toBe(true);
+  });
+
+  it("replaces the list marker and its source whitespace with one visual marker", () => {
+    const doc = "- 项目\n\n正文";
+    expect(collectLivePreviewTokens(createState(doc)).find((token) => token.kind === "list-marker"))
+      .toEqual({ from: 0, to: 2, kind: "list-marker", text: "• " });
+  });
+
   it("reveals the complete inline construct while its text is active", () => {
     const doc = "前 **粗体** 后";
     const caret = doc.indexOf("粗体") + 1;

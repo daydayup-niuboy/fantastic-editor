@@ -535,6 +535,24 @@ export function markdownTableDetails(source: string): MarkdownTableDetails | nul
   return parts ? { rows: parts.rows.map((row) => [...row]), alignments: [...parts.alignments], columnCount: parts.columnCount } : null;
 }
 
+export function markdownTableInsertedCellOffset(source: string, operation: MarkdownTableOperation): number | null {
+  const parts = markdownTableParts(source);
+  if (!parts || (operation.kind !== "insert-row" && operation.kind !== "insert-column")) return null;
+  const rowIndex = operation.kind === "insert-row"
+    ? operation.rowIndex === 0 ? 1 : operation.rowIndex + (operation.position === "after" ? 1 : 0)
+    : 0;
+  const columnIndex = operation.kind === "insert-column"
+    ? operation.columnIndex + (operation.position === "after" ? 1 : 0)
+    : 0;
+  const row = parts.rows[rowIndex];
+  if (!row || columnIndex < 0 || columnIndex >= row.length) return null;
+  const lineIndex = rowIndex === 0 ? 0 : rowIndex + 1;
+  const lines = source.split("\n");
+  const lineOffset = lines.slice(0, lineIndex).reduce((total, line) => total + line.length + 1, 0);
+  return lineOffset + parts.indent.length + (parts.leadingPipe ? 2 : 0)
+    + row.slice(0, columnIndex).reduce((total, cell) => total + cell.length + 3, 0);
+}
+
 function formatMarkdownTableRow(parts: MarkdownTableParts, cells: readonly string[]): string {
   const content = cells.join(" | ");
   return `${parts.indent}${parts.leadingPipe ? "| " : ""}${content}${parts.trailingPipe ? " |" : ""}`;

@@ -1,6 +1,6 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { markdownTableDetails, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
+import { markdownTableDetails, markdownTableInsertedCellOffset, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
 
 interface TableCell { from: number; to: number; text: string }
 interface TableProjection { from: number; to: number; rows: TableCell[][] }
@@ -70,14 +70,27 @@ class TableWidget extends WidgetType {
       if (view.state.doc.toString() !== this.source) return;
       const insert = transformMarkdownTable(this.source.slice(from, to), operation);
       if (insert === null) return;
-      view.dispatch({ changes: { from, to, insert }, userEvent: "input.table" });
+      const cursor = markdownTableInsertedCellOffset(insert, operation);
+      view.dispatch({
+        changes: { from, to, insert },
+        ...(cursor === null ? {} : { selection: { anchor: from + cursor } }),
+        userEvent: "input.table",
+        scrollIntoView: cursor !== null,
+      });
       view.focus();
     };
     const addButton = (label: string, action: () => void) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
-      button.onclick = action;
+      button.onmousedown = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      button.onclick = (event) => {
+        event.stopPropagation();
+        action();
+      };
       toolbar.append(button);
       return button;
     };

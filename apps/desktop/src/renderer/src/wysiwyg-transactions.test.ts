@@ -21,6 +21,7 @@ import {
   markdownImageAlt,
   markdownInlineCodeDetails,
   markdownInlineLinkDetails,
+  markdownTableInsertedCellOffset,
   markdownTableDetails,
   replaceMarkdownFence,
   replaceMarkdownFormulaLatex,
@@ -234,6 +235,28 @@ describe("WYSIWYG text transactions", () => {
       .toBe("| 名称 | 数值 |\n| :---: | ---: |\n| A\\|B | `x|y` |\n");
     expect(transformMarkdownTable(source, { kind: "delete-row", rowIndex: 0 })).toBeNull();
     expect(transformMarkdownTable("| A |\n| --- |\n", { kind: "delete-column", columnIndex: 0 })).toBeNull();
+  });
+
+  it("supports repeated row and column insertion in the real six-column table shape", () => {
+    let source = "| 演练时间戳 | 注入故障类型 | 目标节点 | 预期恢复阈值 (SLA) | 实际恢复耗时 (Actual) | 演练判定 |\n| --- | --- | --- | --- | --- | --- |\n| 2026-08-15 14:00 | Leader 进程 `SIGKILL` | `node-alpha-01` | RTO ≤ 1000ms | 412 ms | **PASS** |\n| 2026-08-16 10:30 | 50% 随机丢包注入 | `node-beta-02` | p99 ≤ 20ms | 14.8 ms | **PASS** |\n";
+    source = transformMarkdownTable(source, { kind: "insert-row", rowIndex: 2, position: "after" })!;
+    source = transformMarkdownTable(source, { kind: "insert-row", rowIndex: 3, position: "after" })!;
+    source = transformMarkdownTable(source, { kind: "insert-column", columnIndex: 5, position: "after" })!;
+    expect(markdownTableDetails(source)).toMatchObject({ columnCount: 7, rows: expect.arrayContaining([Array(7).fill("")]) });
+    expect(markdownTableDetails(source)?.rows).toHaveLength(5);
+  });
+
+  it("locates the first editable cell created by row and column insertion", () => {
+    const source = "| A | B |\n| --- | --- |\n| C | D |\n";
+    const rowOperation = { kind: "insert-row", rowIndex: 1, position: "after" } as const;
+    const withRow = transformMarkdownTable(source, rowOperation)!;
+    const rowCursor = markdownTableInsertedCellOffset(withRow, rowOperation)!;
+    expect(markdownTableDetails(`${withRow.slice(0, rowCursor)}X${withRow.slice(rowCursor)}`)?.rows[2]?.[0]).toBe("X");
+
+    const columnOperation = { kind: "insert-column", columnIndex: 1, position: "after" } as const;
+    const withColumn = transformMarkdownTable(source, columnOperation)!;
+    const columnCursor = markdownTableInsertedCellOffset(withColumn, columnOperation)!;
+    expect(markdownTableDetails(`${withColumn.slice(0, columnCursor)}X${withColumn.slice(columnCursor)}`)?.rows[0]?.[2]).toBe("X");
   });
 
   it("edits inline code while preserving or safely growing its backtick fence", () => {

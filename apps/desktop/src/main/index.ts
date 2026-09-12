@@ -1108,12 +1108,12 @@ function createMainWindow(): BrowserWindow {
         await new Promise((resolve) => setTimeout(resolve, 150));
         const selectionRendering = await window.webContents.executeJavaScript(`({ native: (document.getSelection()?.toString().length ?? 0) > 0, customLayers: document.querySelectorAll(".cm-selectionBackground").length })`, true) as { native: boolean; customLayers: number };
         const selectionMade = selectionRendering.native && selectionRendering.customLayers === 0;
-        const toolbarFloating = await window.webContents.executeJavaScript(`(() => {
+        const toolbarPersistent = await window.webContents.executeJavaScript(`(() => {
           const toolbar = document.querySelector(".live-preview-format-toolbar");
           if (!(toolbar instanceof HTMLElement)) return false;
           const style = getComputedStyle(toolbar);
           const rect = toolbar.getBoundingClientRect();
-          return style.position === "fixed" && style.display !== "none" && rect.width > 100 && rect.top >= 0;
+          return style.position !== "fixed" && style.display !== "none" && rect.width > 100 && rect.top >= 0;
         })()`, true) as boolean;
         const italicButton = await window.webContents.executeJavaScript(`(() => { const rect = document.querySelector('.live-preview-format-toolbar button[title^="切换斜体"]')?.getBoundingClientRect(); return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null; })()`, true) as { x: number; y: number } | null;
         if (!italicButton) throw new Error("Live Preview smoke could not locate the italic toolbar command.");
@@ -1180,8 +1180,15 @@ function createMainWindow(): BrowserWindow {
         const final = await window.webContents.executeJavaScript(`({ source: document.querySelector(".cm-content")?.textContent ?? "", singleEditor: document.querySelectorAll(".cm-editor").length === 1 })`, true) as { source: string; singleEditor: boolean };
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "K", modifiers: ["control"] });
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const commandPaletteOpened = await window.webContents.executeJavaScript(`document.querySelector('.command-palette input[aria-label="搜索命令"]') === document.activeElement`, true) as boolean;
+        const commandPaletteOpened = await window.webContents.executeJavaScript(`new Promise((resolve) => {
+          const deadline = Date.now() + 1000;
+          const check = () => {
+            if (document.querySelector('.command-palette input[aria-label="搜索命令"]') === document.activeElement) resolve(true);
+            else if (Date.now() >= deadline) resolve(false);
+            else setTimeout(check, 25);
+          };
+          check();
+        })`, true) as boolean;
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
 
@@ -1213,12 +1220,29 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("| A | B |\n| --- | --- |\n| C | D |\n\n末尾");
-        const tableWorkflow = await window.webContents.executeJavaScript(`(async () => {
+        const tableInsertPoint = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (fn) => { for (let i = 0; i < 80; i++) { if (fn()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const shown = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
-          [...document.querySelectorAll('.cm-live-table-tools button')].find(b => b.textContent === '下方插入行')?.click();
-          const inserted = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 3);
-          return { shown, inserted };
+          if (!shown) return null;
+          const rect = [...document.querySelectorAll('.cm-live-table-tools button')].find(b => b.textContent === '下方插入行')?.getBoundingClientRect();
+          return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!tableInsertPoint) throw new Error("Live Preview smoke could not locate the table row insertion button.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(tableInsertPoint.x), y: Math.round(tableInsertPoint.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(tableInsertPoint.x), y: Math.round(tableInsertPoint.y), button: "left", clickCount: 1 });
+        const tableWorkflow = await window.webContents.executeJavaScript(`(async () => {
+          const wait = async (fn) => { for (let i = 0; i < 80; i++) { if (fn()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
+          const inserted = await wait(() => {
+            const selection = window.getSelection();
+            const node = selection?.anchorNode;
+            const line = node?.parentElement?.closest('.cm-line');
+            if (!selection?.isCollapsed || !node || !line?.contains(node) || line.textContent !== '|  |  |') return false;
+            const range = document.createRange();
+            range.selectNodeContents(line);
+            range.setEnd(node, selection.anchorOffset);
+            return range.toString().length === 2;
+          });
+          return { shown: true, inserted };
         })()`, true) as { shown: boolean; inserted: boolean };
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
@@ -1243,11 +1267,11 @@ function createMainWindow(): BrowserWindow {
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
-          && selectionMade && toolbarFloating && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
+          && selectionMade && toolbarPersistent && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { formulaWorkflow, tableWorkflow, tableUndoEdit, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarFloating, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { formulaWorkflow, tableWorkflow, tableUndoEdit, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });
@@ -1269,8 +1293,11 @@ function createMainWindow(): BrowserWindow {
         const before = await window.webContents.executeJavaScript(`({
           hasTabs: Boolean(document.querySelector(\"[data-testid=document-tabs]\")),
           hasDropHint: Boolean(document.querySelector(\"[data-testid=drop-hint]\")),
-          hasNewButton: Boolean(document.querySelector(\"[data-testid=new-document]\"))
-        })`, true) as { hasTabs: boolean; hasDropHint: boolean; hasNewButton: boolean };
+          hasNewButton: Boolean(document.querySelector(\"[data-testid=new-document]\")),
+          uniqueFileActions: [\"新建文档\", \"打开文件\", \"保存\", \"打开文件夹\"].every((label) => document.querySelectorAll('.activity-bar button[aria-label=\"' + label + '\"]').length === 1)
+            && document.querySelectorAll('.explorer-title button, .new-tab').length === 0
+        })`, true) as { hasTabs: boolean; hasDropHint: boolean; hasNewButton: boolean; uniqueFileActions: boolean };
+        if (!before.uniqueFileActions) throw new Error("File actions must exist exactly once in the activity bar.");
         await window.webContents.executeJavaScript(`document.querySelector(".app-shell")?.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true }))`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const drag = await window.webContents.executeJavaScript(`({ hasDropOverlay: Boolean(document.querySelector(".drop-overlay")) })`, true) as { hasDropOverlay: boolean };

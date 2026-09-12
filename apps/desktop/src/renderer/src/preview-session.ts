@@ -79,9 +79,24 @@ function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
 }
 
 export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] {
-  return diagnostics.map((item) => {
+  const groups = new Map<string, Diagnostic[]>();
+  for (const item of diagnostics) {
+    const reference = typeof item.details?.resourceReference === "string" ? item.details.resourceReference : "";
+    const key = reference ? `${item.code}\u0000${reference}` : item.id;
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else groups.set(key, [item]);
+  }
+  return [...groups.values()].map((items) => {
+    const item = items[0]!;
+    const reference = typeof item.details?.resourceReference === "string" ? item.details.resourceReference : "";
+    const lines = [...new Set(items.flatMap(({ source }) => source ? [source.startLine] : []))];
+    const location = lines.length > 0
+      ? `第 ${lines.join("、")} 行${items.length > 1 ? `，共 ${items.length} 处` : ""}`
+      : "";
     const suggestion = item.suggestedActions?.join("；");
-    return `${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`;
+    const context = [location, reference ? `图片：${reference}` : ""].filter(Boolean).join(" · ");
+    return `${context ? `${context} · ` : ""}${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`;
   });
 }
 

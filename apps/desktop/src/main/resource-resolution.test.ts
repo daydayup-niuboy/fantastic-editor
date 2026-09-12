@@ -224,6 +224,7 @@ describe("SingleFileResourceResolver", () => {
     ]);
     expect(result.diagnostics[0]).toMatchObject({
       message: expect.stringContaining("找不到图片文件"),
+      details: { resourceReference: "assets/missing.png" },
       suggestedActions: [expect.stringContaining("相对于 Markdown 文件")],
     });
     expect(result.diagnostics[1]).toMatchObject({

@@ -73,12 +73,10 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
       if (headingMatch) {
         const line = state.doc.lineAt(node.from);
         tokens.push({ from: line.from, to: line.from, kind: `heading-${headingMatch[1]}` as LivePreviewTokenKind });
-        if (!selectionTouches(state, node.from, node.to)) {
-          const mark = node.node.getChildren("HeaderMark")[0];
-          if (mark) {
-            const end = Math.min(line.to, mark.to + (state.sliceDoc(mark.to, mark.to + 1) === " " ? 1 : 0));
-            tokens.push({ from: mark.from, to: end, kind: "hide" });
-          }
+        const mark = node.node.getChildren("HeaderMark")[0];
+        if (mark) {
+          const end = Math.min(line.to, mark.to + (state.sliceDoc(mark.to, mark.to + 1) === " " ? 1 : 0));
+          tokens.push({ from: mark.from, to: end, kind: "hide" });
         }
         return;
       }
@@ -118,9 +116,11 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
           const ordered = /^\d/.test(source);
           tokens.push({ from: state.doc.lineAt(node.from).from, to: state.doc.lineAt(node.from).from, kind: ordered ? "ordered-list-line" : "unordered-list-line" });
           if (!selectionTouches(state, node.from, node.to)) {
+            const line = state.doc.lineAt(mark.from);
+            const end = Math.min(line.to, mark.to + (/\s/.test(state.sliceDoc(mark.to, mark.to + 1)) ? 1 : 0));
             tokens.push({
               from: mark.from,
-              to: mark.to,
+              to: end,
               kind: "list-marker",
               text: ordered ? `${source.replace(/[.)]$/, ".")} ` : "• ",
             });

@@ -85,8 +85,19 @@ describe("PreviewSession", () => {
       severity: "blocking",
       category: "resource",
       message: "找不到图片文件。",
+      source: { from: 10, to: 30, startLine: 3, startColumn: 1, endLine: 3, endColumn: 21, precision: "exact" },
+      details: { resourceReference: "assets/缺失图片.png" },
       suggestedActions: ["请检查路径。"],
-    }])).toEqual(["找不到图片文件。 建议：请检查路径。（错误代码：RESOURCE_MISSING）"]);
+    }, {
+      id: "diagnostic-2",
+      code: "RESOURCE_MISSING",
+      severity: "blocking",
+      category: "resource",
+      message: "找不到图片文件。",
+      source: { from: 40, to: 60, startLine: 8, startColumn: 1, endLine: 8, endColumn: 21, precision: "exact" },
+      details: { resourceReference: "assets/缺失图片.png" },
+      suggestedActions: ["请检查路径。"],
+    }])).toEqual(["第 3、8 行，共 2 处 · 图片：assets/缺失图片.png · 找不到图片文件。 建议：请检查路径。（错误代码：RESOURCE_MISSING）"]);
   });
 
   it("combines only fully matching parse, resolution and manifest identities", async () => {

@@ -106,7 +106,6 @@ export function App() {
   const [editorMode, setEditorMode] = useState<"source" | "wysiwyg">(() => window.localStorage.getItem("fantastic-editor-editor-mode") === "source" ? "source" : "wysiwyg");
   const [liveLinkInputOpen, setLiveLinkInputOpen] = useState(false);
   const [liveLinkUrl, setLiveLinkUrl] = useState("");
-  const [liveFormatToolbarPosition, setLiveFormatToolbarPosition] = useState<{ left: number; top: number } | null>(null);
   const legacyWysiwygEnabled = useRef(
     window.localStorage.getItem("fantastic-editor-legacy-wysiwyg") === "true"
       || new URLSearchParams(window.location.search).get("legacy-wysiwyg-smoke") === "1",
@@ -1548,7 +1547,7 @@ export function App() {
     { label: "公众号排版", shortcut: "Ctrl+Shift+P", enabled: Boolean(active), run: () => setWechatThemePreviewOpen(true) },
     { label: "设置与关于", shortcut: "", enabled: true, run: () => setSettingsOpen(true) },
     { label: "修复网页 Markdown", shortcut: "", enabled: Boolean(active), run: repairCurrentWebMarkdown },
-    { label: "导出与发布", shortcut: "", enabled: Boolean(active && outputReady && !outputBusy), run: () => exportMenuSummaryRef.current?.click() },
+    { label: "导出", shortcut: "", enabled: Boolean(active && outputReady && !outputBusy), run: () => exportMenuSummaryRef.current?.click() },
   ].filter((item) => item.label.toLocaleLowerCase().includes(commandQuery.trim().toLocaleLowerCase()));
   const runCommand = (command: (typeof commandItems)[number]) => {
     if (!command.enabled) return;
@@ -1560,7 +1559,7 @@ export function App() {
     <main className={`app-shell${darkMode ? " theme-dark" : ""}${dragActive ? " drag-active" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragActive(true); }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }} onDrop={(event) => void handleDrop(event)}>
       <header className="app-header">
         <div className="brand-lockup"><span className="brand-symbol">f</span><span className="brand-name">fantastic<span>editor</span></span></div>
-        <div className="header-document"><span className={`document-state${dirty ? " dirty" : ""}`} /><span>{title}</span><small>{active ? "本地文档" : "本地优先 Markdown 编辑器"}</small></div>
+        <div className="header-document" title={title}><span className={`document-state${dirty ? " dirty" : ""}`} /><span>{title}</span><small>{active ? "本地文档" : "本地优先 Markdown 编辑器"}</small></div>
         <div className="header-tools">
           <div className="view-switcher primary-mode-switcher" role="group" aria-label="写作视图">
             <button type="button" className={viewMode === "editor" && editorMode === "wysiwyg" ? "active" : ""} disabled={!active} aria-label="写作模式" aria-pressed={viewMode === "editor" && editorMode === "wysiwyg"} onClick={() => { if (switchEditorMode("wysiwyg")) setViewMode("editor"); }}>写作</button>
@@ -1571,21 +1570,19 @@ export function App() {
           <details className={`export-menu${!active || !outputReady || outputBusy ? " disabled" : ""}`}>
             <summary
               ref={exportMenuSummaryRef}
-              title={!active ? "请先新建或打开 Markdown 文档" : outputBusy ? "导出正在处理中" : !outputReady ? "正在解析文档和资源，请稍候" : "导出与发布"}
+              title={!active ? "请先新建或打开 Markdown 文档" : outputBusy ? "导出正在处理中" : !outputReady ? "正在解析文档和资源，请稍候" : "导出"}
               onClick={(event) => {
                 if (active && outputReady && !outputBusy) return;
                 event.preventDefault();
                 setStatus(!active ? "请先新建或打开一个 Markdown 文件。" : outputBusy ? "已有导出任务正在处理，请稍候。" : "文档或资源仍在解析，请稍候再导出。" );
               }}
-            ><span>{outputBusy ? "处理中" : "发布"}</span><Icon name="chevronDown" size={14} /></summary>
+            ><span>{outputBusy ? "处理中" : "导出"}</span><Icon name="chevronDown" size={14} /></summary>
             <div className="export-popover">
-              <div className="menu-heading">导出与发布</div>
+              <div className="menu-heading">导出</div>
               <button type="button" aria-label="仅预览" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; if (editorMode === "wysiwyg" && !commitPendingEditor()) return; setViewMode("preview"); }}><span className="format-badge preview"><Icon name="eye" size={15} /></span><span><strong>只读预览</strong><small>检查最终文章渲染</small></span></button>
               <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("pdf"); }}><span className="format-badge pdf">PDF</span><span><strong>导出 PDF</strong><small>保持当前排版和公式</small></span></button>
               <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("docx"); }}><span className="format-badge word">W</span><span><strong>导出 Word</strong><small>生成可继续编辑的 DOCX</small></span></button>
               <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("offline-html"); }}><span className="format-badge html">&lt;/&gt;</span><span><strong>离线 HTML</strong><small>图片与公式完全自包含</small></span></button>
-              <div className="menu-separator" />
-              <button type="button" onClick={(event) => { (event.currentTarget.closest("details") as HTMLDetailsElement).open = false; void exportDocument("wechat-clipboard"); }}><span className="format-badge wechat">微</span><span><strong>复制到公众号</strong><small>使用主界面当前选定的公众号主题</small></span></button>
             </div>
           </details>
         </div>
@@ -1594,15 +1591,20 @@ export function App() {
       <div className="workbench">
         <aside className="activity-bar" aria-label="主导航">
           <button type="button" className={sidebarVisible && sidebarPanel === "explorer" ? "active" : ""} aria-label="切换资源管理器" aria-pressed={sidebarVisible && sidebarPanel === "explorer"} title="显示或隐藏资源管理器" onClick={() => { if (sidebarVisible && sidebarPanel === "explorer") setSidebarVisible(false); else { setSidebarPanel("explorer"); setSidebarVisible(true); } }}><Icon name="panelLeft" /></button>
+          <button type="button" data-testid="new-document" aria-label="新建文档" title="新建文档 (Ctrl+N)" onClick={() => void newFile()}><Icon name="filePlus" /></button>
+          <button type="button" aria-label="打开文件" title="打开文件 (Ctrl+O)" onClick={() => void openFile()}><Icon name="file" /></button>
+          <button type="button" aria-label="保存" title="保存文档 (Ctrl+S)" disabled={!active || !dirty} onClick={() => void save()}><Icon name="save" /></button>
+          <button type="button" aria-label="打开文件夹" title="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" /></button>
           <button type="button" className={sidebarVisible && sidebarPanel === "outline" ? "active" : ""} aria-label="切换文档大纲" aria-pressed={sidebarVisible && sidebarPanel === "outline"} title="显示或隐藏文档大纲" onClick={() => { if (sidebarVisible && sidebarPanel === "outline") setSidebarVisible(false); else { setSidebarPanel("outline"); setSidebarVisible(true); } }}><Icon name="list" /></button>
           <button type="button" aria-label="搜索" title="查找/替换 (Ctrl+F / Ctrl+H)" disabled={!active} onClick={() => { setSearchOpen(true); setSearchReplaceOpen(false); window.requestAnimationFrame(() => searchInputRef.current?.focus()); }}><Icon name="search" /></button>
-          <button ref={wechatThemeButtonRef} type="button" className={`wechat-layout-entry${wechatThemePreviewOpen ? " active" : ""}`} aria-label="公众号" aria-pressed={wechatThemePreviewOpen} title="公众号排版与手机预览 (Ctrl+Shift+P)" disabled={!active || wechatThemeSaveOpen} onClick={() => setWechatThemePreviewOpen(true)}><Icon name="wechat" /></button>
+          <button type="button" className="wechat-copy-entry" aria-label="复制到公众号" title="复制到公众号（使用当前公众号主题）" disabled={!active || !outputReady || outputBusy} onClick={() => void exportDocument("wechat-clipboard")}><span aria-hidden="true">微</span></button>
+          <button ref={wechatThemeButtonRef} type="button" className={`wechat-layout-entry${wechatThemePreviewOpen || wechatApiConfigOpen ? " active" : ""}`} aria-label="公众号" aria-pressed={wechatThemePreviewOpen || wechatApiConfigOpen} title={active ? "公众号排版、草稿同步与接口设置 (Ctrl+Shift+P)" : "公众号接口与封面设置"} disabled={wechatThemeSaveOpen} onClick={() => { if (active) setWechatThemePreviewOpen(true); else setWechatApiConfigOpen(true); }}><Icon name="wechat" /></button>
           <button type="button" className={`activity-settings${settingsOpen ? " active" : ""}`} aria-label="设置与关于" aria-pressed={settingsOpen} title="设置与关于" onClick={() => setSettingsOpen((current) => !current)}><Icon name="settings" /></button>
         </aside>
 
         {sidebarVisible && sidebarPanel === "explorer" && (
           <aside className="explorer-panel" aria-label="资源管理器" style={{ flexBasis: `${sidebarWidth}px` }}>
-            <div className="explorer-title"><span>资源管理器</span><div className="explorer-title-actions"><button type="button" data-testid="new-document" title="新建文档 (Ctrl+N)" aria-label="新建文档" onClick={() => void newFile()}><Icon name="filePlus" size={15} /></button><button type="button" title="打开文件 (Ctrl+O)" aria-label="打开文件" onClick={() => void openFile()}><Icon name="file" size={15} /></button><button type="button" title="保存 (Ctrl+S)" aria-label="保存" disabled={!active || !dirty} onClick={() => void save()}><Icon name="save" size={15} /></button><button type="button" title="打开文件夹" aria-label="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" size={15} /></button></div></div>
+            <div className="explorer-title"><span>资源管理器</span></div>
             <section className="explorer-section">
               <div className="section-title"><span className="section-chevron">⌄</span><span>打开的编辑器</span><small>{tabs.length}</small></div>
               <div className="open-editors">
@@ -1682,7 +1684,6 @@ export function App() {
                   </div>
                 );
               })}
-              <button type="button" className="new-tab" aria-label="新建文档" title="新建文档 (Ctrl+N)" onClick={() => void newFile()}>＋</button>
             </div>
             <span className="drop-hint" data-testid="drop-hint">拖入 Markdown 打开 · 图片拖到编辑区插入</span>
           </nav>
@@ -1698,7 +1699,7 @@ export function App() {
                       <button type="button" className={editorMode === "wysiwyg" ? "active" : ""} aria-pressed={editorMode === "wysiwyg"} disabled={imageImportBusy} onClick={() => switchEditorMode("wysiwyg")}>所见即所得</button>
                     </div>
                     {editorMode === "wysiwyg" && <>
-                      {!legacyWysiwygEnabled && <div className={`live-preview-format-toolbar${liveFormatToolbarPosition ? " is-visible" : ""}`} role="toolbar" aria-label="文字和内容块格式" style={liveFormatToolbarPosition ?? undefined} onMouseDown={(event) => event.preventDefault()}>
+                      {!legacyWysiwygEnabled && <div className="live-preview-format-toolbar" role="toolbar" aria-label="文字和内容块格式" onMouseDown={(event) => event.preventDefault()}>
                         <button type="button" title="正文" onClick={() => markdownEditorRef.current?.setBlockType(0)}>正文</button>
                         <button type="button" title="一级标题" onClick={() => markdownEditorRef.current?.setBlockType(1)}>H1</button>
                         <button type="button" title="二级标题" onClick={() => markdownEditorRef.current?.setBlockType(2)}>H2</button>
@@ -1710,7 +1711,7 @@ export function App() {
                         <button type="button" title="上移当前行或选中内容，可连续点击" onClick={() => markdownEditorRef.current?.moveSelection("up")}>上移</button>
                         <button type="button" title="下移当前行或选中内容，可连续点击" onClick={() => markdownEditorRef.current?.moveSelection("down")}>下移</button>
                       </div>}
-                      {!legacyWysiwygEnabled && liveLinkInputOpen && <form className="live-preview-link-editor is-floating" style={liveFormatToolbarPosition ? { left: liveFormatToolbarPosition.left, top: liveFormatToolbarPosition.top + 8 } : undefined} onSubmit={(event) => {
+                      {!legacyWysiwygEnabled && liveLinkInputOpen && <form className="live-preview-link-editor" onSubmit={(event) => {
                         event.preventDefault();
                         if (!markdownEditorRef.current?.insertLink(liveLinkUrl)) {
                           setStatus("链接地址格式不正确，请使用 http、https、mailto、# 或站内路径。");
@@ -1753,19 +1754,6 @@ export function App() {
                       onViewportAnchorChange={(anchor) => { if (editorMode === "source") synchronizedPreviewRef.current?.updateViewportAnchor(anchor); }}
                       onSelectionChange={(selection) => {
                         if (editorMode === "source") synchronizedPreviewRef.current?.updateSelection(selection);
-                        if (editorMode !== "wysiwyg" || !selection) {
-                          setLiveFormatToolbarPosition(null);
-                          setLiveLinkInputOpen(false);
-                          return;
-                        }
-                        window.requestAnimationFrame(() => {
-                          const rect = markdownEditorRef.current?.selectionScreenRect();
-                          if (!rect) { setLiveFormatToolbarPosition(null); return; }
-                          setLiveFormatToolbarPosition({
-                            left: Math.min(window.innerWidth - 210, Math.max(210, rect.left)),
-                            top: Math.max(54, rect.top - 8),
-                          });
-                        });
                       }}
                       onImageDrop={(files, anchorId) => void importImages(files, anchorId)}
                       onDropRejected={(message) => { setDragActive(false); setStatus(message); }}
@@ -1916,7 +1904,6 @@ export function App() {
       <aside className="settings-popover" hidden={!settingsOpen} aria-label="设置与关于">
         <header><strong>设置与关于</strong><button type="button" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}>×</button></header>
         <button type="button" className="theme-toggle" onClick={() => setDarkMode((value) => !value)}><Icon name={darkMode ? "sun" : "moon"} size={16} /><span>{darkMode ? "切换浅色模式" : "切换深色模式"}</span></button>
-        <button type="button" className={wechatApiConfig.configured ? "configured" : "needs-config"} onClick={() => { setSettingsOpen(false); setWechatApiConfigOpen(true); }}><Icon name="wechat" size={16} /><span>{wechatApiConfig.configured ? "公众号接口设置" : "公众号接口设置 · 待配置"}</span></button>
         <button type="button" data-testid="repair-web-markdown" disabled={!active} onClick={() => { setSettingsOpen(false); repairCurrentWebMarkdown(); }}><Icon name="markdown" size={16} /><span>修复网页 Markdown</span></button>
         <div className="settings-about" data-testid="app-about"><strong>fantastic-editor v{packageMetadata.version}</strong><span>作者：{packageMetadata.author.name}</span><span>{packageMetadata.author.email}</span>{documentPerformance && <small className={`performance-metric is-${documentPerformance.level}`} aria-label={documentPerformanceDescription(documentPerformance)}>{documentPerformanceLabel(documentPerformance)}</small>}</div>
       </aside>

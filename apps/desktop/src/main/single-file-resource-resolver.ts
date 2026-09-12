@@ -205,6 +205,7 @@ function diagnostic(
     source: reference.source,
     nodeId: reference.nodeId,
     referenceKey: reference.referenceKey,
+    ...(reference.kind === "local-path" ? { details: { resourceReference: reference.originalRef } } : {}),
     ...(suggestedActions?.length ? { suggestedActions } : {}),
   };
 }
