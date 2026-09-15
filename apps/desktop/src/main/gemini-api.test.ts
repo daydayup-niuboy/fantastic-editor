@@ -42,4 +42,18 @@ describe("Gemini API boundary", () => {
     expect(await api.test()).toBe(true);
     expect(calls).toEqual(["https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash"]);
   });
+
+  it("retries a transient 503 once and explains a persistent outage", async () => {
+    let calls = 0;
+    const recovered = await service(async () => ++calls === 1
+      ? new Response("busy", { status: 503 })
+      : new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "已恢复" }] } }] }), { status: 200 }));
+    await recovered.save(`test_${"x".repeat(32)}`);
+    await expect(recovered.invoke(request, "正文")).resolves.toEqual({ status: "completed", result: "已恢复" });
+    expect(calls).toBe(2);
+
+    const unavailable = await service(async () => new Response("busy", { status: 503 }));
+    await unavailable.save(`test_${"x".repeat(32)}`);
+    await expect(unavailable.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", error: expect.stringContaining("自动重试仍失败") });
+  }, 10_000);
 });

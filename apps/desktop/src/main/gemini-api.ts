@@ -28,8 +28,20 @@ export class GeminiApi {
     const controller = new AbortController(); this.#controller = controller;
     const timer = setTimeout(() => controller.abort(), 180_000);
     try {
-      const response = await this.fetcher(`${ENDPOINT}/models/${MODEL}:generateContent`, { method: "POST", signal: controller.signal, headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }) });
-      if (!response.ok) return { status: "failed", code: "API_FAILED", error: response.status === 400 || response.status === 401 || response.status === 403 ? "Gemini API Key 无效或没有模型权限。" : `Gemini API 请求失败（${response.status}）。` };
+      const request = () => this.fetcher(`${ENDPOINT}/models/${MODEL}:generateContent`, { method: "POST", signal: controller.signal, headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }) });
+      let response = await request();
+      if (!response.ok && (response.status === 408 || response.status === 429 || response.status >= 500)) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000 + Math.floor(Math.random() * 250)));
+        if (controller.signal.aborted) return { status: "cancelled" };
+        response = await request();
+      }
+      if (!response.ok) return { status: "failed", code: "API_FAILED", error: response.status === 400 || response.status === 401 || response.status === 403
+        ? "Gemini API Key 无效或没有 3.8 Flash 模型权限。"
+        : response.status === 429
+          ? "Gemini API 请求过于频繁或额度不足（429），请稍后重试。"
+          : response.status === 503
+            ? "Gemini 3.8 Flash 服务暂时不可用（503），自动重试仍失败，请稍后再试。"
+            : `Gemini API 临时请求失败（${response.status}），请稍后重试。` };
       const text = await response.text();
       if (Buffer.byteLength(text) > 320 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       const data = JSON.parse(text) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };

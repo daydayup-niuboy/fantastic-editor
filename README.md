@@ -6,18 +6,18 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前版本：**0.3.0-rc.6**（Windows x64，2026-09-12 构建）。
+当前版本：**0.3.0-rc.7**（Windows x64，2026-09-15 构建）。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.6/fantastic-editor-0.3.0-rc.6-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.6/fantastic-editor-0.3.0-rc.6-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.6)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.7/fantastic-editor-0.3.0-rc.7-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.7/fantastic-editor-0.3.0-rc.7-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.7)
 
 本项目暂未采购商业代码签名证书，两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| 安装版 | 136705531 | `9B64356EC9C33D79172DBE7BE23B4EA34EE407DE57CEF021B8DE3E8C0CC119F6` |
-| 便携版 | 136447501 | `EAB2BAC61D847EC3967E71094765A6EB9A95D6C4FC2485CFFD897DC8BEED821C` |
+| 安装版 | 136728692 | `CE930388242E69339B598D4323642387889B5EF09AA4283E16467D56AD25BFE0` |
+| 便携版 | 136470666 | `1372D7F836672AEB92541810EA08E001D825F1B97E823F162F363BED1C7F3953` |
 
 ## 编辑与预览
 

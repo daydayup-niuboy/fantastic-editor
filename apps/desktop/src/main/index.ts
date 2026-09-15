@@ -1517,6 +1517,9 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("| A | B |\n| --- | --- |\n| C | D |\n\n末尾");
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "End", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "End", modifiers: ["control"] });
         const tableInsertPoint = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (fn) => { for (let i = 0; i < 80; i++) { if (fn()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const shown = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
