@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,20 @@ afterEach(async () => {
 });
 
 describe("FileSessionManager", () => {
+  it("duplicates, moves and deletes only validated workspace Markdown files", async () => {
+    const directory = await createTemporaryDirectory(); const moved = join(directory, "moved"); await mkdir(moved);
+    await writeFile(join(directory, "article.md"), "# content\n", "utf8");
+    const manager = new FileSessionManager(); const opened = await manager.openFolder(directory); const workspace = opened.workspace!; const file = workspace.files[0]!;
+    const request = { workspaceId: workspace.workspaceId, workspaceRevision: workspace.workspaceRevision, fileId: file.fileId };
+    const duplicated = await manager.mutateWorkspaceFile(request, "duplicate");
+    expect(duplicated?.files.some((item) => item.displayName.includes("副本"))).toBe(true);
+    const original = duplicated!.files.find((item) => item.displayName === "article.md")!;
+    const movedResult = await manager.mutateWorkspaceFile({ ...request, workspaceRevision: duplicated!.workspaceRevision, fileId: original.fileId }, "move", moved);
+    expect(movedResult?.files.some((item) => item.relativePath === "moved/article.md")).toBe(true);
+    const movedFile = movedResult!.files.find((item) => item.relativePath === "moved/article.md")!;
+    const deleted = await manager.mutateWorkspaceFile({ ...request, workspaceRevision: movedResult!.workspaceRevision, fileId: movedFile.fileId }, "delete");
+    expect(deleted?.files.some((item) => item.relativePath === "moved/article.md")).toBe(false);
+  });
   it("round-trips UTF-8 BOM and CRLF while exposing canonical LF text", async () => {
     const directory = await createTemporaryDirectory();
     const path = join(directory, "article.md");
@@ -47,6 +61,23 @@ describe("FileSessionManager", () => {
     const saved = await manager.save({ sessionId: opened.session!.sessionId, editorText: "my edit\n" });
     expect(saved.status).toBe("conflict");
     expect(await readFile(path, "utf8")).toContain("another program");
+  });
+
+  it("detects, acknowledges and safely reloads an external file change", async () => {
+    const directory = await createTemporaryDirectory();
+    const path = join(directory, "article.md");
+    await writeFile(path, "original\n", "utf8");
+    const manager = new FileSessionManager();
+    const opened = await manager.openPath(path);
+    const sessionId = opened.session!.sessionId;
+    await writeFile(path, "changed outside with a different length\n", "utf8");
+    expect(await manager.checkExternalChange(sessionId)).toBe("changed");
+    await manager.acknowledgeExternalChange(sessionId);
+    expect(await manager.checkExternalChange(sessionId)).toBe("unchanged");
+    expect((await manager.save({ sessionId, editorText: "local edit\n" })).status).toBe("conflict");
+    const reloaded = await manager.reloadExternalChange(sessionId);
+    expect(reloaded).toEqual({ status: "reloaded", editorText: "changed outside with a different length\n" });
+    expect(await manager.checkExternalChange(sessionId)).toBe("unchanged");
   });
 
   it("keeps multiple single-file sessions and switches the active authorization context", async () => {

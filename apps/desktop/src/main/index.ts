@@ -7,12 +7,14 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  Menu,
   nativeImage,
   protocol,
   safeStorage,
   session,
   shell,
   type IpcMainInvokeEvent,
+  type MessageBoxOptions,
 } from "electron";
 import { parseDocument } from "@fantastic-editor/document-core";
 import {
@@ -45,6 +47,8 @@ import {
   type DeleteWechatThemeRequest,
   type ExportWechatThemeRequest,
   type ImportWechatThemeRequest,
+  type AiInvocationRequest,
+  type WorkspaceFileEntry,
 } from "@fantastic-editor/shared";
 import { atomicWriteCandidate, FileSessionManager, type FileOpenAttempt, type MarkdownOpenOptions } from "./file-sessions.js";
 import { ParseCommitRegistry } from "./parse-commit-registry.js";
@@ -68,6 +72,10 @@ import { WechatApiConfigStore } from "./wechat-api-config-store.js";
 import { parseMarkdownOpenArgs } from "./external-open.js";
 import { WechatThemeRepository } from "./wechat-theme-repository.js";
 import { installFontForCurrentUser } from "./font-installer.js";
+import { AiCliService, validateAiCancelRequest } from "./ai-cli-service.js";
+import { DeepSeekApi } from "./deepseek-api.js";
+import { GeminiApi } from "./gemini-api.js";
+import { DocumentHistoryStore } from "./document-history-store.js";
 
 
 // Some Windows graphics drivers crash Chromium during startup with a native
@@ -79,6 +87,10 @@ app.disableHardwareAcceleration();
 // even after hardware acceleration is disabled. Keeping the helper in-process
 // avoids the native startup crash without weakening the renderer sandbox.
 if (process.platform === "win32") app.commandLine.appendSwitch("in-process-gpu");
+if (process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1" && process.env.FANTASTIC_EDITOR_AI_SMOKE_USER_DATA) {
+  app.setName("fantastic-editor-ai-smoke");
+  app.setPath("userData", process.env.FANTASTIC_EDITOR_AI_SMOKE_USER_DATA);
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: ASSET_SCHEME,
@@ -106,7 +118,24 @@ let mainWindow: BrowserWindow | null = null;
 let recoveryStore: RecoveryStore | undefined;
 let recentFileStore: RecentFileStore | undefined;
 let wechatApiConfigStore: WechatApiConfigStore | undefined;
+let documentHistoryStore: DocumentHistoryStore | undefined;
 const wechatDraftConnector = new WechatDraftConnector();
+const aiSmokeNode = process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1" ? process.env.FANTASTIC_EDITOR_AI_SMOKE_NODE : undefined;
+const aiSmokeScript = process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1" ? process.env.FANTASTIC_EDITOR_AI_SMOKE_SCRIPT : undefined;
+const deepSeekApi = new DeepSeekApi(join(app.getPath("userData"), "deepseek-api-config-v1.json"), {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+});
+const geminiApi = new GeminiApi(join(app.getPath("userData"), "gemini-api-config-v1.json"), {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+});
+const aiCliService = aiSmokeNode && aiSmokeScript
+  ? new AiCliService({ spawnSpec: { executable: aiSmokeNode, argsPrefix: [aiSmokeScript, "ui"] }, timeoutMs: 10_000 })
+  : new AiCliService({ deepSeek: deepSeekApi, gemini: geminiApi });
+app.on("before-quit", () => aiCliService.dispose());
 const wechatPublishRecords = new Map<string, { status: "processing" | "published"; draftMediaId: string; publishId: string }>();
 const pendingExternalOpens = new Map<string, { path: string; displayName: string; announced: boolean; queuedAt: number }>();
 const EXTERNAL_OPEN_TTL_MS = 60_000;
@@ -208,7 +237,7 @@ async function finishSmoke(scenario: string, valid: boolean, diagnostics?: unkno
     }
   }
   process.exitCode = valid ? 0 : 1;
-  if (scenario === "ui" || scenario === "live-preview") {
+  if (scenario === "ui" || scenario === "live-preview" || scenario === "ai") {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.destroy();
     }
@@ -389,6 +418,37 @@ async function openWithConversionConfirmation(
     : opened;
 }
 function registerIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.detectAiProvider, async (event) => {
+    requireTrustedRenderer(event);
+    return aiCliService.detect();
+  });
+  ipcMain.handle(IPC_CHANNELS.invokeAi, async (event, request: AiInvocationRequest) => {
+    requireTrustedRenderer(event);
+    return aiCliService.invoke(request, (update) => {
+      if (!event.sender.isDestroyed()) event.sender.send(IPC_CHANNELS.aiInvocationEvent, update);
+    });
+  });
+  ipcMain.handle(IPC_CHANNELS.cancelAi, (event, request: { requestId?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!validateAiCancelRequest(request)) return { status: "missing" } as const;
+    return { status: aiCliService.cancel(request.requestId) ? "cancelled" : "missing" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.getDeepSeekConfig, async (event) => { requireTrustedRenderer(event); return { status: "loaded", configured: await deepSeekApi.configured() } as const; });
+  ipcMain.handle(IPC_CHANNELS.saveDeepSeekConfig, async (event, request: { apiKey?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || Object.keys(request).length !== 1 || typeof request.apiKey !== "string") return { status: "failed", error: "API Key 格式无效。" } as const;
+    return await deepSeekApi.save(request.apiKey) ? { status: "saved", configured: true } as const : { status: "failed", error: "API Key 格式无效，或系统加密不可用。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.clearDeepSeekConfig, async (event) => { requireTrustedRenderer(event); await deepSeekApi.clear(); return { status: "cleared", configured: false } as const; });
+  ipcMain.handle(IPC_CHANNELS.testDeepSeekConnection, async (event) => { requireTrustedRenderer(event); return await deepSeekApi.test() ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查 API Key 和网络。" } as const; });
+  ipcMain.handle(IPC_CHANNELS.getGeminiConfig, async (event) => { requireTrustedRenderer(event); return { status: "loaded", configured: await geminiApi.configured() } as const; });
+  ipcMain.handle(IPC_CHANNELS.saveGeminiConfig, async (event, request: { apiKey?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || Object.keys(request).length !== 1 || typeof request.apiKey !== "string") return { status: "failed", error: "API Key 格式无效。" } as const;
+    return await geminiApi.save(request.apiKey) ? { status: "saved", configured: true } as const : { status: "failed", error: "API Key 格式无效，或系统加密不可用。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.clearGeminiConfig, async (event) => { requireTrustedRenderer(event); await geminiApi.clear(); return { status: "cleared", configured: false } as const; });
+  ipcMain.handle(IPC_CHANNELS.testGeminiConnection, async (event) => { requireTrustedRenderer(event); return await geminiApi.test() ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查 API Key、模型权限和网络。" } as const; });
   ipcMain.handle(IPC_CHANNELS.listRecentFiles, async (event) => {
     requireTrustedRenderer(event);
     try {
@@ -611,9 +671,12 @@ function registerIpc(): void {
     return result;
   });
 
-  ipcMain.handle(IPC_CHANNELS.saveCurrentFile, (event, request: SaveFileRequest) => {
+  ipcMain.handle(IPC_CHANNELS.saveCurrentFile, async (event, request: SaveFileRequest) => {
     requireTrustedRenderer(event);
-    return fileSessions.save(request);
+    const saved = await fileSessions.save(request);
+    const path = fileSessions.getSavedPath(request.sessionId);
+    if (saved.status === "saved" && path) await documentHistoryStore?.record(path, request.editorText);
+    return saved;
   });
 
   ipcMain.handle(IPC_CHANNELS.saveCurrentFileAs, async (event, request: SaveFileRequest) => {
@@ -626,6 +689,8 @@ function registerIpc(): void {
     if (result.canceled || !result.filePath) return { status: "cancelled" } as const;
     const saved = await fileSessions.save(request, result.filePath);
     if (saved.status === "saved") {
+      const path = fileSessions.getSavedPath(request.sessionId);
+      if (path) await documentHistoryStore?.record(path, request.editorText);
       await rememberRecentFile(result.filePath);
       parseCommits.clear();
       resourceResolver.revokeAllHandles();
@@ -633,6 +698,99 @@ function registerIpc(): void {
       outputService.clear();
     }
     return saved;
+  });
+  ipcMain.handle(IPC_CHANNELS.checkExternalFileChange, async (event, request: { sessionId?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (typeof request?.sessionId !== "string") return { status: "failed", error: "文件会话无效。" } as const;
+    const changed = await fileSessions.checkExternalChange(request.sessionId);
+    if (changed === "unchanged") return { status: "unchanged" } as const;
+    if (changed === "missing") return { status: "missing" } as const;
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options: MessageBoxOptions = {
+      type: "warning",
+      title: "文件已被其他程序修改",
+      message: "磁盘上的 Markdown 文件已经变化。",
+      detail: "请选择如何处理。重新加载会用磁盘版本替换当前编辑区；保留当前内容不会覆盖磁盘；另存为可把当前内容保存到新文件。",
+      buttons: ["重新加载", "保留当前内容", "另存为", "取消"],
+      defaultId: 1,
+      cancelId: 3,
+      noLink: true,
+    };
+    const choice = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    if (choice.response === 0) return await fileSessions.reloadExternalChange(request.sessionId);
+    if (choice.response === 1) { await fileSessions.acknowledgeExternalChange(request.sessionId); return { status: "kept" } as const; }
+    if (choice.response === 2) return { status: "save-as" } as const;
+    return { status: "unchanged" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.showOpenFileMenu, async (event, request: { sessionId?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (typeof request?.sessionId !== "string") return { action: "none" } as const;
+    const path = fileSessions.getSavedPath(request.sessionId);
+    return await new Promise<{ action: "activate" | "history" | "rename" | "none" }>((resolve) => {
+      let settled = false;
+      const choose = (action: "activate" | "history" | "rename") => { settled = true; resolve({ action }); };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      Menu.buildFromTemplate([
+        { label: "打开", click: () => choose("activate") },
+        { type: "separator" },
+        { label: "复制路径", enabled: Boolean(path), click: () => { if (path) clipboard.writeText(path); settled = true; resolve({ action: "none" }); } },
+        { label: "在系统资源管理器中显示", enabled: Boolean(path), click: () => { if (path) shell.showItemInFolder(path); settled = true; resolve({ action: "none" }); } },
+        { label: "打开版本历史", enabled: Boolean(path), click: () => choose("history") },
+        { type: "separator" },
+        { label: "重命名", click: () => choose("rename") },
+      ]).popup({ ...(owner ? { window: owner } : {}), callback: () => { if (!settled) resolve({ action: "none" }); } });
+    });
+  });
+  ipcMain.handle(IPC_CHANNELS.showWorkspaceFileMenu, async (event, request: OpenWorkspaceFileRequest) => {
+    requireTrustedRenderer(event);
+    const path = await fileSessions.getWorkspaceFilePath(request);
+    if (!path) return { action: "none" } as const;
+    return await new Promise<{ action: "open" | "open-new-tab" | "duplicate" | "move" | "history" | "rename" | "delete" | "none"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }>((resolve) => {
+      let settled = false;
+      const choose = (action: "open" | "open-new-tab" | "history" | "rename") => { settled = true; resolve({ action }); };
+      const mutate = async (action: "duplicate" | "move" | "delete") => {
+        settled = true;
+        let targetDirectory: string | undefined;
+        if (action === "move") {
+          const selected = await dialog.showOpenDialog({ title: "将 Markdown 文件移动到工作区文件夹", properties: ["openDirectory"] });
+          if (selected.canceled || !selected.filePaths[0]) { resolve({ action: "none" }); return; }
+          targetDirectory = selected.filePaths[0];
+        }
+        if (action === "delete") {
+          const confirmed = await dialog.showMessageBox({ type: "warning", title: "删除 Markdown 文件", message: `确定删除“${basename(path)}”吗？`, detail: "文件将从磁盘永久删除，此操作不能撤销。", buttons: ["取消", "删除"], defaultId: 0, cancelId: 0, noLink: true });
+          if (confirmed.response !== 1) { resolve({ action: "none" }); return; }
+        }
+        const workspace = await fileSessions.mutateWorkspaceFile(request, action, targetDirectory);
+        resolve(workspace ? { action, workspace } : { action: "none" });
+      };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      Menu.buildFromTemplate([
+        { label: "打开", click: () => choose("open") },
+        { label: "在新标签页中打开", click: () => choose("open-new-tab") },
+        { label: "创建副本", click: () => void mutate("duplicate") },
+        { label: "将文件移动到…", click: () => void mutate("move") },
+        { type: "separator" },
+        { label: "复制路径", click: () => { clipboard.writeText(path); settled = true; resolve({ action: "none" }); } },
+        { label: "在系统资源管理器中显示", click: () => { shell.showItemInFolder(path); settled = true; resolve({ action: "none" }); } },
+        { label: "打开版本历史", click: () => choose("history") },
+        { type: "separator" },
+        { label: "重命名", click: () => choose("rename") },
+        { label: "删除", click: () => void mutate("delete") },
+      ]).popup({ ...(owner ? { window: owner } : {}), callback: () => { if (!settled) resolve({ action: "none" }); } });
+    });
+  });
+  ipcMain.handle(IPC_CHANNELS.listDocumentHistory, async (event, request: { sessionId?: unknown }) => {
+    requireTrustedRenderer(event);
+    const path = typeof request?.sessionId === "string" ? fileSessions.getSavedPath(request.sessionId) : null;
+    return path ? { status: "listed", items: await documentHistoryStore?.list(path) ?? [] } as const : { status: "failed", error: "请先保存文档。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.restoreDocumentHistory, async (event, request: { sessionId?: unknown; snapshotId?: unknown; currentText?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || Object.keys(request).length !== 3 || typeof request.sessionId !== "string" || typeof request.snapshotId !== "string" || typeof request.currentText !== "string" || request.currentText.length > 10_000_000) return { status: "failed", error: "历史恢复请求无效。" } as const;
+    const path = fileSessions.getSavedPath(request.sessionId); if (!path) return { status: "failed", error: "请先保存文档。" } as const;
+    const editorText = await documentHistoryStore?.read(path, request.snapshotId); if (editorText === null || editorText === undefined) return { status: "failed", error: "历史版本不存在或已清理。" } as const;
+    await documentHistoryStore?.record(path, request.currentText);
+    return { status: "restored", editorText } as const;
   });
 
   ipcMain.handle(IPC_CHANNELS.selectAndImportImages, async (event, request: ImageImportSessionRequest) => {
@@ -1024,7 +1182,75 @@ function createMainWindow(): BrowserWindow {
   });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   let showWhenLoaded = false;
-  if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
+  if (process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1") {
+    window.webContents.once("did-finish-load", () => {
+      void (async () => {
+        const ready = await window.webContents.executeJavaScript(`(async () => {
+          document.querySelector("[data-testid=new-document]")?.click();
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline) {
+            const editor = document.querySelector(".cm-content");
+            if (editor) { editor.focus(); localStorage.setItem("fantastic-editor-ai-disclosure-accepted:codex-cli", "true"); return true; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return false;
+        })()`, true);
+        if (!ready) throw new Error("AI smoke editor did not become ready.");
+        await window.webContents.insertText("需要润色的正文");
+        const applied = await window.webContents.executeJavaScript(`(async () => {
+          const waitFor = async (test) => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 50)); } return null; };
+          document.querySelector('[aria-label="AI 写作助手"]')?.click();
+          const generate = await waitFor(() => document.querySelector(".ai-generate:not(:disabled)"));
+          const providers = [...document.querySelectorAll('[aria-label="AI 提供商"] option')].map((option) => option.textContent);
+          if (providers.length !== 4 || !providers.some((label) => label?.includes("Codex CLI")) || !providers.some((label) => label?.includes("Claude CLI")) || !providers.some((label) => label?.includes("DeepSeek API")) || !providers.some((label) => label?.includes("Gemini API"))) return false;
+          if (!document.querySelector(".ai-action-help")?.textContent?.includes("改善表达和语气")) return false;
+          generate?.click();
+          const preview = await waitFor(() => document.querySelector('[aria-label="AI 建议预览"]'));
+          if (preview?.value !== "处理结果" || document.querySelector('[aria-label="AI 原文预览"]')?.value !== "需要润色的正文") return false;
+          [...document.querySelectorAll("button")].find((button) => button.textContent === "应用到正文")?.click();
+          return Boolean(await waitFor(() => document.querySelector(".cm-content")?.textContent?.includes("处理结果")));
+        })()`, true);
+        if (!applied) throw new Error("AI suggestion was not previewed and applied.");
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const undone = await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.textContent?.includes("需要润色的正文")`, true);
+        if (!undone) throw new Error("AI suggestion was not undone in one step.");
+
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await window.webContents.insertText("陈旧测试");
+        await window.webContents.executeJavaScript(`document.querySelector(".ai-generate:not(:disabled)")?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        await window.webContents.insertText("已变化");
+        const stale = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline && !document.querySelector('[aria-label="AI 建议预览"]')) await new Promise((resolve) => setTimeout(resolve, 50));
+          [...document.querySelectorAll("button")].find((button) => button.textContent === "应用到正文")?.click();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return document.querySelector(".ai-result .error")?.textContent?.includes("旧建议不能应用") === true;
+        })()`, true);
+        if (!stale) throw new Error("Stale AI suggestion was not rejected.");
+
+        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await window.webContents.insertText("取消测试");
+        const cancelled = await window.webContents.executeJavaScript(`(async () => {
+          document.querySelector(".ai-generate:not(:disabled)")?.click();
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline && ![...document.querySelectorAll("button")].some((button) => button.textContent === "停止")) await new Promise((resolve) => setTimeout(resolve, 50));
+          [...document.querySelectorAll("button")].find((button) => button.textContent === "停止")?.click();
+          while (Date.now() < deadline) { if (document.querySelector(".ai-result")?.textContent?.includes("选择文字或把光标")) return true; await new Promise((resolve) => setTimeout(resolve, 50)); }
+          return false;
+        })()`, true);
+        await finishSmoke("ai", Boolean(cancelled), { applied, undone, stale, cancelled });
+      })().catch((error) => void finishSmoke("ai", false, { error: error instanceof Error ? error.message : String(error) }));
+    });
+  } else if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", () => {
       void (async () => {
         const ready = await window.webContents.executeJavaScript(`(async () => {
@@ -1040,7 +1266,7 @@ function createMainWindow(): BrowserWindow {
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
           while (Date.now() < deadline) {
-            if (document.querySelector(".cm-content") && document.querySelector("[data-testid=editor-mode-switch]")) return "ready";
+            if (document.querySelector(".cm-content") && document.querySelector('button[aria-label="写作模式"]') && document.querySelector('button[aria-label="源码模式"]')) return "ready";
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
           return clicked ? "editor-missing" : "new-button-missing";
@@ -1054,11 +1280,63 @@ function createMainWindow(): BrowserWindow {
         window.focus();
         window.webContents.focus();
         await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
+        const tabCases: Array<{ mode: string; pair: string; text: string; valid: boolean; before: unknown; after: unknown }> = [];
+        for (const mode of ["源码模式", "写作模式"]) {
+          await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="${mode}"]')?.click()`, true);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          for (const pair of ["()", "（）"]) {
+            await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+            window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+            window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await window.webContents.insertText(pair);
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Home" });
+            window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Home" });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+            window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            await window.webContents.insertText("I");
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            const entered = await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent ?? ''`, true) as string;
+            if (entered !== pair[0] + "I" + pair[1]) throw new Error(`Tab entry regression: ${mode} ${entered}`);
+            const before = await window.webContents.executeJavaScript(`({focus: document.activeElement?.outerHTML?.slice(0,200), offset: document.getSelection()?.anchorOffset})`, true);
+            window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+            window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            const after = await window.webContents.executeJavaScript(`({focus: document.activeElement?.outerHTML?.slice(0,200), offset: document.getSelection()?.anchorOffset})`, true);
+            await window.webContents.insertText("X");
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            const text = await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent ?? ''`, true) as string;
+            tabCases.push({ mode, pair, text, valid: text === pair[0] + "I" + pair[1] + "X", before, after });
+          }
+        }
+        const tabSkippedClosing = tabCases.every((item) => item.valid);
+        if (!tabSkippedClosing) throw new Error(`Tab cursor regression: ${JSON.stringify(tabCases)}`);
+
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await window.webContents.insertText("Turns\n\nTurns\n\nTurns");
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "f", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "f", modifiers: ["control"] });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await window.webContents.insertText("Turns");
+        for (let index = 1; index <= 3; index++) {
+          window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+          window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const result = await window.webContents.executeJavaScript(`({ count: document.querySelector('.search-count')?.textContent, focused: document.activeElement?.getAttribute('aria-label') === '查找文本', marks: document.querySelectorAll('.cm-searchMatch').length, current: document.querySelectorAll('.cm-searchMatch-selected').length })`, true) as { count: string; focused: boolean; marks: number; current: number };
+          if (result.count !== `${index}/3` || !result.focused || result.marks !== 3 || result.current !== 1) throw new Error(`Search regression: ${JSON.stringify(result)}`);
+        }
+        await window.webContents.executeJavaScript(`document.querySelector('[aria-label="关闭查找"]')?.click(); document.querySelector('.cm-content')?.focus()`, true);
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("测试粗体\n\n# 标题\n\n- 第一项\n- \n- ");
         await new Promise((resolve) => setTimeout(resolve, 800));
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 200));
         window.webContents.sendInputEvent({ type: "char", keyCode: "y" });
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -1068,14 +1346,14 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 150));
         const liveUndo = await window.webContents.executeJavaScript(`({ articlePresent: document.querySelector(".cm-content")?.textContent?.includes("测试粗体") === true, typedRemoved: ![...document.querySelectorAll(".cm-line")].some((line) => line.textContent?.includes("y")), focused: document.activeElement?.classList.contains("cm-content") === true })`, true) as { articlePresent: boolean; typedRemoved: boolean; focused: boolean };
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="源码模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 150));
         window.webContents.sendInputEvent({ type: "char", keyCode: "x" });
         await new Promise((resolve) => setTimeout(resolve, 100));
         const sourceTyped = await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.textContent?.includes("x") === true`, true) as boolean;
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Backspace" });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Backspace" });
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 200));
 
         const initial = await window.webContents.executeJavaScript(`(() => {
@@ -1194,7 +1472,7 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 100));
         const themedEditUndone = await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent?.includes('主题输入') === false && document.querySelector('.cm-content')?.textContent?.includes('测试粗体') === true`, true) as boolean;
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="源码模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const final = await window.webContents.executeJavaScript(`({ source: document.querySelector(".cm-content")?.textContent ?? "", singleEditor: document.querySelectorAll(".cm-editor").length === 1 })`, true) as { source: string; singleEditor: boolean };
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "K", modifiers: ["control"] });
@@ -1217,7 +1495,7 @@ function createMainWindow(): BrowserWindow {
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("![图片测试](missing-image.png)\n\n末尾");
         await new Promise((resolve) => setTimeout(resolve, 800));
-        await window.webContents.executeJavaScript(`document.querySelector('[data-testid=editor-mode-switch] button:last-child')?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
         const imageWorkflow = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (check) => { for (let i = 0; i < 80; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const shown = await wait(() => Boolean(document.querySelector('.cm-live-image')));
@@ -1282,7 +1560,23 @@ function createMainWindow(): BrowserWindow {
           document.querySelector('.cm-live-formula')?.click();
           return { rendered, codeStyled, selected: window.getSelection()?.toString() === '$N = 2F + 1$' };
         })()`, true) as { rendered: boolean; codeStyled: boolean; selected: boolean };
-        const valid = formulaWorkflow.rendered && formulaWorkflow.codeStyled && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableUndoEdit.undone && tableUndoEdit.selected && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+        await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("# 一级\n\n### 跳级标题");
+        const markdownDiagnostics = await window.webContents.executeJavaScript(`(async () => {
+          const wait = async (check) => { for (let i = 0; i < 80; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
+          const shown = await wait(() => [...document.querySelectorAll('.diagnostic-item')].some(item => item.textContent?.includes('HEADING_LEVEL_SKIPPED')));
+          [...document.querySelectorAll('.diagnostic-item')].find(item => item.textContent?.includes('HEADING_LEVEL_SKIPPED'))?.click();
+          const jumped = await wait(() => window.getSelection()?.toString().includes('跳级标题') === true);
+          document.querySelector('.cm-content')?.focus();
+          return { shown, jumped };
+        })()`, true) as { shown: boolean; jumped: boolean };
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("# 一级\n\n## 二级");
+        const markdownDiagnosticCleared = await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80; i++) { if (![...document.querySelectorAll('.diagnostic-item')].some(item => item.textContent?.includes('HEADING_LEVEL_SKIPPED'))) return true; await new Promise(r => setTimeout(r, 50)); } return false; })()`, true) as boolean;
+        const valid = tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && formulaWorkflow.rendered && formulaWorkflow.codeStyled && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableUndoEdit.undone && tableUndoEdit.selected && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
@@ -1290,7 +1584,7 @@ function createMainWindow(): BrowserWindow {
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { formulaWorkflow, tableWorkflow, tableUndoEdit, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, formulaWorkflow, tableWorkflow, tableUndoEdit, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });
@@ -1317,7 +1611,11 @@ function createMainWindow(): BrowserWindow {
             && document.querySelectorAll('.explorer-title button, .new-tab').length === 0
         })`, true) as { hasTabs: boolean; hasDropHint: boolean; hasNewButton: boolean; uniqueFileActions: boolean };
         if (!before.uniqueFileActions) throw new Error("File actions must exist exactly once in the activity bar.");
-        await window.webContents.executeJavaScript(`document.querySelector(".app-shell")?.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true }))`, true);
+        await window.webContents.executeJavaScript(`(() => {
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(["# smoke"], "smoke.md", { type: "text/markdown" }));
+          document.querySelector(".app-shell")?.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        })()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const drag = await window.webContents.executeJavaScript(`({ hasDropOverlay: Boolean(document.querySelector(".drop-overlay")) })`, true) as { hasDropOverlay: boolean };
         await window.webContents.executeJavaScript(`document.querySelector(".app-shell")?.dispatchEvent(new DragEvent("dragleave", { bubbles: true, cancelable: true }))`, true);
@@ -1331,7 +1629,7 @@ function createMainWindow(): BrowserWindow {
           };
           check();
         })`, true);
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:first-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="分栏"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 150));
         const after = await window.webContents.executeJavaScript(`({
           tabText: document.querySelector(\".document-tab.active .tab-select span\")?.textContent ?? \"\",
@@ -1380,6 +1678,11 @@ function createMainWindow(): BrowserWindow {
           sidebarSeparator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
           await new Promise((resolve) => setTimeout(resolve, 50));
           const sidebarAfter = Number(document.querySelector('.sidebar-resize-handle')?.getAttribute('aria-valuenow'));
+          const sidebarToggleButton = document.querySelector('[aria-label="切换资源管理器"]');
+          if (sidebarToggleButton?.getAttribute('aria-pressed') !== 'true') {
+            sidebarToggleButton?.click();
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
           document.querySelector('[aria-label="切换资源管理器"]')?.click();
           await new Promise((resolve) => setTimeout(resolve, 50));
           const sidebarHidden = !document.querySelector('.explorer-panel');
@@ -1524,9 +1827,8 @@ function createMainWindow(): BrowserWindow {
         const selectionBoxCount = await window.webContents.executeJavaScript(`Number(document.querySelector(".preview-selection-layer")?.getAttribute("data-box-count") ?? 0)`, true) as number;
         const wysiwyg = await window.webContents.executeJavaScript(`(async () => {
           try {
-          const switcher = document.querySelector("[data-testid=editor-mode-switch]");
-          const sourceButton = switcher?.querySelector("button:first-child");
-          const visualButton = switcher?.querySelector("button:last-child");
+          const sourceButton = document.querySelector('button[aria-label="分栏"]');
+          const visualButton = document.querySelector('button[aria-label="写作模式"]');
           if (!(sourceButton instanceof HTMLButtonElement) || !(visualButton instanceof HTMLButtonElement)) return { exists: false };
           visualButton.click();
           const waitFor = async (predicate, timeout = 8000) => {
@@ -2398,8 +2700,8 @@ function createMainWindow(): BrowserWindow {
             }
             return false;
           };
-          const visualButton = document.querySelector("[data-testid=editor-mode-switch] button:last-child");
-          const sourceButton = document.querySelector("[data-testid=editor-mode-switch] button:first-child");
+          const visualButton = document.querySelector('button[aria-label="写作模式"]');
+          const sourceButton = document.querySelector('button[aria-label="源码模式"]');
           if (!(visualButton instanceof HTMLButtonElement) || !(sourceButton instanceof HTMLButtonElement)) return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButton: false, searchButton: false };
           visualButton.click();
           await waitFor(() => Boolean(document.querySelector(".wysiwyg-editor-layer.active .wysiwyg-content")));
@@ -2425,7 +2727,7 @@ function createMainWindow(): BrowserWindow {
           const inlineOutline = await waitFor(() => Boolean(document.querySelector(".open-editor-entry .inline-outline .document-outline")));
           const repairControl = document.querySelector('[data-testid="repair-web-markdown"]');
           const repairButton = repairControl instanceof HTMLButtonElement && !repairControl.disabled;
-          const searchButton = Boolean(document.querySelector('button[aria-label="查找/替换"]'));
+          const searchButton = Boolean(document.querySelector('button[aria-label="搜索"]'));
           document.querySelector('button[aria-label="写作模式"]')?.click();
           sourceButton.click();
           await waitFor(() => Boolean(document.querySelector(".source-editor-layer.active")));
@@ -2444,7 +2746,7 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const themeAfter = await window.webContents.executeJavaScript(`document.querySelector(\".app-shell\")?.classList.contains(\"theme-dark\") ?? false`, true) as boolean;
-        await window.webContents.executeJavaScript(`document.querySelector("[data-testid=editor-mode-switch] button:last-child")?.click()`, true);
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 300));
         window.show();
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -2453,7 +2755,7 @@ function createMainWindow(): BrowserWindow {
         await window.webContents.executeJavaScript(`document.querySelector(\".theme-toggle\")?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
-        if (!after.hasSidebarResizeHandle || !accessibility.keyboardSidebarSeparator || !accessibility.sidebarToggle) throw new Error("Resource explorer resize or visibility smoke failed.");
+        if (!after.hasSidebarResizeHandle || !accessibility.keyboardSidebarSeparator || !accessibility.sidebarToggle) throw new Error(`Resource explorer resize or visibility smoke failed: ${JSON.stringify({ hasSidebarResizeHandle: after.hasSidebarResizeHandle, keyboardSidebarSeparator: accessibility.keyboardSidebarSeparator, sidebarToggle: accessibility.sidebarToggle })}`);
         const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && splitHeaderLayout.contained && splitHeaderLayout.previewScrollable && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && mermaidRendered && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.hasActions && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && wysiwyg.exists && wysiwyg.ready && wysiwyg.edited && wysiwyg.directInputReady && wysiwyg.caretInside && wysiwyg.browserInserted && wysiwyg.formatted && wysiwyg.italicChineseApplied && wysiwyg.italicChineseVisible && wysiwyg.italicToggleOff && wysiwyg.boldToggleOff && wysiwyg.formatSelectionRetained && wysiwyg.toolbarLinkApplied && wysiwyg.headingLevelsApplied && wysiwyg.paragraphBreaks && wysiwyg.mergedParagraphs && wysiwyg.compositionDeferred && wysiwyg.blankParagraphAdded && wysiwyg.blankParagraphDeduplicated && wysiwyg.blankParagraphDeleted && wysiwyg.multilinePasteHandled && wysiwyg.imageAltEdited && wysiwyg.formulaStructuredApplied && wysiwyg.codeStructuredApplied && wysiwyg.linkStructuredApplied && wysiwyg.inlineCodeStructuredApplied && wysiwyg.mixedInlineEdited && wysiwyg.mixedAtomsProtected && wysiwyg.protectedSelectionRejected && wysiwyg.crossBlockFormatted && wysiwyg.crossBlockPasted && wysiwyg.crossBlockProtectedRejected && wysiwyg.dualFormatCopy && wysiwyg.selectAllCopy && wysiwyg.externalHtmlPaste && wysiwyg.imaRichPaste && wysiwyg.blockInserted && wysiwyg.blockDragged && wysiwyg.blockDuplicated && wysiwyg.blockDeleted && wysiwyg.blockKeyboardMoved && wysiwyg.blockToolbarPersistent && wysiwyg.blockToolbarRepeatedMove && wysiwyg.repeatedBreaksCompacted && wysiwyg.tableCellEdited && wysiwyg.tableColumnInserted && wysiwyg.tableAlignmentApplied && wysiwyg.tableRowAppended && wysiwyg.listItemEdited && wysiwyg.listDirectReady && wysiwyg.listBrowserInserted && wysiwyg.listIndented && wysiwyg.listOutdented && wysiwyg.nestedParentEdited && wysiwyg.nestedSubtreeIndented && wysiwyg.nestedSubtreeOutdented && wysiwyg.quoteEdited && wysiwyg.taskToggled && wysiwyg.undone && wysiwyg.redone && wysiwyg.sourceCardApplied && wysiwyg.sourceRestored && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.previewMermaid && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButton && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
         console.log(JSON.stringify({ uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
       await finishSmoke("ui", valid === true, { uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
@@ -2505,6 +2807,7 @@ if (singleInstanceAcquired) app.whenReady().then(() => {
     : join(app.getPath("userData"), "recovery-v1");
   recoveryStore = new RecoveryStore(recoveryDirectory);
   recentFileStore = new RecentFileStore(join(app.getPath("userData"), "recent-files-v1.json"));
+  documentHistoryStore = new DocumentHistoryStore(join(app.getPath("userData"), "document-history-v1"));
   wechatApiConfigStore = new WechatApiConfigStore(
     join(app.getPath("userData"), "wechat-api-config-v1.json"),
     {

@@ -1,4 +1,5 @@
 import type { Diagnostic } from "@fantastic-editor/document-core";
+import type { DiagnosticSeverity, SourceRange } from "@fantastic-editor/document-core";
 import type {
   PreviewDerivedEntry,
   PreviewDerivedUpdate,
@@ -78,7 +79,14 @@ function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   return result;
 }
 
-export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] {
+export interface FormattedDiagnostic {
+  key: string;
+  text: string;
+  severity: DiagnosticSeverity;
+  source?: SourceRange;
+}
+
+export function formatDiagnosticItems(diagnostics: readonly Diagnostic[]): FormattedDiagnostic[] {
   const groups = new Map<string, Diagnostic[]>();
   for (const item of diagnostics) {
     const reference = typeof item.details?.resourceReference === "string" ? item.details.resourceReference : "";
@@ -87,7 +95,8 @@ export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] 
     if (group) group.push(item);
     else groups.set(key, [item]);
   }
-  return [...groups.values()].map((items) => {
+  const severityRank: Record<DiagnosticSeverity, number> = { info: 0, warning: 1, error: 2, blocking: 3 };
+  return [...groups.entries()].map(([key, items]) => {
     const item = items[0]!;
     const reference = typeof item.details?.resourceReference === "string" ? item.details.resourceReference : "";
     const lines = [...new Set(items.flatMap(({ source }) => source ? [source.startLine] : []))];
@@ -96,8 +105,17 @@ export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] 
       : "";
     const suggestion = item.suggestedActions?.join("；");
     const context = [location, reference ? `图片：${reference}` : ""].filter(Boolean).join(" · ");
-    return `${context ? `${context} · ` : ""}${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`;
+    return {
+      key,
+      text: `${context ? `${context} · ` : ""}${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`,
+      severity: items.reduce((highest, candidate) => severityRank[candidate.severity] > severityRank[highest] ? candidate.severity : highest, item.severity),
+      ...(item.source ? { source: item.source } : {}),
+    };
   });
+}
+
+export function formatDiagnostics(diagnostics: readonly Diagnostic[]): string[] {
+  return formatDiagnosticItems(diagnostics).map(({ text }) => text);
 }
 
 export function createPreviewSession(

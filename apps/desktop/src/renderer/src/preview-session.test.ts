@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseDocument } from "@fantastic-editor/document-core";
+import { parseDocument, type Diagnostic } from "@fantastic-editor/document-core";
 import type { PreviewDerivedUpdate, ResolveResult } from "@fantastic-editor/shared";
-import { applyPreviewDerivedUpdate, createPreviewSession, formatDiagnostics } from "./preview-session.js";
+import { applyPreviewDerivedUpdate, createPreviewSession, formatDiagnosticItems, formatDiagnostics } from "./preview-session.js";
 import type { ParseWorkerSuccess } from "./workers/parse-worker-protocol";
 
 const SOURCE_HASH = "unused";
@@ -79,7 +79,7 @@ async function fixture(): Promise<{ parse: ParseWorkerSuccess; resolved: Resolve
 
 describe("PreviewSession", () => {
   it("formats resource reasons and suggested actions for users", () => {
-    expect(formatDiagnostics([{
+    const diagnostics = [{
       id: "diagnostic-1",
       code: "RESOURCE_MISSING",
       severity: "blocking",
@@ -97,7 +97,9 @@ describe("PreviewSession", () => {
       source: { from: 40, to: 60, startLine: 8, startColumn: 1, endLine: 8, endColumn: 21, precision: "exact" },
       details: { resourceReference: "assets/缺失图片.png" },
       suggestedActions: ["请检查路径。"],
-    }])).toEqual(["第 3、8 行，共 2 处 · 图片：assets/缺失图片.png · 找不到图片文件。 建议：请检查路径。（错误代码：RESOURCE_MISSING）"]);
+    }] satisfies Diagnostic[];
+    expect(formatDiagnostics(diagnostics)).toEqual(["第 3、8 行，共 2 处 · 图片：assets/缺失图片.png · 找不到图片文件。 建议：请检查路径。（错误代码：RESOURCE_MISSING）"]);
+    expect(formatDiagnosticItems(diagnostics)[0]).toMatchObject({ severity: "blocking", source: { startLine: 3 } });
   });
 
   it("combines only fully matching parse, resolution and manifest identities", async () => {

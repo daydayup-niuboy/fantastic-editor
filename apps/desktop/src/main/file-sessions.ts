@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants, type Dirent, type Stats } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
@@ -50,6 +50,7 @@ interface FileSession {
   isUntitled: boolean;
   requiresSave: boolean;
   displayNameOverride?: string;
+  acknowledgedExternalFingerprint?: FileFingerprint;
   temporaryRoot?: string;
 }
 
@@ -320,6 +321,90 @@ export class FileSessionManager {
     const session = this.#sessions.get(sessionId);
     if (!session) return "document.md";
     return session.displayNameOverride ?? (session.isUntitled ? "document.md" : basename(session.path));
+  }
+
+  getSavedPath(sessionId: string): string | null {
+    const session = this.#sessions.get(sessionId);
+    return session && !session.isUntitled ? session.path : null;
+  }
+
+  async checkExternalChange(sessionId: string): Promise<"unchanged" | "changed" | "missing"> {
+    const session = this.#sessions.get(sessionId);
+    if (!session || session.isUntitled) return "unchanged";
+    try {
+      const current = fingerprintFromStat(await stat(session.path));
+      return fingerprintsEqual(session.fingerprint, current) || (session.acknowledgedExternalFingerprint && fingerprintsEqual(session.acknowledgedExternalFingerprint, current)) ? "unchanged" : "changed";
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "changed";
+    }
+  }
+
+  async acknowledgeExternalChange(sessionId: string): Promise<void> {
+    const session = this.#sessions.get(sessionId);
+    if (session && !session.isUntitled) session.acknowledgedExternalFingerprint = fingerprintFromStat(await stat(session.path));
+  }
+
+  async reloadExternalChange(sessionId: string): Promise<{ status: "reloaded"; editorText: string } | { status: "failed"; error: string }> {
+    const session = this.#sessions.get(sessionId);
+    if (!session || session.isUntitled) return { status: "failed", error: "文件会话已失效。" };
+    try {
+      const before = fingerprintFromStat(await stat(session.path));
+      const bytes = await readFile(session.path);
+      const after = fingerprintFromStat(await stat(session.path));
+      if (!fingerprintsEqual(before, after)) return { status: "failed", error: "文件在重新加载期间再次发生变化，请重试。" };
+      const decoded = decodeMarkdown(bytes, { allowEncodingConversion: true, mixedLineSeparator: session.lineSeparator });
+      if (decoded.status !== "decoded") return { status: "failed", error: "外部版本的编码需要重新打开文件后确认。" };
+      if (decoded.editorText.length > FANTASTIC_EDITOR_LIMITS.maxSourceCharacters) return { status: "failed", error: "外部版本超过 1,000 万字符编辑上限。" };
+      session.encoding = decoded.encoding;
+      session.lineSeparator = decoded.lineSeparator;
+      session.fingerprint = after;
+      session.requiresSave = decoded.requiresSave;
+      delete session.acknowledgedExternalFingerprint;
+      return { status: "reloaded", editorText: decoded.editorText };
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "重新加载外部版本失败。" };
+    }
+  }
+
+  async getWorkspaceFilePath(request: OpenWorkspaceFileRequest): Promise<string | null> {
+    const workspace = this.#folderWorkspace;
+    if (!workspace || request.workspaceId !== workspace.workspaceId || request.workspaceRevision !== workspace.workspaceRevision) return null;
+    const file = workspace.files.get(request.fileId); if (!file) return null;
+    try {
+      const path = await realpath(join(workspace.rootRealPath, ...file.relativePath.split("/")));
+      return isPathInside(workspace.rootRealPath, path) && isMarkdownFile(path) && (await stat(path)).isFile() ? path : null;
+    } catch { return null; }
+  }
+
+  async mutateWorkspaceFile(request: OpenWorkspaceFileRequest, action: "duplicate" | "move" | "delete", targetDirectory?: string): Promise<{ workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } | null> {
+    const workspace = this.#folderWorkspace; const source = await this.getWorkspaceFilePath(request);
+    if (!workspace || !source) return null;
+    let target = source;
+    if (action === "duplicate") {
+      const extension = extname(source); const stem = basename(source, extension);
+      for (let index = 1; index <= 999; index++) {
+        const candidate = join(dirname(source), `${stem} 副本${index === 1 ? "" : ` ${index}`}${extension}`);
+        try { await lstat(candidate); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { target = candidate; break; } throw error; }
+      }
+      if (target === source) return null; await copyFile(source, target);
+    } else if (action === "move") {
+      if (!targetDirectory) return null; const directory = await realpath(targetDirectory);
+      if (!isPathInside(workspace.rootRealPath, directory)) return null;
+      target = join(directory, basename(source));
+      try { await lstat(target); return null; } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      await rename(source, target);
+    } else await rm(source);
+    const removedSessionIds: string[] = [];
+    for (const [sessionId, session] of this.#sessions) if (session.path.toLocaleLowerCase("en-US") === source.toLocaleLowerCase("en-US")) {
+      if (action === "move") { session.path = await realpath(target); session.documentRealPath = session.path; }
+      else if (action === "delete") { this.#sessions.delete(sessionId); removedSessionIds.push(sessionId); }
+    }
+    const previousIds = new Map([...workspace.files.values()].map((file) => [file.relativePath.toLocaleLowerCase("en-US"), file.fileId]));
+    const scanned = await scanMarkdownFiles(workspace.rootRealPath);
+    const files = scanned.files.map((file) => ({ ...file, fileId: previousIds.get(file.relativePath.toLocaleLowerCase("en-US")) ?? file.fileId }));
+    workspace.files = new Map(files.map((file) => [file.fileId, file])); workspace.resourceNameIndex = scanned.resourceNameIndex; workspace.workspaceRevision += 1;
+    for (const session of this.#sessions.values()) if (session.workspaceId === workspace.workspaceId) session.workspaceRevision = workspace.workspaceRevision;
+    return { workspaceRevision: workspace.workspaceRevision, files, removedSessionIds };
   }
 
   getActiveResolutionContext(): SingleFileResolutionContext | undefined {
@@ -755,6 +840,7 @@ export class FileSessionManager {
         delete session.displayNameOverride;
       }
       session.fingerprint = fingerprintFromStat(await stat(session.path));
+      delete session.acknowledgedExternalFingerprint;
       session.requiresSave = false;
       return {
         status: "saved",

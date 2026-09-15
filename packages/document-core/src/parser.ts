@@ -705,6 +705,83 @@ function countNodes(nodes: DocumentNode[], type: NodeType): number {
   return nodes.reduce((total, node) => total + (node.type === type ? 1 : 0) + countNodes(node.children ?? [], type), 0);
 }
 
+function collectHeadingDiagnostics(nodes: readonly DocumentNode[], diagnostics: Diagnostic[], previous = { level: 0 }): void {
+  for (const node of nodes) {
+    if (node.type === "heading") {
+      const level = Number(node.attributes.level);
+      if (previous.level > 0 && level > previous.level + 1) diagnostics.push({
+        id: `diagnostic-HEADING_LEVEL_SKIPPED-${node.source.from}`,
+        code: "HEADING_LEVEL_SKIPPED",
+        severity: "warning",
+        category: "syntax",
+        message: `标题层级从 H${previous.level} 跳到了 H${level}。`,
+        source: node.source,
+        nodeId: node.id,
+        suggestedActions: [`改为 H${previous.level + 1}，或补充中间层级。`],
+      });
+      previous.level = level;
+    }
+    if (node.children) collectHeadingDiagnostics(node.children, diagnostics, previous);
+  }
+}
+
+function collectFenceDiagnostics(text: string, locate: ReturnType<typeof createSourceLocator>, diagnostics: Diagnostic[]): void {
+  const lines = text.split("\n");
+  const lineStarts = createLineStarts(text);
+  let opening: { character: "`" | "~"; length: number; from: number } | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (!opening) {
+      const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (match) opening = { character: match[1]![0] as "`" | "~", length: match[1]!.length, from: lineStarts[index] ?? 0 };
+      continue;
+    }
+    const closing = new RegExp(`^ {0,3}${opening.character === "`" ? "`" : "~"}{${opening.length},}\\s*$`);
+    if (closing.test(line)) opening = null;
+  }
+  if (!opening) return;
+  const source = locate(opening.from, Math.min(text.length, opening.from + (lines.at(-1)?.length ?? 0) + 1));
+  diagnostics.push({
+    id: `diagnostic-CODE_FENCE_UNCLOSED-${opening.from}`,
+    code: "CODE_FENCE_UNCLOSED",
+    severity: "warning",
+    category: "syntax",
+    message: "代码围栏没有闭合，后续正文可能全部被当作代码。",
+    source,
+    suggestedActions: [`在文末添加 ${opening.character.repeat(opening.length)}。`],
+  });
+}
+
+function collectTableDiagnostics(text: string, locate: ReturnType<typeof createSourceLocator>, diagnostics: Diagnostic[]): void {
+  const scanLines = createBlockScanText(text).split("\n");
+  const sourceLines = text.split("\n");
+  const lineStarts = createLineStarts(text);
+  const isDelimiter = (line: string) => {
+    const cells = tableCellRanges(line, 0);
+    return cells.length > 0 && cells.every(({ from, to }) => /^:?-+:?$/.test(line.slice(from, to)));
+  };
+  for (let index = 1; index < scanLines.length; index += 1) {
+    if (!isDelimiter(scanLines[index]!) || !scanLines[index - 1]!.includes("|")) continue;
+    const expected = tableCellRanges(scanLines[index - 1]!, 0).length;
+    if (expected === 0 || tableCellRanges(scanLines[index]!, 0).length !== expected) continue;
+    for (let row = index + 1; row < scanLines.length && scanLines[row]!.trim() && scanLines[row]!.includes("|"); row += 1) {
+      const actual = tableCellRanges(scanLines[row]!, 0).length;
+      if (actual === expected) continue;
+      const from = lineStarts[row] ?? 0;
+      const source = locate(from, from + sourceLines[row]!.length);
+      diagnostics.push({
+        id: `diagnostic-TABLE_COLUMN_COUNT_MISMATCH-${from}`,
+        code: "TABLE_COLUMN_COUNT_MISMATCH",
+        severity: "warning",
+        category: "syntax",
+        message: `表格该行有 ${actual} 列，表头为 ${expected} 列。`,
+        source,
+        suggestedActions: ["补齐或删除单元格，使列数与表头一致。"],
+      });
+    }
+  }
+}
+
 export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDocument> {
   const editorText = canonicalizeEditorText(input.editorText);
   const parserProfile = input.parserProfile ?? PARSER_PROFILE;
@@ -751,6 +828,17 @@ export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDo
       });
     }
     if (result.diagnostic) diagnostics.push(result.diagnostic);
+    if (image.syntax !== "wiki-image" && !image.alt.trim()) diagnostics.push({
+      id: `diagnostic-IMAGE_ALT_MISSING-${image.from}`,
+      code: "IMAGE_ALT_MISSING",
+      severity: "info",
+      category: "compatibility",
+      message: "图片缺少说明文字，复制到 Word、网页或无障碍阅读时难以识别。",
+      source,
+      nodeId,
+      referenceKey: result.reference.referenceKey,
+      suggestedActions: ["在图片方括号中填写简短说明。"],
+    });
   }
 
   for (const formula of scanFormulas(editorText)) {
@@ -800,6 +888,9 @@ export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDo
     });
   }
 
+  collectHeadingDiagnostics(children, diagnostics);
+  collectFenceDiagnostics(editorText, locate, diagnostics);
+  collectTableDiagnostics(editorText, locate, diagnostics);
   children.sort((left, right) => left.source.from - right.source.from || left.id.localeCompare(right.id));
   return {
     schema: "fantastic-editor-parsed-document",

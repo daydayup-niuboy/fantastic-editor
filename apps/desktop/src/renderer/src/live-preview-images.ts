@@ -1,5 +1,6 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { isTrailingSnapshotEdit } from "./live-preview-snapshot";
 
 interface ImageProjection { from: number; to: number; src: string; alt: string }
 export interface ImageSnapshot { source: string; images: ImageProjection[] }
@@ -78,7 +79,10 @@ export function imageDecorations(state: EditorState, snapshot: ImageSnapshot | n
 export const livePreviewImages = StateField.define<{ snapshot: ImageSnapshot | null; decorations: DecorationSet }>({
   create: () => ({ snapshot: null, decorations: Decoration.none }),
   update(value, transaction) {
-    let snapshot = transaction.docChanged ? null : value.snapshot;
+    const boundary = value.snapshot?.images.at(-1)?.to ?? 0;
+    let snapshot = transaction.docChanged
+      ? value.snapshot && isTrailingSnapshotEdit(transaction, boundary) ? { ...value.snapshot, source: transaction.state.doc.toString() } : null
+      : value.snapshot;
     for (const effect of transaction.effects) if (effect.is(setImageSnapshot)) snapshot = effect.value;
     return { snapshot, decorations: imageDecorations(transaction.state, snapshot) };
   },

@@ -28,6 +28,8 @@ import type {
   DeleteWechatThemeRequest,
   ExportWechatThemeRequest,
   ImportWechatThemeRequest,
+  AiInvocationRequest,
+  AiInvocationEvent,
 } from "@fantastic-editor/shared";
 
 const api: FantasticEditorApi = {
@@ -57,6 +59,7 @@ const api: FantasticEditorApi = {
   renameOpenFile: (request: RenameOpenFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.renameOpenFile, request),
   saveCurrentFile: (request: SaveFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveCurrentFile, request),
   saveCurrentFileAs: (request: SaveFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveCurrentFileAs, request),
+  checkExternalFileChange: (request: { sessionId: string }) => ipcRenderer.invoke(IPC_CHANNELS.checkExternalFileChange, request),
   selectAndImportImages: (request: ImageImportSessionRequest) => ipcRenderer.invoke(IPC_CHANNELS.selectAndImportImages, request),
   importDroppedImages: async (request: ImageImportSessionRequest, values: unknown[]) => {
     try {
@@ -111,6 +114,26 @@ const api: FantasticEditorApi = {
   deleteWechatTheme: (request: DeleteWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.deleteWechatTheme, request),
   exportWechatTheme: (request: ExportWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.exportWechatTheme, request),
   importWechatTheme: (request: ImportWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.importWechatTheme, request),
+  detectAiProviders: () => ipcRenderer.invoke(IPC_CHANNELS.detectAiProvider),
+  invokeAi: (request: AiInvocationRequest) => ipcRenderer.invoke(IPC_CHANNELS.invokeAi, request),
+  cancelAi: (request: { requestId: string }) => ipcRenderer.invoke(IPC_CHANNELS.cancelAi, request),
+  onAiInvocationEvent: (listener: (event: AiInvocationEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, update: AiInvocationEvent) => listener(update);
+    ipcRenderer.on(IPC_CHANNELS.aiInvocationEvent, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.aiInvocationEvent, handler);
+  },
+  getDeepSeekConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getDeepSeekConfig),
+  saveDeepSeekConfig: (request: { apiKey: string }) => ipcRenderer.invoke(IPC_CHANNELS.saveDeepSeekConfig, request),
+  clearDeepSeekConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearDeepSeekConfig),
+  testDeepSeekConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testDeepSeekConnection),
+  getGeminiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getGeminiConfig),
+  saveGeminiConfig: (request: { apiKey: string }) => ipcRenderer.invoke(IPC_CHANNELS.saveGeminiConfig, request),
+  clearGeminiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearGeminiConfig),
+  testGeminiConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testGeminiConnection),
+  listDocumentHistory: (request: { sessionId: string }) => ipcRenderer.invoke(IPC_CHANNELS.listDocumentHistory, request),
+  restoreDocumentHistory: (request: { sessionId: string; snapshotId: string; currentText: string }) => ipcRenderer.invoke(IPC_CHANNELS.restoreDocumentHistory, request),
+  showOpenFileMenu: (request: { sessionId: string }) => ipcRenderer.invoke(IPC_CHANNELS.showOpenFileMenu, request),
+  showWorkspaceFileMenu: (request: OpenWorkspaceFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.showWorkspaceFileMenu, request),
 };
 
 contextBridge.exposeInMainWorld("fantasticEditor", Object.freeze(api));

@@ -1,5 +1,6 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import { isTrailingSnapshotEdit } from "./live-preview-snapshot";
 
 interface Formula { from: number; to: number; html: string; block: boolean }
 export interface FormulaSnapshot { source: string; formulas: Formula[] }
@@ -52,7 +53,10 @@ export function formulaDecorations(state: EditorState, snapshot: FormulaSnapshot
 export const livePreviewFormulas = StateField.define<{ snapshot: FormulaSnapshot | null; decorations: DecorationSet }>({
   create: () => ({ snapshot: null, decorations: Decoration.none }),
   update(value, transaction) {
-    let snapshot = transaction.docChanged ? null : value.snapshot;
+    const boundary = value.snapshot?.formulas.at(-1)?.to ?? 0;
+    let snapshot = transaction.docChanged
+      ? value.snapshot && isTrailingSnapshotEdit(transaction, boundary) ? { ...value.snapshot, source: transaction.state.doc.toString() } : null
+      : value.snapshot;
     for (const effect of transaction.effects) if (effect.is(setFormulaSnapshot)) snapshot = effect.value;
     return { snapshot, decorations: formulaDecorations(transaction.state, snapshot) };
   },

@@ -23,7 +23,7 @@ import { renderMermaidPreview } from "./mermaid-preview";
 import { buildWechatThemeProjectionCss } from "./wechat-theme-projection";
 import { htmlToMarkdown } from "./html-to-markdown";
 import { resolveClipboardPaste, type PasteIntent } from "./clipboard-paste";
-import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
+import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult, type TextSearchOptions } from "./visible-text-search";
 import {
   createMarkdownBlockInsertion,
   createMarkdownBlockMove,
@@ -147,7 +147,7 @@ export interface WysiwygEditorHandle {
   insertImages(anchorId: string, receipts: readonly ImportedAssetReceipt[]): boolean;
   commitPending(): boolean;
   revealSourceRange(from: number, to: number): boolean;
-  find(query: string, direction?: number, previousIndex?: number): SearchNavigationResult;
+  find(query: string, direction?: number, previousIndex?: number, options?: TextSearchOptions): SearchNavigationResult;
   clearSearch(): void;
   focus(): void;
 }
@@ -1076,9 +1076,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       target.scrollIntoView({ block: "center", behavior: "smooth" });
       return true;
     },
-    find(query, direction = 1, previousIndex = -1) {
+    find(query, direction = 1, previousIndex = -1, options = {}) {
       const content = contentRef.current;
-      return content ? applyVisibleTextSearch(content, query, direction, previousIndex) : { index: 0, total: 0 };
+      return content ? applyVisibleTextSearch(content, query, direction, previousIndex, options) : { index: 0, total: 0 };
     },
     clearSearch() {
       clearVisibleTextSearch();

@@ -15,7 +15,7 @@ import {
   type PreviewSourceAnchor,
 } from "./preview-sync";
 import { renderMermaidPreview } from "./mermaid-preview";
-import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult } from "./visible-text-search";
+import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult, type TextSearchOptions } from "./visible-text-search";
 
 interface SynchronizedPreviewProps {
   html: string;
@@ -37,7 +37,7 @@ export interface SynchronizedPreviewHandle {
   updateSelection(selection: EditorSourceSelection | null): void;
   clearTransientState(): void;
   revealSourceRange(from: number, to: number): boolean;
-  find(query: string, direction?: number, previousIndex?: number): SearchNavigationResult;
+  find(query: string, direction?: number, previousIndex?: number, options?: TextSearchOptions): SearchNavigationResult;
   clearSearch(): void;
 }
 
@@ -182,9 +182,9 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
       anchor.element.scrollIntoView({ block: "center", behavior: "smooth" });
       return true;
     },
-    find(query, direction = 1, previousIndex = -1) {
+    find(query, direction = 1, previousIndex = -1, options = {}) {
       const content = contentRef.current;
-      return content ? applyVisibleTextSearch(content, query, direction, previousIndex) : { index: 0, total: 0 };
+      return content ? applyVisibleTextSearch(content, query, direction, previousIndex, options) : { index: 0, total: 0 };
     },
     clearSearch() {
       clearVisibleTextSearch();

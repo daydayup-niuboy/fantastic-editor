@@ -1,6 +1,7 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { markdownTableDetails, markdownTableInsertedCellOffset, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
+import { isTrailingSnapshotEdit } from "./live-preview-snapshot";
 
 interface TableCell { from: number; to: number; text: string }
 interface TableProjection { from: number; to: number; rows: TableCell[][] }
@@ -127,7 +128,10 @@ export function tableDecorations(state: EditorState, snapshot: TableSnapshot | n
 export const livePreviewTables = StateField.define<{ snapshot: TableSnapshot | null; decorations: DecorationSet }>({
   create: () => ({ snapshot: null, decorations: Decoration.none }),
   update(value, transaction) {
-    let snapshot = transaction.docChanged ? null : value.snapshot;
+    const boundary = value.snapshot?.tables.at(-1)?.to ?? 0;
+    let snapshot = transaction.docChanged
+      ? value.snapshot && isTrailingSnapshotEdit(transaction, boundary) ? { ...value.snapshot, source: transaction.state.doc.toString() } : null
+      : value.snapshot;
     for (const effect of transaction.effects) if (effect.is(setTableSnapshot)) snapshot = effect.value;
     return { snapshot, decorations: tableDecorations(transaction.state, snapshot) };
   },

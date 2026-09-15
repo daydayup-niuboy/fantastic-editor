@@ -663,6 +663,7 @@ export interface FantasticEditorApi {
   renameOpenFile(request: RenameOpenFileRequest): Promise<RenameOpenFileResult>;
   saveCurrentFile(request: SaveFileRequest): Promise<SaveFileResult>;
   saveCurrentFileAs(request: SaveFileRequest): Promise<SaveFileResult>;
+  checkExternalFileChange(request: { sessionId: string }): Promise<{ status: "unchanged" | "kept" | "save-as" | "missing" } | { status: "reloaded"; editorText: string } | { status: "failed"; error: string }>;
   selectAndImportImages(request: ImageImportSessionRequest): Promise<ImportImagesResult>;
   importDroppedImages(request: ImageImportSessionRequest, files: unknown[]): Promise<ImportImagesResult>;
   selectAndInstallFont(): Promise<SelectAndInstallFontResult>;
@@ -687,7 +688,53 @@ export interface FantasticEditorApi {
   deleteWechatTheme(request: DeleteWechatThemeRequest): Promise<DeleteWechatThemeResult>;
   exportWechatTheme(request: ExportWechatThemeRequest): Promise<ExportWechatThemeResult>;
   importWechatTheme(request: ImportWechatThemeRequest): Promise<ImportWechatThemeResult>;
+  detectAiProviders(): Promise<AiProviderStatus[]>;
+  invokeAi(request: AiInvocationRequest): Promise<AiInvocationResult>;
+  cancelAi(request: { requestId: string }): Promise<{ status: "cancelled" | "missing" }>;
+  onAiInvocationEvent(listener: (event: AiInvocationEvent) => void): () => void;
+  getDeepSeekConfig(): Promise<DeepSeekConfigResult>;
+  saveDeepSeekConfig(request: { apiKey: string }): Promise<DeepSeekConfigResult>;
+  clearDeepSeekConfig(): Promise<DeepSeekConfigResult>;
+  testDeepSeekConnection(): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
+  getGeminiConfig(): Promise<GeminiConfigResult>;
+  saveGeminiConfig(request: { apiKey: string }): Promise<GeminiConfigResult>;
+  clearGeminiConfig(): Promise<GeminiConfigResult>;
+  testGeminiConnection(): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
+  listDocumentHistory(request: { sessionId: string }): Promise<{ status: "listed"; items: DocumentHistoryItem[] } | { status: "failed"; error: string }>;
+  restoreDocumentHistory(request: { sessionId: string; snapshotId: string; currentText: string }): Promise<{ status: "restored"; editorText: string } | { status: "failed"; error: string }>;
+  showOpenFileMenu(request: { sessionId: string }): Promise<{ action: "activate" | "history" | "rename" | "none" }>;
+  showWorkspaceFileMenu(request: OpenWorkspaceFileRequest): Promise<{ action: "open" | "open-new-tab" | "duplicate" | "move" | "history" | "rename" | "delete" | "none"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }>;
 }
+
+export interface DocumentHistoryItem { snapshotId: string; createdAt: string; characterCount: number; }
+
+export type AiActionId = "polish" | "rewrite" | "condense" | "expand" | "correct" | "continue" | "title" | "summarize" | "custom";
+export type AiProviderId = "codex-cli" | "claude-cli" | "deepseek-api" | "gemini-api";
+export type DeepSeekConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
+export type GeminiConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
+export type AiScope = "selection" | "block";
+export interface AiTextAnchor { documentId: string; sourceHash: string; from: number; to: number; expectedText: string; }
+export interface AiInvocationRequest {
+  requestId: string;
+  providerId: AiProviderId;
+  scope: AiScope;
+  actionId: AiActionId;
+  anchor: AiTextAnchor;
+  content: string;
+  customInstruction?: string;
+}
+export type AiInvocationEvent =
+  | { requestId: string; sequence: number; type: "chunk"; text: string }
+  | { requestId: string; sequence: number; type: "completed"; result: string }
+  | { requestId: string; sequence: number; type: "cancelled" }
+  | { requestId: string; sequence: number; type: "failed"; code: string; message: string };
+export type AiInvocationResult =
+  | { status: "completed"; result: string }
+  | { status: "cancelled" }
+  | { status: "failed"; code: string; error: string };
+export type AiProviderStatus =
+  | { providerId: AiProviderId; displayName: string; status: "available"; version: string }
+  | { providerId: AiProviderId; displayName: string; status: "unavailable"; guidance: string };
 
 export type SelectAndInstallFontResult =
   | { status: "installed"; fontFamily: string; bytes: Uint8Array }

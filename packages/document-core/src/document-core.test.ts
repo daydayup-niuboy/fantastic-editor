@@ -171,4 +171,37 @@ describe("ParsedDocument", () => {
       second.resourceReferences[0]?.referenceKey,
     );
   });
+
+  it("reports deterministic Markdown structure issues with source lines", async () => {
+    const parsed = await parseDocument({
+      documentId: "doc-structure-check",
+      editorText: [
+        "# 一级标题",
+        "### 跳级标题",
+        "",
+        "![](image.png)",
+        "",
+        "| A | B |",
+        "| --- | --- |",
+        "| only one |",
+        "",
+        "```ts",
+        "const value = 1;",
+      ].join("\n"),
+    });
+    expect(parsed.diagnostics.map(({ code, source }) => [code, source?.startLine])).toEqual(expect.arrayContaining([
+      ["HEADING_LEVEL_SKIPPED", 2],
+      ["IMAGE_ALT_MISSING", 4],
+      ["TABLE_COLUMN_COUNT_MISMATCH", 8],
+      ["CODE_FENCE_UNCLOSED", 10],
+    ]));
+  });
+
+  it("does not report structure issues for valid Markdown", async () => {
+    const parsed = await parseDocument({
+      documentId: "doc-structure-valid",
+      editorText: "# 一级\n\n## 二级\n\n![说明](image.png)\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```ts\nconst value = 1;\n```\n",
+    });
+    expect(parsed.diagnostics).toEqual([]);
+  });
 });

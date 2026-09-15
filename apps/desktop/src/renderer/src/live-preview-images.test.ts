@@ -18,6 +18,11 @@ describe("Live Preview image snapshot", () => {
     expect(edited.field(livePreviewImages).decorations.size).toBe(0);
     expect(imageDecorations(edited, snapshot).size).toBe(0);
   });
+  it("keeps stable widgets when text is appended after every projected image", () => {
+    const initial = state().update({ effects: setImageSnapshot.of(snapshot) }).state;
+    const appended = initial.update({ changes: { from: initial.doc.length, insert: "\n新行" } }).state;
+    expect(appended.field(livePreviewImages).decorations.size).toBe(1);
+  });
   it("rejects invalid and overlapping ranges", () => {
     expect(imageDecorations(state(), { source, images: [{ ...snapshot.images[0]!, from: -1 }] }).size).toBe(0);
     expect(imageDecorations(state(), { source, images: [snapshot.images[0]!, snapshot.images[0]!] }).size).toBe(1);

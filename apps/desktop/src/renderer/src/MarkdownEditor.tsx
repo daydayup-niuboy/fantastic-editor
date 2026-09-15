@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type DragEvent } from "react";
-import { defaultKeymap, history, historyKeymap, moveLineUp, redo, undo } from "@codemirror/commands";
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap, indentWithTab, moveLineUp, redo, undo } from "@codemirror/commands";
 import { moveLineDownWithSpace } from "./move-line-down";
 import { markdown } from "@codemirror/lang-markdown";
 import { Strikethrough } from "@lezer/markdown";
-import { search } from "@codemirror/search";
+import { SearchQuery, search, setSearchQuery, openSearchPanel, closeSearchPanel } from "@codemirror/search";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, EditorState, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from "@codemirror/view";
 import type { ImportedAssetReceipt, WechatThemeDefinition } from "@fantastic-editor/shared";
 import { buildEditorClipboardPayload as buildClipboardPayload } from "./clipboard-paste";
@@ -18,7 +19,8 @@ import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./li
 import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projection";
-import type { SearchNavigationResult } from "./visible-text-search";
+import type { SearchNavigationResult, TextSearchOptions } from "./visible-text-search";
+import { applyEditorTextReplacement, captureEditorTextAnchor, type EditorTextAnchor } from "./editor-text-transaction";
 
 interface MarkdownEditorProps {
   imagePreviewHtml?: string;
@@ -34,6 +36,7 @@ interface MarkdownEditorProps {
   readingMaxWidth?: string;
   fontSize?: number;
   wechatThemeDefinition?: WechatThemeDefinition;
+  typewriterMode?: boolean;
 }
 
 export interface MarkdownEditorHandle {
@@ -44,9 +47,13 @@ export interface MarkdownEditorHandle {
   applyTextChange(change: WysiwygTextChange): string | null;
   undo(): boolean;
   redo(): boolean;
-  find(query: string, direction?: number, previousIndex?: number): SearchNavigationResult;
-  replaceCurrent(query: string, replacement: string): boolean;
-  replaceAll(query: string, replacement: string): number;
+  selectedText(): string;
+  captureTextAnchor(documentId: string): Promise<EditorTextAnchor | null>;
+  applyTextReplacement(documentId: string, anchor: EditorTextAnchor, insert: string): Promise<boolean>;
+  replaceDocument(expectedText: string, insert: string): boolean;
+  find(query: string, direction?: number, previousIndex?: number, options?: TextSearchOptions): SearchNavigationResult;
+  replaceCurrent(query: string, replacement: string, options?: TextSearchOptions): boolean;
+  replaceAll(query: string, replacement: string, options?: TextSearchOptions): number;
   revealSourceRange(from: number, to: number): boolean;
   clearSearch(): void;
   focus(): void;
@@ -60,8 +67,38 @@ const IMAGE_FILE = /\.(?:png|jpe?g|gif|webp|svg)$/i;
 const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 const VIEWPORT_TRACKING_RATIO = 0.3;
 
+export function createSearchQuery(query: string, options: TextSearchOptions): SearchQuery {
+  return new SearchQuery({ search: query.trim(), caseSensitive: options.caseSensitive ?? false, wholeWord: options.wholeWord ?? false, literal: true });
+}
+
+export function searchMatches(state: EditorState, query: SearchQuery): Array<{ from: number; to: number }> {
+  const matches: Array<{ from: number; to: number }> = [];
+  const cursor = query.getCursor(state);
+  for (let next = cursor.next(); !next.done; next = cursor.next()) matches.push({ from: next.value.from, to: next.value.to });
+  return matches;
+}
+
+export function skipAutoClosedCharacter(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty || !/[（(\p{Pe}\p{Pf}'"]/u.test(view.state.sliceDoc(selection.head, selection.head + 1))) return false;
+  view.dispatch({ selection: { anchor: selection.head + 1 }, userEvent: "select" });
+  return true;
+}
+
+function centerTypewriterCaret(view: EditorView, position: number): void {
+  const caret = view.coordsAtPos(position);
+  if (!caret) return;
+  const viewport = view.scrollDOM.getBoundingClientRect();
+  view.scrollDOM.scrollTop += caret.top - viewport.top - viewport.height / 2 + (caret.bottom - caret.top) / 2;
+}
+
+const editorTabBinding = {
+  ...indentWithTab,
+  run: (view: EditorView) => skipAutoClosedCharacter(view) || indentWithTab.run!(view),
+};
+
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
-  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition },
+  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition, typewriterMode = false },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -74,6 +111,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onStatusRef = useRef(onStatus);
   const literalPasteUntilRef = useRef(0);
   const livePreviewCompartmentRef = useRef(new Compartment());
+  const typewriterModeRef = useRef(typewriterMode);
+  const typewriterLineRef = useRef<number | null>(null);
+  typewriterModeRef.current = typewriterMode;
   onChangeRef.current = onChange;
   onViewportAnchorChangeRef.current = onViewportAnchorChange;
   onSelectionChangeRef.current = onSelectionChange;
@@ -144,55 +184,58 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       const view = viewRef.current;
       return view ? redo(view) : false;
     },
-    find(query, direction = 1, previousIndex = -1) {
+    selectedText() {
       const view = viewRef.current;
-      const text = view?.state.doc.toString() ?? "";
+      if (!view) return "";
+      const selection = view.state.selection.main;
+      return selection.empty ? "" : view.state.sliceDoc(selection.from, selection.to);
+    },
+    captureTextAnchor(documentId) {
+      const view = viewRef.current;
+      return view ? captureEditorTextAnchor(documentId, view.state) : Promise.resolve(null);
+    },
+    applyTextReplacement(documentId, anchor, insert) {
+      const view = viewRef.current;
+      return view ? applyEditorTextReplacement(view, documentId, anchor, insert) : Promise.resolve(false);
+    },
+    replaceDocument(expectedText, insert) {
+      const view = viewRef.current;
+      if (!view || view.state.doc.toString() !== expectedText) return false;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert }, selection: { anchor: 0 }, scrollIntoView: true, userEvent: "input.history.restore" });
+      view.focus();
+      return true;
+    },
+    find(query, direction = 1, previousIndex = -1, options = {}) {
+      const view = viewRef.current;
       const needle = query.trim();
       if (!view || !needle) return { index: 0, total: 0 };
-      const lower = text.toLocaleLowerCase();
-      const normalized = needle.toLocaleLowerCase();
-      const offsets: number[] = [];
-      let cursor = 0;
-      while (cursor <= lower.length - normalized.length) {
-        const found = lower.indexOf(normalized, cursor);
-        if (found < 0) break;
-        offsets.push(found);
-        cursor = Math.max(found + normalized.length, found + 1);
-      }
-      if (offsets.length === 0) return { index: 0, total: 0 };
+      const searchQuery = createSearchQuery(needle, options);
+      const matches = searchMatches(view.state, searchQuery);
+      openSearchPanel(view);
+      view.dispatch({ effects: setSearchQuery.of(searchQuery) });
+      if (matches.length === 0) return { index: 0, total: 0 };
       const next = previousIndex >= 0
-        ? (previousIndex + (direction < 0 ? offsets.length - 1 : 1)) % offsets.length
-        : direction < 0 ? offsets.length - 1 : 0;
-      const from = offsets[next]!;
-      view.dispatch({ selection: { anchor: from, head: from + needle.length }, scrollIntoView: true });
-      view.focus();
-      return { index: next + 1, total: offsets.length };
+        ? (previousIndex + (direction < 0 ? matches.length - 1 : 1)) % matches.length
+        : direction < 0 ? matches.length - 1 : 0;
+      const match = matches[next]!;
+      view.dispatch({ selection: { anchor: match.from, head: match.to }, scrollIntoView: true });
+      return { index: next + 1, total: matches.length };
     },
-    replaceCurrent(query, replacement) {
+    replaceCurrent(query, replacement, options = {}) {
       const view = viewRef.current;
       if (!view || !query) return false;
       const selection = view.state.selection.main;
-      const selected = view.state.sliceDoc(selection.from, selection.to);
-      if (selected.toLocaleLowerCase() !== query.toLocaleLowerCase()) return false;
+      const matches = searchMatches(view.state, createSearchQuery(query, options));
+      if (!matches.some((match) => match.from === selection.from && match.to === selection.to)) return false;
       view.dispatch({ changes: { from: selection.from, to: selection.to, insert: replacement }, selection: { anchor: selection.from + replacement.length }, userEvent: "input.replace" });
       view.focus();
       return true;
     },
-    replaceAll(query, replacement) {
+    replaceAll(query, replacement, options = {}) {
       const view = viewRef.current;
       const needle = query.trim();
       if (!view || !needle) return 0;
-      const text = view.state.doc.toString();
-      const lower = text.toLocaleLowerCase();
-      const normalized = needle.toLocaleLowerCase();
-      const changes: Array<{ from: number; to: number; insert: string }> = [];
-      let cursor = 0;
-      while (cursor <= lower.length - normalized.length) {
-        const found = lower.indexOf(normalized, cursor);
-        if (found < 0) break;
-        changes.push({ from: found, to: found + needle.length, insert: replacement });
-        cursor = Math.max(found + needle.length, found + 1);
-      }
+      const changes = searchMatches(view.state, createSearchQuery(needle, options)).map(({ from, to }) => ({ from, to, insert: replacement }));
       if (changes.length === 0) return 0;
       view.dispatch({ changes, userEvent: "input.replace.all" });
       view.focus();
@@ -209,7 +252,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       const view = viewRef.current;
       if (!view) return;
       const position = view.state.selection.main.head;
-      view.dispatch({ selection: { anchor: position } });
+      closeSearchPanel(view);
+      view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "" })), selection: { anchor: position } });
     },
     focus() {
       viewRef.current?.requestMeasure();
@@ -352,12 +396,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       state: EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(), highlightSpecialChars(), history(), highlightActiveLine(), search(),
+          lineNumbers(), highlightSpecialChars(), history(), highlightActiveLine(), search({ createPanel: () => {
+            // App owns the visible search controls; opening this panel enables CodeMirror's native match decorations.
+            const dom = document.createElement("div");
+            dom.hidden = true;
+            return { dom };
+          } }), closeBrackets(),
           bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough] }),
           livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas] : []),
-          keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
+          Prec.highest(keymap.of([editorTabBinding])), keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
           EditorView.domEventHandlers({
-            keydown: (event) => {
+            keydown: (event, editorView) => {
               if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
                 literalPasteUntilRef.current = Date.now() + 2000;
               }
@@ -416,6 +465,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
             },
           }),
           EditorView.updateListener.of((update) => {
+            const typewriterLine = update.state.doc.lineAt(update.state.selection.main.head).number;
             if (update.docChanged) {
               for (const [anchorId, anchor] of anchorsRef.current) {
                 anchorsRef.current.set(anchorId, mapImageInsertionAnchor(anchor, update.changes));
@@ -423,6 +473,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
               onChangeRef.current(update.state.doc.toString());
             }
             if (update.selectionSet || update.docChanged) emitSelection(update.view);
+            if (update.selectionSet && typewriterModeRef.current) {
+              const head = update.state.selection.main.head;
+              const line = typewriterLine;
+              if (typewriterLineRef.current !== line) {
+                typewriterLineRef.current = line;
+                centerTypewriterCaret(update.view, head);
+              }
+            }
             if (update.viewportChanged || update.docChanged) scheduleViewportAnchor();
           }),
         ],
@@ -465,6 +523,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   }, [livePreview]);
 
   useEffect(() => {
+    if (!typewriterMode) { typewriterLineRef.current = null; return; }
+    const view = viewRef.current;
+    if (!view) return;
+    const head = view.state.selection.main.head;
+    typewriterLineRef.current = view.state.doc.lineAt(head).number;
+    centerTypewriterCaret(view, head);
+  }, [typewriterMode]);
+
+  useEffect(() => {
     const view = viewRef.current;
     if (!view || view.state.doc.toString() === value) return;
     view.dispatch({
@@ -475,11 +542,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !livePreview) return;
+    if (!view || !livePreview || !imagePreviewHtml) return;
     view.dispatch({ effects: [
-      setImageSnapshot.of(imagePreviewHtml ? imageSnapshotFromHtml(value, imagePreviewHtml) : null),
-      setTableSnapshot.of(imagePreviewHtml ? tableSnapshotFromHtml(value, imagePreviewHtml) : null),
-      setFormulaSnapshot.of(imagePreviewHtml ? formulaSnapshotFromHtml(value, imagePreviewHtml) : null),
+      setImageSnapshot.of(imageSnapshotFromHtml(value, imagePreviewHtml)),
+      setTableSnapshot.of(tableSnapshotFromHtml(value, imagePreviewHtml)),
+      setFormulaSnapshot.of(formulaSnapshotFromHtml(value, imagePreviewHtml)),
     ] });
   }, [value, imagePreviewHtml, livePreview]);
 
@@ -509,7 +576,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     "--live-font-size": fontSize ? `${fontSize}px` : undefined,
   } as CSSProperties;
 
-  return <><div className={`editor-host${wechatThemeDefinition ? " wechat-theme-active" : ""}`} ref={hostRef} style={editorStyle} onDragOverCapture={(event) => {
+  return <><div className={`editor-host${wechatThemeDefinition ? " wechat-theme-active" : ""}${typewriterMode ? " typewriter-mode" : ""}`} ref={hostRef} style={editorStyle} onDragOverCapture={(event) => {
     if ([...event.dataTransfer.items].some((item) => item.kind === "file")) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
