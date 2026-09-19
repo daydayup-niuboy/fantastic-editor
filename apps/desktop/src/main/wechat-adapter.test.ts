@@ -6,7 +6,7 @@ import type { OutputContext, ResolutionRecord } from "@fantastic-editor/shared";
 import { formulaReferenceKey, type OutputFormulaAsset } from "./docx-adapter.js";
 import type { OutputResourceAsset } from "./offline-html-adapter.js";
 import { generateWechatHtml } from "./wechat-adapter.js";
-import { resolveWechatTheme } from "./wechat-themes.js";
+import { resolveWechatTheme } from "@fantastic-editor/shared";
 import { collectMermaidNodes, mermaidReferenceKey, type OutputMermaidAsset } from "./mermaid-assets.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");

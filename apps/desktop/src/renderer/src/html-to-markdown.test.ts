@@ -9,6 +9,12 @@ describe("external HTML converter guardrails", () => {
     expect(result.warnings[0]).toContain("输入限制");
   });
 
+  it("drops application-only theme decoration when converting pasted HTML", () => {
+    const result = htmlToMarkdown('<h2><span data-fantastic-theme-decoration="true" aria-hidden="true">✦</span>章节标题</h2>');
+    expect(result.markdown).not.toContain("✦");
+    expect(result.markdown).toContain("章节标题");
+  });
+
   it("never returns executable markup in the non-DOM fallback", () => {
     const result = htmlToMarkdown("<script>alert(1)</script><p>正文</p>");
     expect(result.markdown).not.toContain("<script>");

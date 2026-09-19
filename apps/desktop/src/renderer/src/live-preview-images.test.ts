@@ -10,13 +10,16 @@ describe("Live Preview image snapshot", () => {
   it("shows an inactive image and reveals source when selected", () => {
     expect(imageDecorations(state(), snapshot).size).toBe(1);
     expect(imageDecorations(state().update({ selection: { anchor: 1 } }).state, snapshot).size).toBe(0);
+    expect(imageDecorations(state().update({ selection: { anchor: snapshot.images[0]!.to } }).state, snapshot).size).toBe(1);
   });
-  it("rejects stale snapshots and clears widgets immediately on edit", () => {
+  it("remaps an unchanged image after an edit before it and clears only a changed image", () => {
     const initial = state().update({ effects: setImageSnapshot.of(snapshot) }).state;
     expect(initial.field(livePreviewImages).decorations.size).toBe(1);
-    const edited = initial.update({ changes: { from: 0, insert: "前文" } }).state;
+    const shifted = initial.update({ changes: { from: 0, insert: "前文" } }).state;
+    expect(shifted.field(livePreviewImages).decorations.size).toBe(1);
+    const edited = initial.update({ changes: { from: 3, to: 4, insert: "新" } }).state;
     expect(edited.field(livePreviewImages).decorations.size).toBe(0);
-    expect(imageDecorations(edited, snapshot).size).toBe(0);
+    expect(imageDecorations(shifted, snapshot).size).toBe(0);
   });
   it("keeps stable widgets when text is appended after every projected image", () => {
     const initial = state().update({ effects: setImageSnapshot.of(snapshot) }).state;

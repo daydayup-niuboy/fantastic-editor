@@ -58,6 +58,14 @@ export interface ResourceReference {
   normalizedResolvedRef: string;
 }
 
+export interface SvgContentReference {
+  referenceKey: string;
+  nodeId: string;
+  source: SourceRange;
+  sourceContentHash: string;
+  content: string;
+}
+
 export type NodeType =
   | "text"
   | "softBreak"
@@ -108,6 +116,7 @@ export interface ParsedDocument {
   metadata: Record<string, unknown>;
   children: DocumentNode[];
   resourceReferences: ResourceReference[];
+  svgContents?: SvgContentReference[];
   diagnostics: Diagnostic[];
   statistics: {
     headings: number;

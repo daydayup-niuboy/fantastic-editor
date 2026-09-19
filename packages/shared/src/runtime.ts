@@ -44,6 +44,7 @@ export const IPC_CHANNELS = {
   importWechatTheme: "theme:wechat-import",
   detectAiProvider: "ai:detect-provider",
   invokeAi: "ai:invoke",
+  suggestWechatTheme: "ai:suggest-wechat-theme",
   cancelAi: "ai:cancel",
   aiInvocationEvent: "ai:invocation-event",
   getDeepSeekConfig: "ai:deepseek-config-get",

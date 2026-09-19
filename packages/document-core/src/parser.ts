@@ -1,7 +1,7 @@
 import MarkdownIt, { type Token } from "markdown-it";
 import { katex } from "@mdit/plugin-katex";
 import { tasklist } from "@mdit/plugin-tasklist";
-import { sha256 } from "./hash.js";
+import { lengthPrefixed, sha256 } from "./hash.js";
 import {
   PARSER_PROFILE,
   UDM_VERSION,
@@ -13,6 +13,7 @@ import {
   type ResourceReference,
   type ResourceSyntax,
   type SourceRange,
+  type SvgContentReference,
 } from "./model.js";
 import { createResourceReference } from "./resources.js";
 import { canonicalizeEditorText, createLineStarts, createSourceLocator } from "./text.js";
@@ -45,6 +46,8 @@ interface PreviewEnvironment extends Record<string, unknown> {
   inlineLinks: RawInlineRange[];
   inlineCodeIndex: number;
   inlineLinkIndex: number;
+  svgContents: SvgContentReference[];
+  svgContentIndex: number;
 }
 
 const PREVIEW_SOURCE_TOKEN_KIND: Readonly<Record<string, string>> = {
@@ -233,10 +236,40 @@ for (const ruleName of ["fence", "code_block"] as const) {
   if (!renderCodeBlock) continue;
   previewMarkdown.renderer.rules[ruleName] = (tokens, index, options, environment, renderer) => {
     const token = tokens[index];
+    if (ruleName === "fence" && token?.info.trim().split(/\s+/, 1)[0]?.toLowerCase() === "svg") {
+      const preview = environment as unknown as PreviewEnvironment;
+      const svg = preview.svgContents[preview.svgContentIndex++];
+      if (svg && /^[a-f\d]{64}$/i.test(svg.referenceKey) && /^[a-f\d]{64}$/i.test(svg.sourceContentHash)) {
+        return `<span class="inline-svg-placeholder" role="img" data-reference-key="${svg.referenceKey}" data-source-content-hash="${svg.sourceContentHash}" data-source-from="${svg.source.from}" data-source-to="${svg.source.to}" data-source-kind="svg-content" data-source-block="true">[SVG 等待安全转换]</span>`;
+      }
+    }
     const sourceAttributes = token ? renderer.renderAttrs(token) : "";
     const rendered = renderCodeBlock(tokens, index, options, environment, renderer);
     return sourceAttributes ? rendered.replace("<pre", `<pre${sourceAttributes}`) : rendered;
   };
+}
+
+async function collectSvgContents(nodes: readonly DocumentNode[], documentId: string): Promise<SvgContentReference[]> {
+  const result: SvgContentReference[] = [];
+  for (const node of nodes) {
+    if (node.type === "codeBlock" && node.attributes.language === "svg" && typeof node.attributes.value === "string") {
+      const content = node.attributes.value;
+      const sourceContentHash = await sha256(content);
+      const referenceKey = await sha256(lengthPrefixed([
+        "svg-content",
+        documentId,
+        String(node.source.from),
+        String(node.source.to),
+        sourceContentHash,
+      ]));
+      node.attributes.svgReferenceKey = referenceKey;
+      node.attributes.svgContentHash = sourceContentHash;
+      node.attributes.safetyState = "pending";
+      result.push({ referenceKey, nodeId: node.id, source: node.source, sourceContentHash, content });
+    }
+    if (node.children) result.push(...await collectSvgContents(node.children, documentId));
+  }
+  return result;
 }
 
 
@@ -395,7 +428,9 @@ function scanFormulas(text: string): RawFormulaMatch[] {
       mask(from, to);
     }
   };
-  collect(/\$\$([\s\S]*?)\$\$/g, true, "$$");
+  // Block math is line-delimited. Treating every adjacent `$$` as a block
+  // delimiter lets malformed inline text swallow a later real formula.
+  collect(/^ {0,3}\$\$[ \t]*\n([\s\S]*?)\n {0,3}\$\$[ \t]*$/gm, true, "$$");
   collect(/\\\[([\s\S]*?)\\\]/g, true, "\\[");
   collect(/\$(?!\$)([^$\n]+?)\$/g, false, "$");
   collect(/\\\(([^\n]*?)\\\)/g, false, "\\(");
@@ -790,6 +825,7 @@ export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDo
   let idSequence = 0;
   const nextId = () => `node-${++idSequence}`;
   const children = buildBlockTree(editorText, nextId);
+  const svgContents = await collectSvgContents(children, input.documentId);
   const resourceReferences: ResourceReference[] = [];
   const diagnostics: Diagnostic[] = [];
 
@@ -902,6 +938,7 @@ export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDo
     metadata: {},
     children,
     resourceReferences,
+    ...(svgContents.length > 0 ? { svgContents } : {}),
     diagnostics,
     statistics: {
       headings: countNodes(children, "heading"),
@@ -915,6 +952,7 @@ export async function parseDocument(input: ParseDocumentInput): Promise<ParsedDo
 export function renderPreviewHtml(
   editorText: string,
   resourceReferences: readonly ResourceReference[] = [],
+  svgContents: readonly SvgContentReference[] = [],
 ): string {
   const canonicalText = canonicalizeEditorText(editorText);
   const formulas = scanFormulas(canonicalText);
@@ -931,6 +969,8 @@ export function renderPreviewHtml(
     inlineLinks: [],
     inlineCodeIndex: 0,
     inlineLinkIndex: 0,
+    svgContents: [...svgContents],
+    svgContentIndex: 0,
   };
   const tokens = previewMarkdown.parse(canonicalText, environment);
   const inlineCodes = scanInlineCodeRanges(canonicalText);

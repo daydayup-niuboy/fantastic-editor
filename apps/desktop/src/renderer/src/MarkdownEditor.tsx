@@ -3,6 +3,7 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab, moveLineUp, redo, undo } from "@codemirror/commands";
 import { moveLineDownWithSpace } from "./move-line-down";
 import { markdown } from "@codemirror/lang-markdown";
+import { languages } from "@codemirror/language-data";
 import { Strikethrough } from "@lezer/markdown";
 import { SearchQuery, search, setSearchQuery, openSearchPanel, closeSearchPanel } from "@codemirror/search";
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -18,6 +19,8 @@ import { livePreviewExtension } from "./live-preview";
 import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
 import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
+import { livePreviewStructuredCode, setStructuredCodeSnapshot, structuredCodeSnapshotFromHtml } from "./live-preview-structured-code";
+import { livePreviewMermaid, mermaidSnapshotFromHtml, setMermaidSnapshot } from "./live-preview-mermaid";
 import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projection";
 import type { SearchNavigationResult, TextSearchOptions } from "./visible-text-search";
 import { applyEditorTextReplacement, captureEditorTextAnchor, type EditorTextAnchor } from "./editor-text-transaction";
@@ -37,6 +40,8 @@ interface MarkdownEditorProps {
   fontSize?: number;
   wechatThemeDefinition?: WechatThemeDefinition;
   typewriterMode?: boolean;
+  darkMode?: boolean;
+  spellCheck?: boolean;
 }
 
 export interface MarkdownEditorHandle {
@@ -98,7 +103,7 @@ const editorTabBinding = {
 };
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
-  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition, typewriterMode = false },
+  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition, typewriterMode = false, darkMode = false, spellCheck = true },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -111,6 +116,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onStatusRef = useRef(onStatus);
   const literalPasteUntilRef = useRef(0);
   const livePreviewCompartmentRef = useRef(new Compartment());
+  const spellCheckCompartmentRef = useRef(new Compartment());
   const typewriterModeRef = useRef(typewriterMode);
   const typewriterLineRef = useRef<number | null>(null);
   typewriterModeRef.current = typewriterMode;
@@ -402,8 +408,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
             dom.hidden = true;
             return { dom };
           } }), closeBrackets(),
-          bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough] }),
-          livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas] : []),
+          bracketMatching(), syntaxHighlighting(defaultHighlightStyle, { fallback: true }), markdown({ extensions: [Strikethrough], codeLanguages: languages }),
+          spellCheckCompartmentRef.current.of(EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", autocorrect: spellCheck ? "on" : "off" })),
+          livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas, livePreviewStructuredCode, livePreviewMermaid] : []),
           Prec.highest(keymap.of([editorTabBinding])), keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
           EditorView.domEventHandlers({
             keydown: (event, editorView) => {
@@ -517,10 +524,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: livePreviewCompartmentRef.current.reconfigure(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas] : []),
+      effects: livePreviewCompartmentRef.current.reconfigure(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas, livePreviewStructuredCode, livePreviewMermaid] : []),
     });
     view.requestMeasure();
   }, [livePreview]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: spellCheckCompartmentRef.current.reconfigure(EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", autocorrect: spellCheck ? "on" : "off" })) });
+  }, [spellCheck]);
 
   useEffect(() => {
     if (!typewriterMode) { typewriterLineRef.current = null; return; }
@@ -547,16 +558,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       setImageSnapshot.of(imageSnapshotFromHtml(value, imagePreviewHtml)),
       setTableSnapshot.of(tableSnapshotFromHtml(value, imagePreviewHtml)),
       setFormulaSnapshot.of(formulaSnapshotFromHtml(value, imagePreviewHtml)),
+      setStructuredCodeSnapshot.of(structuredCodeSnapshotFromHtml(value, imagePreviewHtml)),
+      setMermaidSnapshot.of(mermaidSnapshotFromHtml(value, imagePreviewHtml, darkMode, fontFamily ?? "sans-serif")),
     ] });
-  }, [value, imagePreviewHtml, livePreview]);
+  }, [value, imagePreviewHtml, livePreview, darkMode, fontFamily]);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     const files = [...event.dataTransfer.files];
     if (files.length === 0) return;
+    // Never let Chromium navigate the editor window to an unsupported dropped
+    // file. Non-image files continue bubbling to the application-level handler.
+    event.preventDefault();
     const images = files.filter((file) => IMAGE_FILE.test(file.name));
     const markdownFiles = files.filter((file) => MARKDOWN_FILE.test(file.name));
     if (images.length === 0) return;
-    event.preventDefault();
     event.stopPropagation();
     if (images.length !== files.length || markdownFiles.length > 0) {
       onDropRejected?.("Markdown 与图片不能混合拖入，请分开操作。");

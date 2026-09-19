@@ -219,6 +219,30 @@ describe("FileSessionManager", () => {
     expect(await readFile(path, "utf8")).toBe("# 标题\n\n正文\n");
   });
 
+  it("imports a GB18030 INI as a safe Markdown fence without changing the source", async () => {
+    const directory = await createTemporaryDirectory();
+    const path = join(directory, "table.ini");
+    const bytes = Buffer.from([0x5b, 0x54, 0x5d, 0x0d, 0x0a, 0xc3, 0xfb, 0xb3, 0xc6, 0x3d, 0xd0, 0xc7, 0xbc, 0xb6, 0x0d, 0x0a]);
+    await writeFile(path, bytes);
+    const manager = new FileSessionManager();
+    const inspected = await manager.importStructuredText(path);
+    expect(inspected.status).toBe("confirmation-required");
+    if (inspected.status !== "confirmation-required") throw new Error("Expected confirmation.");
+    expect(inspected.confirmation.preview).toContain("名称=星级");
+    const opened = await manager.importStructuredText(path, {
+      allowEncodingConversion: true,
+      expectedFingerprint: inspected.confirmation.fingerprint,
+    });
+    expect(opened.status).toBe("opened");
+    if (opened.status !== "opened") throw new Error("Expected imported document.");
+    expect(opened.session).toMatchObject({ displayName: "导入 · table.ini", isUntitled: true, importedStructured: true, editorText: "```ini\n[T]\n名称=星级\n```\n" });
+    expect(await readFile(path)).toEqual(bytes);
+    const edited = opened.session!.editorText.replace("星级", "等级");
+    const saved = await manager.saveImportedStructured({ sessionId: opened.session!.sessionId, editorText: edited });
+    expect(saved).toMatchObject({ status: "saved", saveMode: "original", displayName: "table.ini" });
+    expect(new TextDecoder("gb18030", { fatal: true }).decode(await readFile(path))).toBe("[T]\r\n名称=等级\r\n");
+  });
+
   it("rejects a stale conversion preview when the file changes during confirmation", async () => {
     const directory = await createTemporaryDirectory();
     const path = join(directory, "changing.md");

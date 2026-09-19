@@ -1,5 +1,5 @@
 import type { Diagnostic } from "@fantastic-editor/document-core";
-import type { DiagnosticSeverity, SourceRange } from "@fantastic-editor/document-core";
+import type { DiagnosticSeverity, SourceRange, SvgContentReference } from "@fantastic-editor/document-core";
 import type {
   PreviewDerivedEntry,
   PreviewDerivedUpdate,
@@ -45,13 +45,15 @@ function isValidEntry(
   key: string,
   entry: PreviewDerivedEntry,
   snapshot: ResolutionSnapshot,
+  svgContents: readonly SvgContentReference[],
 ): boolean {
   const source = snapshot.records[key];
-  return Boolean(source)
+  const inlineSvg = svgContents.find((item) => item.referenceKey === key);
+  const identityValid = source
+    ? source.state === "resolved" && typeof source.contentHash === "string" && entry.sourceContentHash === source.contentHash
+    : Boolean(inlineSvg && entry.sourceContentHash === inlineSvg.sourceContentHash);
+  return identityValid
     && entry.referenceKey === key
-    && source?.state === "resolved"
-    && typeof source.contentHash === "string"
-    && entry.sourceContentHash === source.contentHash
     && HASH_PATTERN.test(entry.sourceContentHash)
     && entry.transformProfile.length > 0
     && HANDLE_PATTERN.test(entry.previewAssetHandle)
@@ -63,8 +65,9 @@ function isValidEntry(
 function hasValidEntries(
   entries: Record<string, PreviewDerivedEntry>,
   snapshot: ResolutionSnapshot,
+  svgContents: readonly SvgContentReference[],
 ): boolean {
-  return Object.entries(entries).every(([key, entry]) => isValidEntry(key, entry, snapshot));
+  return Object.entries(entries).every(([key, entry]) => isValidEntry(key, entry, snapshot, svgContents));
 }
 
 function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
@@ -90,7 +93,9 @@ export function formatDiagnosticItems(diagnostics: readonly Diagnostic[]): Forma
   const groups = new Map<string, Diagnostic[]>();
   for (const item of diagnostics) {
     const reference = typeof item.details?.resourceReference === "string" ? item.details.resourceReference : "";
-    const key = reference ? `${item.code}\u0000${reference}` : item.id;
+    const key = item.code === "RAW_HTML_IMAGE_BLOCKED"
+      ? item.code
+      : reference ? `${item.code}\u0000${reference}` : item.id;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -105,6 +110,14 @@ export function formatDiagnosticItems(diagnostics: readonly Diagnostic[]): Forma
       : "";
     const suggestion = item.suggestedActions?.join("；");
     const context = [location, reference ? `图片：${reference}` : ""].filter(Boolean).join(" · ");
+    if (item.code === "RAW_HTML_IMAGE_BLOCKED") {
+      return {
+        key,
+        text: `${location ? `${location} · ` : ""}已安全忽略 ${items.length} 个原始 HTML 内嵌图片。为避免 SVG 脚本或外部资源执行，请改用本地图片、Markdown 图片语法或受支持的 svg 围栏。`,
+        severity: "warning" as const,
+        ...(item.source ? { source: item.source } : {}),
+      };
+    }
     return {
       key,
       text: `${context ? `${context} · ` : ""}${item.message}${suggestion ? ` 建议：${suggestion}` : ""}（错误代码：${item.code}）`,
@@ -136,7 +149,7 @@ export function createPreviewSession(
     )
     || !Number.isInteger(resolved.previewDerivedManifest.manifestRevision)
     || resolved.previewDerivedManifest.manifestRevision < 0
-    || !hasValidEntries(resolved.previewDerivedManifest.entries, resolved.resolutionSnapshot)
+    || !hasValidEntries(resolved.previewDerivedManifest.entries, resolved.resolutionSnapshot, parse.parsedDocument.svgContents ?? [])
   ) {
     return { status: "rejected", error: "预览资源记录或派生清单内容无效。" };
   }
@@ -169,7 +182,7 @@ export function applyPreviewDerivedUpdate(
     || update.workspaceRevision !== session.workspaceRevision
     || !Number.isInteger(update.manifestRevision)
     || update.manifestRevision <= manifest.manifestRevision
-    || !hasValidEntries(update.entries, session.resolutionSnapshot)
+    || !hasValidEntries(update.entries, session.resolutionSnapshot, session.parsedDocument.svgContents ?? [])
   ) {
     return { status: "rejected", error: "PreviewDerivedUpdate 已过期、倒退或内容无效。" };
   }

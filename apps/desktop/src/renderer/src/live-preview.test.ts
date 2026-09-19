@@ -58,4 +58,63 @@ describe("CodeMirror live preview decorations", () => {
     const inactiveTokens = collectLivePreviewTokens(createState(doc, 0));
     expect(inactiveTokens.some((token) => token.kind === "list-marker")).toBe(true);
   });
+
+  it("projects an inactive thematic break and reveals its source while editing", () => {
+    const doc = "上文\n\n---\n\n下文";
+    expect(collectLivePreviewTokens(createState(doc, 0))).toContainEqual({ from: 4, to: 7, kind: "thematic-break" });
+    expect(collectLivePreviewTokens(createState(doc, 5)).some((token) => token.kind === "thematic-break")).toBe(false);
+  });
+
+  it("keeps every decoration range valid for a multiline blockquote", () => {
+    const doc = [
+      "# Markdown 编辑器 SVG 支持测试",
+      "",
+      "> 用途：检测内联 SVG。",
+      ">",
+      "> 使用方法：在编辑器中打开预览。",
+      "",
+      "---",
+      "",
+      "## 预期对照",
+      "",
+      "| 区块 | 通过标准 |",
+      "|---|---|",
+      "| SVG | 显示图形 |",
+    ].join("\n");
+    const tokens = collectLivePreviewTokens(createState(doc));
+
+    expect(tokens.every((token) => token.from <= token.to)).toBe(true);
+    expect(tokens.filter((token) => token.kind === "hide" && doc.slice(token.from, token.to).trim() === ">"))
+      .toHaveLength(3);
+    expect(tokens.some((token) => token.kind === "thematic-break")).toBe(true);
+  });
+
+  it("projects inactive task items as toggleable checkboxes without changing ordinary lists", () => {
+    const doc = "- [x] 已完成\n  - [ ] 待处理\n- 普通项目\n";
+    const tokens = collectLivePreviewTokens(createState(doc));
+    expect(tokens).toContainEqual({ from: 0, to: 6, kind: "task-marker", checked: true, toggleAt: 3 });
+    expect(tokens).toContainEqual({ from: 12, to: 18, kind: "task-marker", checked: false, toggleAt: 15 });
+    expect(tokens.some((token) => token.kind === "link")).toBe(false);
+    expect(tokens.some((token) => token.kind === "list-marker" && token.text === "• ")).toBe(true);
+  });
+
+  it("reveals canonical task syntax while the task item is active", () => {
+    const doc = "- [x] 已完成\n";
+    const tokens = collectLivePreviewTokens(createState(doc, doc.indexOf("已完成")));
+    expect(tokens.some((token) => token.kind === "task-marker")).toBe(false);
+  });
+
+  it("keeps a parent task projected while editing a nested task line", () => {
+    const doc = "- [x] 父任务\n  - [ ] 子任务\n";
+    const tokens = collectLivePreviewTokens(createState(doc, doc.indexOf("子任务")));
+    expect(tokens).toContainEqual({ from: 0, to: 6, kind: "task-marker", checked: true, toggleAt: 3 });
+    expect(tokens.some((token) => token.kind === "task-marker" && token.from === 12)).toBe(false);
+  });
+
+  it("can keep a just-toggled task projected while placing the caret in its content", () => {
+    const doc = "- [ ] 待处理\n";
+    const contentAt = doc.indexOf("待处理");
+    const tokens = collectLivePreviewTokens(createState(doc, contentAt), 0, doc.length, 0);
+    expect(tokens).toContainEqual({ from: 0, to: 6, kind: "task-marker", checked: false, toggleAt: 3 });
+  });
 });

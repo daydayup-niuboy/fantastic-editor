@@ -63,8 +63,9 @@ function parseOverlay(value: unknown): WechatThemeOverlayFile {
   }
   assertObject(value.tokens, "主题 tokens 必须是对象。");
   const tokenKeys = Object.keys(value.tokens).sort();
-  const expected = ["accent", "align", "border", "codeBg", "codeText", "heading", "muted", "page", "sizeBodyPx", "text"].join("\0");
-  if (tokenKeys.join("\0") !== expected) throw new WechatThemeError("WECHAT_THEME_OVERLAY_SCHEMA_INVALID", "磁盘 Overlay 必须包含完整且唯一的 10 个 Token。");
+  const expectedLegacy = ["accent", "align", "border", "codeBg", "codeText", "heading", "muted", "page", "sizeBodyPx", "text"].join("\0");
+  const expectedCurrent = [...expectedLegacy.split("\0"), "headingDecoration"].sort().join("\0");
+  if (tokenKeys.join("\0") !== expectedLegacy && tokenKeys.join("\0") !== expectedCurrent) throw new WechatThemeError("WECHAT_THEME_OVERLAY_SCHEMA_INVALID", "磁盘 Overlay 必须包含完整且唯一的主题 Token。");
   const tokens = normalizeWechatThemeTokens(value.baseThemeId as OfficialWechatThemeId, value.tokens as WechatThemeOverlayInput["tokens"]);
   return { schemaVersion: "0.1", name, baseThemeId: value.baseThemeId as OfficialWechatThemeId, tokens };
 }

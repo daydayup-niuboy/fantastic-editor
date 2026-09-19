@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("WechatThemeRepository", () => {
-  it("saves a partial input as an immutable full 10-token overlay", async () => {
+  it("saves a partial input as an immutable full theme overlay", async () => {
     const { repository, workspaceRoot } = await fixture();
     const saved = await repository.save({ schemaVersion: "0.1", name: " 品牌绿 ", baseThemeId: "minimal-ink", tokens: { accent: "#07C160", page: "#FFFFFF", sizeBodyPx: 17, align: "justify" } });
 
@@ -29,7 +29,7 @@ describe("WechatThemeRepository", () => {
     expect(saved.name).toBe("品牌绿");
     expect(saved.tokens.accent).toBe("#07c160");
     expect(saved.tokens.page).toBe("#fefefe");
-    expect(Object.keys(saved.tokens)).toHaveLength(10);
+    expect(Object.keys(saved.tokens)).toHaveLength(11);
     const files = await readdir(join(workspaceRoot, "themes"));
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^custom-[0-9a-f]{8}\.json$/);

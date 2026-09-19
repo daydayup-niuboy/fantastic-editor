@@ -30,6 +30,7 @@ import type {
   ImportWechatThemeRequest,
   AiInvocationRequest,
   AiInvocationEvent,
+  AiWechatThemeSuggestionRequest,
 } from "@fantastic-editor/shared";
 
 const api: FantasticEditorApi = {
@@ -116,6 +117,7 @@ const api: FantasticEditorApi = {
   importWechatTheme: (request: ImportWechatThemeRequest) => ipcRenderer.invoke(IPC_CHANNELS.importWechatTheme, request),
   detectAiProviders: () => ipcRenderer.invoke(IPC_CHANNELS.detectAiProvider),
   invokeAi: (request: AiInvocationRequest) => ipcRenderer.invoke(IPC_CHANNELS.invokeAi, request),
+  suggestWechatTheme: (request: AiWechatThemeSuggestionRequest) => ipcRenderer.invoke(IPC_CHANNELS.suggestWechatTheme, request),
   cancelAi: (request: { requestId: string }) => ipcRenderer.invoke(IPC_CHANNELS.cancelAi, request),
   onAiInvocationEvent: (listener: (event: AiInvocationEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, update: AiInvocationEvent) => listener(update);

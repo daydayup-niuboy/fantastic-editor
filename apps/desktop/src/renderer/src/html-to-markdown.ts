@@ -111,6 +111,7 @@ function convertNode(node: Node, state: ConvertState, depth: number, context?: s
   if (node.nodeType === Node.TEXT_NODE) return escapeText(cleanText(node.nodeValue ?? ""));
   if (!(node instanceof Element)) return "";
   const tag = node.tagName.toLowerCase();
+  if (node.hasAttribute("data-fantastic-theme-decoration")) return "";
   if (FORBIDDEN.has(tag)) {
     state.warnings.add(`已移除不安全 HTML：${tag}`);
     return "";
@@ -148,7 +149,7 @@ function convertNode(node: Node, state: ConvertState, depth: number, context?: s
 
 function fallbackHtmlToMarkdown(html: string): HtmlToMarkdownResult {
   const warnings = ["当前运行环境无法构造 DOM，已将外部 HTML 降级为纯文本。"];
-  const text = html.replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&");
+  const text = html.replace(/<span\b[^>]*data-fantastic-theme-decoration\s*=\s*["'][^"']*["'][^>]*>[\s\S]*?<\/span>/gi, "").replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&");
   return { markdown: normalizeExternalMarkdown(text), warnings, truncated: false };
 }
 

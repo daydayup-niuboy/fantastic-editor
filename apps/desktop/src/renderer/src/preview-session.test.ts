@@ -102,6 +102,21 @@ describe("PreviewSession", () => {
     expect(formatDiagnosticItems(diagnostics)[0]).toMatchObject({ severity: "blocking", source: { startLine: 3 } });
   });
 
+  it("collapses blocked raw HTML images into one compatibility notice", () => {
+    const diagnostics = [3, 7].map((line, index) => ({
+      id: `raw-${index}`,
+      code: "RAW_HTML_IMAGE_BLOCKED",
+      severity: "blocking",
+      category: "security",
+      message: "P0 不支持原始 HTML 图片，请改用 Markdown 图片语法。",
+      source: { from: index * 10, to: index * 10 + 5, startLine: line, startColumn: 1, endLine: line, endColumn: 6, precision: "exact" },
+    })) satisfies Diagnostic[];
+    expect(formatDiagnosticItems(diagnostics)).toEqual([expect.objectContaining({
+      severity: "warning",
+      text: "第 3、7 行，共 2 处 · 已安全忽略 2 个原始 HTML 内嵌图片。为避免 SVG 脚本或外部资源执行，请改用本地图片、Markdown 图片语法或受支持的 svg 围栏。",
+    })]);
+  });
+
   it("combines only fully matching parse, resolution and manifest identities", async () => {
     const value = await fixture();
     const accepted = createPreviewSession(value.parse, value.resolved);
@@ -149,5 +164,49 @@ describe("PreviewSession", () => {
         [value.referenceKey]: { ...update.entries[value.referenceKey]!, sourceContentHash: "c".repeat(64) },
       },
     }).status).toBe("rejected");
+  });
+
+  it("accepts a derived PNG bound to parsed fenced SVG content", async () => {
+    const parsedDocument = await parseDocument({ documentId: "document-svg-content", editorText: "```svg\n<svg width=\"10\" height=\"10\"/>\n```\n" });
+    const reference = parsedDocument.svgContents![0]!;
+    const parse: ParseWorkerSuccess = {
+      type: "parsed",
+      parseDurationMs: 1,
+      documentId: parsedDocument.documentId,
+      sourceHash: parsedDocument.sourceHash,
+      parserProfile: parsedDocument.parserProfile,
+      taskSequence: 8,
+      parsedDocument,
+      diagnostics: [],
+      previewHtml: "<span>svg</span>",
+    };
+    const resolved: ResolveResult = {
+      status: "resolved",
+      documentId: parse.documentId,
+      sourceHash: parse.sourceHash,
+      parserProfile: parse.parserProfile,
+      taskSequence: parse.taskSequence,
+      parseCommitId: "commit-svg",
+      workspaceRevision: 1,
+      resolutionSnapshot: { schema: "fantastic-editor-resolution-snapshot", documentId: parse.documentId, sourceHash: parse.sourceHash, workspaceId: "workspace-1", workspaceRevision: 1, resolverProfile: "test", records: {}, diagnostics: [], createdAt: "2026-01-01T00:00:00.000Z" },
+      previewDerivedManifest: { schema: "fantastic-editor-preview-derived-manifest", documentId: parse.documentId, sourceHash: parse.sourceHash, parserProfile: parse.parserProfile, taskSequence: parse.taskSequence, parseCommitId: "commit-svg", workspaceRevision: 1, manifestRevision: 0, entries: {} },
+      diagnostics: [],
+    };
+    const initial = createPreviewSession(parse, resolved);
+    if (initial.status !== "accepted") throw new Error(initial.error);
+    const update: PreviewDerivedUpdate = {
+      documentId: parse.documentId,
+      sourceHash: parse.sourceHash,
+      parserProfile: parse.parserProfile,
+      taskSequence: parse.taskSequence,
+      parseCommitId: "commit-svg",
+      workspaceRevision: 1,
+      manifestRevision: 1,
+      entries: { [reference.referenceKey]: { referenceKey: reference.referenceKey, sourceContentHash: reference.sourceContentHash, transformProfile: "svg-safe-png-0.1", previewAssetHandle: PREVIEW_HANDLE, mimeType: "image/png", width: 10, height: 10 } },
+      diagnostics: [],
+    };
+    expect(applyPreviewDerivedUpdate(initial.session, update).status).toBe("accepted");
+    update.entries[reference.referenceKey] = { ...update.entries[reference.referenceKey]!, sourceContentHash: "f".repeat(64) };
+    expect(applyPreviewDerivedUpdate(initial.session, update).status).toBe("rejected");
   });
 });

@@ -4,6 +4,7 @@ import { access, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realp
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { FANTASTIC_EDITOR_LIMITS } from "@fantastic-editor/shared";
+import iconvLite from "iconv-lite";
 import type {
   FileFingerprint,
   ImageImportSessionRequest,
@@ -33,6 +34,11 @@ const FOLDER_SCAN_HARD_ENTRIES = 100_000;
 const FOLDER_SCAN_HARD_RESOURCE_FILES = 20_000;
 const INDEXED_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 const IGNORED_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules"]);
+const STRUCTURED_TEXT_LANGUAGES: Readonly<Record<string, string>> = {
+  ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+  ".html": "html", ".htm": "html", ".xml": "xml", ".ini": "ini",
+  ".conf": "conf", ".config": "config", ".env": "env", ".properties": "properties",
+};
 
 interface FileSession {
   sessionId: string;
@@ -48,6 +54,14 @@ interface FileSession {
   lineSeparator: Exclude<LineSeparator, "mixed">;
   fingerprint: FileFingerprint;
   isUntitled: boolean;
+  importedStructured?: {
+    sourcePath: string;
+    sourceFingerprint: FileFingerprint;
+    language: string;
+    encoding: "utf-8" | "utf-8-bom" | "gb18030";
+    lineSeparator: "lf" | "crlf";
+    sourceHadTrailingLineBreak: boolean;
+  };
   requiresSave: boolean;
   displayNameOverride?: string;
   acknowledgedExternalFingerprint?: FileFingerprint;
@@ -118,6 +132,7 @@ type MarkdownDecodeAttempt = {
   encoding: TextEncoding;
   lineSeparator: "lf" | "crlf";
   requiresSave: boolean;
+  sourceEncoding: "utf-8" | "utf-8-bom" | "gb18030";
 } | {
   status: "confirmation-required";
   session?: undefined;
@@ -188,6 +203,7 @@ function decodeMarkdown(bytes: Uint8Array, options: MarkdownOpenOptions = {}): M
     encoding,
     lineSeparator,
     requiresSave: requiresEncodingConversion || hasMixedLineSeparators,
+    sourceEncoding: requiresEncodingConversion ? "gb18030" : encoding,
   };
 }
 function encodeMarkdown(
@@ -320,6 +336,10 @@ export class FileSessionManager {
   getSuggestedSaveName(sessionId: string): string {
     const session = this.#sessions.get(sessionId);
     if (!session) return "document.md";
+    if (session.importedStructured) {
+      const sourceName = basename(session.importedStructured.sourcePath);
+      return `${sourceName.slice(0, -extname(sourceName).length)}.md`;
+    }
     return session.displayNameOverride ?? (session.isUntitled ? "document.md" : basename(session.path));
   }
 
@@ -412,7 +432,7 @@ export class FileSessionManager {
     return active ? this.getResolutionContext(active.documentId) : undefined;
   }
 
-  async createUntitled(): Promise<OpenFileResult> {
+  async createUntitled(editorText = "", displayNameOverride?: string, importedStructured?: FileSession["importedStructured"]): Promise<OpenFileResult> {
     try {
       if ([...this.#sessions.values()].some((session) => session.workspaceMode === "folder-workspace")) {
         await this.clearSessions();
@@ -434,12 +454,14 @@ export class FileSessionManager {
         lineSeparator: "lf",
         fingerprint: { byteLength: 0, mtimeMs: 0, ctimeMs: 0 },
         isUntitled: true,
+        ...(importedStructured ? { importedStructured } : {}),
         requiresSave: true,
         temporaryRoot,
+        ...(displayNameOverride ? { displayNameOverride } : {}),
       };
       this.#sessions.set(session.sessionId, session);
       this.#activeSessionId = session.sessionId;
-      return this.openResult(session, "");
+      return this.openResult(session, editorText);
     } catch (error) {
       return { status: "failed", error: error instanceof Error ? error.message : "无法创建新文档。" };
     }
@@ -579,6 +601,77 @@ export class FileSessionManager {
       || session.workspaceRevision !== request.workspaceRevision
     ) return undefined;
     return this.getResolutionContext(session.documentId);
+  }
+
+  async importStructuredText(path: string, options: MarkdownOpenOptions = {}): Promise<FileOpenAttempt> {
+    const language = STRUCTURED_TEXT_LANGUAGES[extname(path).toLocaleLowerCase("en-US")];
+    if (!language) return { status: "failed", error: "该文件类型不能作为结构化代码导入。" };
+    try {
+      const sourcePath = await realpath(path);
+      const beforeStat = await stat(sourcePath);
+      if (!beforeStat.isFile()) return { status: "failed", error: "所选项目不是文件。" };
+      if (beforeStat.size > FANTASTIC_EDITOR_LIMITS.maxMarkdownFileBytes) return { status: "failed", error: "配置文件超过 40 MiB 安全上限。" };
+      const beforeFingerprint = fingerprintFromStat(beforeStat);
+      if (options.expectedFingerprint && !fingerprintsEqual(options.expectedFingerprint, beforeFingerprint)) {
+        return { status: "failed", error: "文件在转换确认期间发生变化，请重新拖入。" };
+      }
+      const bytes = await readFile(sourcePath);
+      const fingerprint = fingerprintFromStat(await stat(sourcePath));
+      if (!fingerprintsEqual(beforeFingerprint, fingerprint)) return { status: "failed", error: "文件在读取期间发生变化，请重新拖入。" };
+      const decoded = decodeMarkdown(bytes, options);
+      if (decoded.status === "confirmation-required") {
+        return { status: "confirmation-required", confirmation: { displayName: basename(sourcePath), fingerprint, ...decoded } };
+      }
+      const longestFence = Math.max(0, ...[...decoded.editorText.matchAll(/`+/g)].map((match) => match[0].length));
+      const fence = "`".repeat(Math.max(3, longestFence + 1));
+      const content = decoded.editorText.endsWith("\n") ? decoded.editorText : `${decoded.editorText}\n`;
+      return await this.createUntitled(`${fence}${language}\n${content}${fence}\n`, `导入 · ${basename(sourcePath)}`, {
+        sourcePath,
+        sourceFingerprint: fingerprint,
+        language,
+        encoding: decoded.sourceEncoding,
+        lineSeparator: decoded.lineSeparator,
+        sourceHadTrailingLineBreak: decoded.editorText.endsWith("\n"),
+      });
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "读取配置文件失败。" };
+    }
+  }
+
+  isImportedStructured(sessionId: string): boolean {
+    return Boolean(this.#sessions.get(sessionId)?.importedStructured);
+  }
+
+  async saveImportedStructured(request: SaveFileRequest): Promise<SaveFileResult> {
+    const session = this.#sessions.get(request.sessionId);
+    const imported = session?.importedStructured;
+    if (!session || !imported) return { status: "failed", error: "导入配置文件会话已失效。" };
+    try {
+      const currentFingerprint = fingerprintFromStat(await stat(imported.sourcePath));
+      if (!request.allowOverwriteExternalChanges && !fingerprintsEqual(imported.sourceFingerprint, currentFingerprint)) {
+        return { status: "conflict", error: "原配置文件已被其他程序修改，请重新拖入后再保存。" };
+      }
+      const normalized = request.editorText.replace(/\r\n?/g, "\n");
+      const match = /^(`{3,})([^\n]*)\n([\s\S]*)\n\1\n?$/.exec(normalized);
+      if (!match || match[2]!.trim().toLocaleLowerCase("en-US") !== imported.language || match[3]!.includes(`\n${match[1]}\n`)) {
+        return { status: "failed", error: "配置围栏结构已变化，无法安全转换回原格式；请恢复单一完整围栏或另存为 Markdown。" };
+      }
+      const normalizedSource = `${match[3]!}${imported.sourceHadTrailingLineBreak ? "\n" : ""}`;
+      const sourceText = imported.lineSeparator === "crlf" ? normalizedSource.replace(/\n/g, "\r\n") : normalizedSource;
+      const encoded = imported.encoding === "gb18030"
+        ? iconvLite.encode(sourceText, "gb18030")
+        : imported.encoding === "utf-8-bom"
+          ? Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(sourceText, "utf8")])
+          : Buffer.from(sourceText, "utf8");
+      if (encoded.byteLength > FANTASTIC_EDITOR_LIMITS.maxMarkdownFileBytes) return { status: "failed", error: "转换后的配置文件超过 40 MiB 安全上限。" };
+      await atomicWriteCandidate(imported.sourcePath, encoded);
+      imported.sourcePath = await realpath(imported.sourcePath);
+      imported.sourceFingerprint = fingerprintFromStat(await stat(imported.sourcePath));
+      session.requiresSave = false;
+      return { status: "saved", displayName: basename(imported.sourcePath), workspaceRevision: session.workspaceRevision, workspaceMode: session.workspaceMode, saveMode: "original" };
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "保存原配置文件失败。" };
+    }
   }
 
   commitImageImport(request: ImageImportSessionRequest, workspaceRelativePaths: readonly string[]): number | undefined {
@@ -838,6 +931,7 @@ export class FileSessionManager {
         session.grantId = randomUUID();
         session.authorizationRootRealPath = await realpath(dirname(session.path));
         delete session.displayNameOverride;
+        delete session.importedStructured;
       }
       session.fingerprint = fingerprintFromStat(await stat(session.path));
       delete session.acknowledgedExternalFingerprint;
@@ -939,6 +1033,7 @@ export class FileSessionManager {
         lineSeparator: session.lineSeparator,
         fingerprint: session.fingerprint,
         isUntitled: session.isUntitled,
+        ...(session.importedStructured ? { importedStructured: true as const } : {}),
         requiresSave: session.requiresSave,
       },
     };

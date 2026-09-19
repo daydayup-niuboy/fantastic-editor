@@ -96,6 +96,28 @@ describe("ParsedDocument", () => {
     expect(fenced).toMatch(/<pre[^>]*data-source-from="0"[^>]*data-source-kind="code-block"/);
   });
 
+  it("does not let malformed inline dollars swallow later block formulas", () => {
+    const source = "异常 $not a link$$#$\n\n$$\nP \\implies (A \\oplus C)\n$$\n";
+    const html = renderPreviewHtml(source);
+    const blockFrom = source.indexOf("$$\n");
+    expect(html).toContain(`data-source-from="${blockFrom}"`);
+    expect(html).toContain(`data-source-to="${source.length - 1}"`);
+    expect(html).toContain("preview-formula-block");
+  });
+
+  it("emits only an identity-bound placeholder for fenced SVG content", async () => {
+    const source = "```svg\n<svg width=\"20\" height=\"10\"><rect width=\"20\" height=\"10\"/></svg>\n```\n";
+    const parsed = await parseDocument({ documentId: "svg-content", editorText: source });
+    const reference = parsed.svgContents?.[0];
+    expect(reference).toMatchObject({ source: { from: 0, to: source.length }, content: expect.stringContaining("<svg") });
+    const html = renderPreviewHtml(source, parsed.resourceReferences, parsed.svgContents);
+    expect(html).toContain('class="inline-svg-placeholder"');
+    expect(html).toContain(`data-reference-key="${reference?.referenceKey}"`);
+    expect(html).toContain('data-source-kind="svg-content"');
+    expect(html).not.toContain("<rect");
+    expect(renderPreviewHtml(source)).toContain('class="language-svg"');
+  });
+
   it("adds precise source anchors to table cells without including delimiters", () => {
     const source = "| 名称 | `a\\|b` |\n| :--- | ---: |\n| A\\|B | **1** |\n";
     const html = renderPreviewHtml(source);

@@ -1,4 +1,4 @@
-import type { Diagnostic, ParsedDocument, ResourceReference } from "@fantastic-editor/document-core";
+import type { Diagnostic, ParsedDocument, ResourceReference, SvgContentReference } from "@fantastic-editor/document-core";
 export { FANTASTIC_EDITOR_LIMITS, IPC_CHANNELS } from "./runtime.js";
 export {
   OFFICIAL_WECHAT_THEME_IDS,
@@ -18,10 +18,12 @@ export {
   resolveOfficialWechatTheme,
   resolveWechatTheme,
   validateWechatThemeName,
+  wechatHeadingDecorationGlyph,
   WechatThemeError,
 } from "./wechat-themes.js";
 export type {
   OfficialWechatThemeId,
+  WechatHeadingDecoration,
   LegacyWechatThemeAlias,
   WechatThemeDefinition,
   WechatThemeErrorCode,
@@ -38,12 +40,14 @@ export type {
 export { compileWechatPublishHtml, normalizeWechatHtmlMarkup } from "./wechat-theme-compiler.js";
 export type { CompileWechatPublishHtmlInput } from "./wechat-theme-compiler.js";
 import type {
+  OfficialWechatThemeId,
   ResolvedWechatTheme,
   WechatThemeDefinition,
   WechatThemeId,
   WechatThemeListItem,
   WechatThemeOverlayFile,
   WechatThemeOverlayInput,
+  WechatThemeOverlayPatch,
 } from "./wechat-themes.js";
 export { auditGeneratedHtmlMarkup, auditWechatHtmlMarkup } from "@fantastic-editor/document-core";
 export type { GeneratedHtmlSecurityIssue } from "@fantastic-editor/document-core";
@@ -72,6 +76,7 @@ export interface OpenFileResult {
     lineSeparator: LineSeparator;
     fingerprint: FileFingerprint;
     isUntitled: boolean;
+    importedStructured?: boolean;
     savedText?: string;
     recovered?: boolean;
     requiresSave?: boolean;
@@ -178,6 +183,7 @@ export interface SaveFileResult {
   fingerprint?: FileFingerprint;
   workspaceRevision?: number;
   workspaceMode?: WorkspaceMode;
+  saveMode?: "original" | "markdown";
   error?: string;
 }
 
@@ -332,6 +338,7 @@ export interface ResolveRequest {
   parseCommitId: string;
   workspaceRevision: number;
   resourceReferences: ResourceReference[];
+  svgContents?: SvgContentReference[];
 }
 
 export interface ResolveResult {
@@ -690,6 +697,7 @@ export interface FantasticEditorApi {
   importWechatTheme(request: ImportWechatThemeRequest): Promise<ImportWechatThemeResult>;
   detectAiProviders(): Promise<AiProviderStatus[]>;
   invokeAi(request: AiInvocationRequest): Promise<AiInvocationResult>;
+  suggestWechatTheme(request: AiWechatThemeSuggestionRequest): Promise<AiWechatThemeSuggestionResult>;
   cancelAi(request: { requestId: string }): Promise<{ status: "cancelled" | "missing" }>;
   onAiInvocationEvent(listener: (event: AiInvocationEvent) => void): () => void;
   getDeepSeekConfig(): Promise<DeepSeekConfigResult>;
@@ -735,6 +743,26 @@ export type AiInvocationResult =
 export type AiProviderStatus =
   | { providerId: AiProviderId; displayName: string; status: "available"; version: string }
   | { providerId: AiProviderId; displayName: string; status: "unavailable"; guidance: string };
+
+export interface AiWechatThemeSuggestionRequest {
+  requestId: string;
+  providerId: AiProviderId;
+  documentId: string;
+  sourceHash: string;
+  content: string;
+  instruction?: string;
+}
+export interface AiWechatThemeSuggestion {
+  schemaVersion: "0.1";
+  baseThemeId: OfficialWechatThemeId;
+  tokens: WechatThemeOverlayPatch;
+  reason: string;
+  warnings: string[];
+}
+export type AiWechatThemeSuggestionResult =
+  | { status: "completed"; suggestion: AiWechatThemeSuggestion }
+  | { status: "cancelled" }
+  | { status: "failed"; code: string; error: string };
 
 export type SelectAndInstallFontResult =
   | { status: "installed"; fontFamily: string; bytes: Uint8Array }

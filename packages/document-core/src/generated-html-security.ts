@@ -10,6 +10,7 @@ const ALLOWED_ORIGIN_ATTRIBUTES = new Set([
   "data-fantastic-clipboard",
   "data-fantastic-plain-length",
   "data-fantastic-plain-hash",
+  "data-fantastic-theme-decoration",
 ]);
 
 function isUnsafeResource(value: string): boolean {

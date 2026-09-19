@@ -36,6 +36,13 @@ export default defineConfig({
       },
     },
     resolve: { alias: { "@renderer": resolve("src/renderer/src") } },
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: "fantastic-editor-development-csp",
+        apply: "serve",
+        transformIndexHtml: (html) => html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'"),
+      },
+    ],
   },
 });

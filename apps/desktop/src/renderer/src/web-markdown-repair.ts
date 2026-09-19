@@ -9,6 +9,59 @@ export interface WebMarkdownRepairResult {
   repairedTableGaps: number;
 }
 
+export interface MarkdownDocumentFenceResult {
+  markdown: string;
+  detected: boolean;
+}
+
+const MARKDOWN_FENCE_LANGUAGE = /^(?:markdown|md|mkd|mdown)$/i;
+const LEADING_WEB_SPACE_BEFORE_MARKDOWN = /^([\u00A0\u202F]+)(?=(?:#{1,6}(?:\s|$)|>(?:\s|$)|(?:[-+*]|\d{1,9}[.)])\s|(?:-{3,}|\*{3,}|_{3,})\s*$|\|.*\|\s*$|`{3,}|~{3,}))/;
+
+function normalizeLeadingWebSpace(line: string): string {
+  return line.replace(LEADING_WEB_SPACE_BEFORE_MARKDOWN, (spaces) => " ".repeat(spaces.length));
+}
+
+export function unwrapMarkdownDocumentFence(source: string): MarkdownDocumentFenceResult {
+  const normalized = normalizeLineEndings(source);
+  const lines = normalized.split("\n");
+  const firstContent = lines.findIndex((line) => line.trim().length > 0);
+  if (firstContent < 0) return { markdown: normalized, detected: false };
+  const opening = /^\uFEFF?\s*(`{3,}|~{3,})\s*([\w-]+)\s*$/.exec(lines[firstContent]!);
+  if (!opening || !MARKDOWN_FENCE_LANGUAGE.test(opening[2]!)) return { markdown: normalized, detected: false };
+
+  const lastContent = lines.findLastIndex((line) => line.trim().length > 0);
+  let internalFence: { marker: string; length: number } | null = null;
+  let wrapperClosing = -1;
+  let structureSignals = 0;
+  for (let index = firstContent + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      const marker = fence[1]!;
+      const info = fence[2]!.trim();
+      if (internalFence) {
+        if (marker[0] === internalFence.marker && marker.length >= internalFence.length && !info) internalFence = null;
+      } else if (info || index !== lastContent) {
+        internalFence = { marker: marker[0]!, length: marker.length };
+      } else if (marker[0] === opening[1]![0] && marker.length >= opening[1]!.length) {
+        wrapperClosing = index;
+      }
+      continue;
+    }
+    if (internalFence) continue;
+    if (/^\s{0,3}#{1,6}\s+\S/.test(line)
+      || /^\s{0,3}(?:[-+*]|\d+[.)])\s+\S/.test(line)
+      || /^\s{0,3}>\s+\S/.test(line)
+      || /^\s*\|.*\|\s*$/.test(line)
+      || /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+      || /!\[[^\]]*]\([^)]+\)/.test(line)) structureSignals += 1;
+  }
+  if (structureSignals < 2) return { markdown: normalized, detected: false };
+
+  const output = lines.filter((_line, index) => index !== firstContent && index !== wrapperClosing);
+  return { markdown: output.join("\n"), detected: true };
+}
+
 function replaceCounted(value: string, pattern: RegExp, replacement: string, increment: () => void): string {
   return value.replace(pattern, (...args: unknown[]) => {
     increment();
@@ -26,7 +79,8 @@ export function repairWebMarkdown(source: string): WebMarkdownRepairResult {
   let repairedTableGaps = 0;
 
   for (const originalLine of input) {
-    const escapedFence = /^(\s*)((?:\\`){3,}|(?:\\~){3,})(.*)$/.exec(originalLine);
+    const normalizedLine = normalizeLeadingWebSpace(originalLine);
+    const escapedFence = /^(\s*)((?:\\`){3,}|(?:\\~){3,})(.*)$/.exec(normalizedLine);
     if (escapedFence) {
       const marker = escapedFence[2]!.replaceAll("\\", "");
       const repaired = `${escapedFence[1]}${marker}${escapedFence[3]}`;
@@ -34,16 +88,17 @@ export function repairWebMarkdown(source: string): WebMarkdownRepairResult {
       if (!fence) fence = current;
       else if (fence.marker === current.marker && current.length >= fence.length) fence = null;
       output.push(repaired);
-      repairedMarkers += 1;
+      repairedMarkers += normalizedLine === originalLine ? 1 : 2;
       continue;
     }
-    const existingFence = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(originalLine);
+    const existingFence = /^(\s*)(`{3,}|~{3,})(.*)$/.exec(normalizedLine);
     if (existingFence) {
       const marker = existingFence[2]!;
       const current = { marker: marker[0]!, length: marker.length };
       if (!fence) fence = current;
       else if (fence.marker === current.marker && current.length >= fence.length) fence = null;
-      output.push(originalLine);
+      output.push(normalizedLine);
+      if (normalizedLine !== originalLine) repairedMarkers += 1;
       continue;
     }
     if (fence) {
@@ -51,9 +106,10 @@ export function repairWebMarkdown(source: string): WebMarkdownRepairResult {
       continue;
     }
 
-    let line = originalLine;
+    let line = normalizedLine;
     const incrementMarker = () => { repairedMarkers += 1; };
     const incrementInline = () => { repairedInlinePairs += 1; };
+    if (normalizedLine !== originalLine) incrementMarker();
     line = line.replace(/^(\s*)((?:\\#){1,6})(?=\s)/, (_match, indent: string, markers: string) => {
       incrementMarker();
       return `${indent}${markers.replaceAll("\\", "")}`;

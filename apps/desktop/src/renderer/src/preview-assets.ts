@@ -3,6 +3,7 @@ import type { PreviewDerivedEntry, PreviewSession, ResolutionRecord } from "@fan
 const RASTER_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const UUID_PATTERN = /^[a-f\d]{8}-[a-f\d]{4}-[1-5][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
 const RESOURCE_PLACEHOLDER = /<span class="resource-placeholder" role="img" data-reference-key="([a-f\d]{64})" data-alt="([^"]*)"( data-source-from="\d+" data-source-to="\d+" data-source-kind="image")>\[图片：[\s\S]*?\]<\/span>/gi;
+const INLINE_SVG_PLACEHOLDER = /<span class="inline-svg-placeholder" role="img" data-reference-key="([a-f\d]{64})" data-source-content-hash="([a-f\d]{64})" data-source-from="(\d+)" data-source-to="(\d+)" data-source-kind="svg-content" data-source-block="true">\[SVG 等待安全转换\]<\/span>/gi;
 
 interface PreviewAsset {
   handle: string;
@@ -42,11 +43,25 @@ export function applyResolutionToPreviewHtml(
   previewHtml: string,
   session: PreviewSession,
 ): string {
-  return previewHtml.replace(RESOURCE_PLACEHOLDER, (placeholder, referenceKey: string, escapedAlt: string, sourceAttributes: string) => {
+  const withImages = previewHtml.replace(RESOURCE_PLACEHOLDER, (placeholder, referenceKey: string, escapedAlt: string, sourceAttributes: string) => {
     const record = session.resolutionSnapshot.records[referenceKey];
     const asset = directAsset(record)
       ?? derivedAsset(record, session.previewDerivedManifest.entries[referenceKey]);
     if (!asset) return placeholder;
     return `<img class="resolved-local-image" src="fantastic-asset://asset/${asset.handle}" alt="${escapedAlt}" data-reference-key="${referenceKey}" data-mime-type="${asset.mimeType}"${sourceAttributes} loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
+  });
+  return withImages.replace(INLINE_SVG_PLACEHOLDER, (placeholder, referenceKey: string, sourceContentHash: string, from: string, to: string) => {
+    const reference = session.parsedDocument.svgContents?.find((item) => item.referenceKey === referenceKey);
+    const entry = session.previewDerivedManifest.entries[referenceKey];
+    if (
+      !reference
+      || reference.sourceContentHash !== sourceContentHash
+      || !entry
+      || entry.referenceKey !== referenceKey
+      || entry.sourceContentHash !== sourceContentHash
+      || !UUID_PATTERN.test(entry.previewAssetHandle)
+      || !RASTER_MIME_TYPES.has(entry.mimeType)
+    ) return placeholder;
+    return `<img class="resolved-inline-svg" src="fantastic-asset://asset/${entry.previewAssetHandle}" alt="SVG 内容" data-reference-key="${referenceKey}" data-mime-type="${entry.mimeType}" data-source-from="${from}" data-source-to="${to}" data-source-kind="svg-content" data-source-block="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
   });
 }

@@ -10,7 +10,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
 const request: AiInvocationRequest = { requestId: "123e4567-e89b-42d3-a456-426614174000", providerId: "gemini-api", scope: "selection", actionId: "polish", anchor: { documentId: "doc", sourceHash: "a".repeat(64), from: 0, to: 2, expectedText: "正文" }, content: "正文" };
 async function service(fetcher: typeof fetch) {
   const root = await mkdtemp(join(tmpdir(), "gemini-test-")); roots.push(root);
-  return new GeminiApi(join(root, "config.json"), { isAvailable: () => true, encrypt: (value) => `encrypted:${value}`, decrypt: (value) => value.slice(10) }, fetcher);
+  return new GeminiApi(join(root, "config.json"), { isAvailable: () => true, encrypt: (value) => `encrypted:${value}`, decrypt: (value) => value.slice(10) }, fetcher, async () => undefined);
 }
 
 describe("Gemini API boundary", () => {
@@ -43,7 +43,7 @@ describe("Gemini API boundary", () => {
     expect(calls).toEqual(["https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash"]);
   });
 
-  it("retries a transient 503 once and explains a persistent outage", async () => {
+  it("uses bounded exponential retries for transient and persistent outages", async () => {
     let calls = 0;
     const recovered = await service(async () => ++calls === 1
       ? new Response("busy", { status: 503 })
@@ -52,8 +52,26 @@ describe("Gemini API boundary", () => {
     await expect(recovered.invoke(request, "正文")).resolves.toEqual({ status: "completed", result: "已恢复" });
     expect(calls).toBe(2);
 
-    const unavailable = await service(async () => new Response("busy", { status: 503 }));
+    calls = 0;
+    const unavailable = await service(async () => { calls++; return new Response("busy", { status: 503 }); });
     await unavailable.save(`test_${"x".repeat(32)}`);
-    await expect(unavailable.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", error: expect.stringContaining("自动重试仍失败") });
-  }, 10_000);
+    await expect(unavailable.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", error: expect.stringContaining("指数退避重试仍失败") });
+    expect(calls).toBe(5);
+  });
+
+  it("explains shared project quota and never retries client errors", async () => {
+    let calls = 0;
+    const limited = await service(async () => { calls++; return new Response("quota", { status: 429 }); });
+    await limited.save(`test_${"x".repeat(32)}`);
+    await expect(limited.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", error: expect.stringMatching(/RPM、TPM 或 RPD.*共用配额/) });
+    expect(calls).toBe(5);
+
+    for (const [status, message] of [[400, "请求参数"], [404, "找不到 Gemini 3.8 Flash"]] as const) {
+      calls = 0;
+      const invalid = await service(async () => { calls++; return new Response("invalid", { status }); });
+      await invalid.save(`test_${"x".repeat(32)}`);
+      await expect(invalid.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", error: expect.stringContaining(message) });
+      expect(calls).toBe(1);
+    }
+  });
 });

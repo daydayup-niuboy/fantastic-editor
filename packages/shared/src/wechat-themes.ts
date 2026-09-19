@@ -20,6 +20,8 @@ export type WechatThemeErrorCode =
   | "WECHAT_THEME_UNSUPPORTED_VERSION"
   | "WECHAT_THEME_IN_USE";
 
+export type WechatHeadingDecoration = "none" | "spark" | "book" | "check";
+
 export class WechatThemeError extends Error {
   readonly code: WechatThemeErrorCode;
 
@@ -41,6 +43,7 @@ export interface WechatThemeTokens {
   codeText: string;
   sizeBodyPx: number;
   align: "left" | "justify";
+  headingDecoration: WechatHeadingDecoration;
 }
 
 export type WechatThemeOverlayPatch = Partial<WechatThemeTokens>;
@@ -106,12 +109,12 @@ const mobileSafe = {
   cell: "overflow-wrap:anywhere;word-break:break-word;",
 } as const;
 
-const TOKEN_KEYS = ["accent", "page", "text", "heading", "muted", "border", "codeBg", "codeText", "sizeBodyPx", "align"] as const;
+const TOKEN_KEYS = ["accent", "page", "text", "heading", "muted", "border", "codeBg", "codeText", "sizeBodyPx", "align", "headingDecoration"] as const;
 
 export const OFFICIAL_THEME_TOKENS: Readonly<Record<OfficialWechatThemeId, Readonly<WechatThemeTokens>>> = Object.freeze({
-  "wechat-native-enhanced": Object.freeze({ accent: "#2f8f63", page: "#fefefe", text: "#2b2f2c", heading: "#163c2b", muted: "#526158", border: "#cfd9d3", codeBg: "#f1f4f2", codeText: "#27352e", sizeBodyPx: 16, align: "left" }),
-  "minimal-ink": Object.freeze({ accent: "#202124", page: "#fefefe", text: "#292929", heading: "#111111", muted: "#555555", border: "#c9cac7", codeBg: "#f7f7f6", codeText: "#292929", sizeBodyPx: 16, align: "left" }),
-  "deep-blue-tech": Object.freeze({ accent: "#2854a1", page: "#fefefe", text: "#263445", heading: "#173665", muted: "#516477", border: "#c7d7e7", codeBg: "#f3f7fb", codeText: "#22364d", sizeBodyPx: 16, align: "left" }),
+  "wechat-native-enhanced": Object.freeze({ accent: "#2f8f63", page: "#fefefe", text: "#2b2f2c", heading: "#163c2b", muted: "#526158", border: "#cfd9d3", codeBg: "#f1f4f2", codeText: "#27352e", sizeBodyPx: 16, align: "left", headingDecoration: "none" }),
+  "minimal-ink": Object.freeze({ accent: "#202124", page: "#fefefe", text: "#292929", heading: "#111111", muted: "#555555", border: "#c9cac7", codeBg: "#f7f7f6", codeText: "#292929", sizeBodyPx: 16, align: "left", headingDecoration: "none" }),
+  "deep-blue-tech": Object.freeze({ accent: "#2854a1", page: "#fefefe", text: "#263445", heading: "#173665", muted: "#516477", border: "#c7d7e7", codeBg: "#f3f7fb", codeText: "#22364d", sizeBodyPx: 16, align: "left", headingDecoration: "none" }),
 });
 
 export function normalizeOfficialWechatThemeId(id: string): OfficialWechatThemeId | null {
@@ -145,6 +148,7 @@ export function normalizeWechatThemeTokens(baseThemeId: OfficialWechatThemeId, p
     codeText: normalizeColor(merged.codeText, "codeText"),
     sizeBodyPx: merged.sizeBodyPx,
     align: merged.align,
+    headingDecoration: merged.headingDecoration,
   } satisfies WechatThemeTokens;
   if (!Number.isInteger(tokens.sizeBodyPx) || tokens.sizeBodyPx < 12 || tokens.sizeBodyPx > 22) {
     throw new WechatThemeError("WECHAT_THEME_INVALID_TOKEN", "主题正文大小必须是 12–22 的整数。");
@@ -152,7 +156,14 @@ export function normalizeWechatThemeTokens(baseThemeId: OfficialWechatThemeId, p
   if (tokens.align !== "left" && tokens.align !== "justify") {
     throw new WechatThemeError("WECHAT_THEME_INVALID_TOKEN", "主题对齐方式只能是 left 或 justify。");
   }
+  if (!["none", "spark", "book", "check"].includes(tokens.headingDecoration)) {
+    throw new WechatThemeError("WECHAT_THEME_INVALID_TOKEN", "标题装饰只能是 none、spark、book 或 check。");
+  }
   return Object.freeze(tokens);
+}
+
+export function wechatHeadingDecorationGlyph(decoration: WechatHeadingDecoration): string {
+  return decoration === "spark" ? "✦" : decoration === "book" ? "▣" : decoration === "check" ? "✓" : "";
 }
 
 function colorVariant(color: string, redOffset: number, greenOffset: number, blueOffset: number): string {
@@ -285,13 +296,20 @@ function withThemeStyle(tag: WechatThemeStyleTag, attributes: string, style: str
   return `<${tag}${attributes} style="${style}">`;
 }
 
+function decorateHeadingContent(content: string, tokens: WechatThemeTokens): string {
+  const glyph = wechatHeadingDecorationGlyph(tokens.headingDecoration);
+  if (!glyph) return content;
+  const safeGlyph = glyph.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+  return `<span data-fantastic-theme-decoration="true" aria-hidden="true" style="display:inline-block;margin-right:.45em;color:${tokens.accent};font-weight:700;">${safeGlyph}</span>${content}`;
+}
+
 export function applyWechatThemeToFragment(fragment: string, definition: WechatThemeDefinition): string;
 export function applyWechatThemeToFragment(fragment: string, definition: WechatThemeDefinition): string {
   const styles = definition.styles;
   return fragment
     .replace(/<h1(\s[^>]*)?>/gi, (_match, attributes = "") => withThemeStyle("h1", attributes, styles.h1))
-    .replace(/<h2(\s[^>]*)?>/gi, (_match, attributes = "") => withThemeStyle("h2", attributes, styles.h2))
-    .replace(/<h([3-6])(\s[^>]*)?>/gi, (_match, level: string, attributes = "") => withThemeStyle("h3", attributes, styles.h3).replace("<h3", `<h${level}`))
+    .replace(/(<h2(\s[^>]*)?>)([\s\S]*?)(<\/h2>)/gi, (_match, opening: string, _attributes: string, content: string, closing: string) => `${withThemeStyle("h2", opening.slice(3, -1), styles.h2)}${decorateHeadingContent(content, definition.tokens)}${closing}`)
+    .replace(/(<h([3-6])(\s[^>]*)?>)([\s\S]*?)(<\/h\2>)/gi, (_match, opening: string, level: string, _attributes: string, content: string, closing: string) => `${withThemeStyle("h3", opening.slice(3, -1), styles.h3).replace("<h3", `<h${level}`)}${decorateHeadingContent(content, definition.tokens)}${closing}`)
     .replace(/<(p|blockquote|ul|ol|pre|code|table|th|td|hr|a)(\s[^>]*)?>/gi, (_match, rawTag: string, attributes = "") => {
       const tag = rawTag.toLowerCase() as WechatThemeStyleTag;
       return withThemeStyle(tag, attributes, styles[tag]);
@@ -305,7 +323,7 @@ export function applyOfficialWechatThemeToFragment(fragment: string, themeId: Of
 export function canonicalWechatThemeIdentity(baseThemeId: OfficialWechatThemeId, tokens: WechatThemeTokens): {
   schemaVersion: "0.1";
   baseThemeId: OfficialWechatThemeId;
-  tokens: WechatThemeTokens;
+  tokens: Omit<WechatThemeTokens, "headingDecoration"> & Partial<Pick<WechatThemeTokens, "headingDecoration">>;
 } {
   return {
     schemaVersion: "0.1",
@@ -321,6 +339,7 @@ export function canonicalWechatThemeIdentity(baseThemeId: OfficialWechatThemeId,
       codeText: tokens.codeText,
       sizeBodyPx: tokens.sizeBodyPx,
       align: tokens.align,
+      ...(tokens.headingDecoration !== "none" ? { headingDecoration: tokens.headingDecoration } : {}),
     },
   };
 }

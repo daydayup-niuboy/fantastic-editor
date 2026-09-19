@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { buildWechatThemeDefinition, compileWechatPublishHtml, normalizeWechatThemeTokens, type WechatThemeDefinition, type WechatThemeId, type WechatThemeListItem, type WechatThemeOverlayInput } from "@fantastic-editor/shared";
+import { sha256 } from "@fantastic-editor/document-core";
+import { buildWechatThemeDefinition, compileWechatPublishHtml, normalizeWechatThemeTokens, type AiProviderId, type AiProviderStatus, type OfficialWechatThemeId, type WechatHeadingDecoration, type WechatThemeDefinition, type WechatThemeId, type WechatThemeListItem, type WechatThemeOverlayInput } from "@fantastic-editor/shared";
 import { renderMermaidPreview } from "./mermaid-preview";
 import { auditWechatMobileLayout, mobileAuditSummary, type WechatMobileAuditIssue } from "./wechat-mobile-audit";
 
@@ -9,6 +10,13 @@ interface WechatThemePreviewProps {
   themes: WechatThemeListItem[];
   definition: WechatThemeDefinition;
   fontFamily: string;
+  markdown: string;
+  documentId: string;
+  aiProviders: AiProviderStatus[];
+  aiProviderId: AiProviderId;
+  onAiProviderChange(providerId: AiProviderId): void;
+  aiThemeAppliedToEditor: boolean;
+  onApplyAiThemeToEditor(definition: WechatThemeDefinition | null): void;
   onThemeChange(themeId: WechatThemeId): void;
   onSaveAsCustom(input: WechatThemeOverlayInput): Promise<boolean>;
   onDeleteCustom(themeId: string): Promise<boolean>;
@@ -28,6 +36,11 @@ type AuditReports = Record<MobileWidth, WechatMobileAuditIssue[] | null>;
 
 function emptyReports(): AuditReports {
   return { 320: null, 375: null, 414: null };
+}
+
+function newThemeRequestId(): string {
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (digit) =>
+    (Number(digit) ^ crypto.getRandomValues(new Uint8Array(1))[0]! & 15 >> Number(digit) / 4).toString(16));
 }
 
 function themeLabel(theme: WechatThemeListItem): string {
@@ -54,7 +67,7 @@ function WechatAuditProbe({ width, html, fontFamily, onResult }: { width: Mobile
   return <article ref={ref} className="wechat-themed-content" style={{ width, fontFamily }} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose, display = "dialog" }: WechatThemePreviewProps) {
+export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, markdown, documentId, aiProviders, aiProviderId, onAiProviderChange, aiThemeAppliedToEditor, onApplyAiThemeToEditor, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose, display = "dialog" }: WechatThemePreviewProps) {
   const [viewportWidth, setViewportWidth] = useState<MobileWidth>(375);
   const [reports, setReports] = useState<AuditReports>(() => emptyReports());
   const [customizing, setCustomizing] = useState(false);
@@ -63,18 +76,22 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
   const [deletingTheme, setDeletingTheme] = useState(false);
   const [customName, setCustomName] = useState("");
   const [customTokens, setCustomTokens] = useState({ ...definition.tokens });
+  const [draftBaseThemeId, setDraftBaseThemeId] = useState<OfficialWechatThemeId>(definition.baseThemeId);
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiState, setAiState] = useState<{ requestId?: string; status: "idle" | "working" | "ready" | "failed"; reason?: string; warnings?: string[]; error?: string }>({ status: "idle" });
   const contentRef = useRef<HTMLElement>(null);
+  const identityRef = useRef({ documentId, markdown });
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
   const previewDraft = useMemo(() => {
     if (!customizing) return { definition, valid: true };
     try {
-      return { definition: buildWechatThemeDefinition(definition.baseThemeId, normalizeWechatThemeTokens(definition.baseThemeId, customTokens)), valid: true };
+      return { definition: buildWechatThemeDefinition(draftBaseThemeId, normalizeWechatThemeTokens(draftBaseThemeId, customTokens)), valid: true };
     } catch {
       return { definition, valid: false };
     }
-  }, [customTokens, customizing, definition]);
+  }, [customTokens, customizing, definition, draftBaseThemeId]);
   const previewDefinition = useDeferredValue(previewDraft.definition);
   const themedHtml = useMemo(() => compileWechatPublishHtml({ fragment: withoutLeadingPreviewTitle(html), definition: previewDefinition, wrapperFontFromContext: fontFamily }), [fontFamily, html, previewDefinition]);
   const [auditedHtml, setAuditedHtml] = useState(themedHtml);
@@ -92,8 +109,38 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
     if (customizing) return;
     const selected = themes.find((theme) => theme.id === themeId);
     setCustomName(selected?.name ? `${selected.name} 自定义` : "自定义主题");
+    setDraftBaseThemeId(definition.baseThemeId);
     setCustomTokens({ ...definition.tokens, sizeBodyPx: [15, 16, 17].includes(definition.tokens.sizeBodyPx) ? definition.tokens.sizeBodyPx : 16 });
   }, [customizing, definition, themeId, themes]);
+
+  useEffect(() => {
+    identityRef.current = { documentId, markdown };
+    setAiState({ status: "idle" });
+  }, [documentId, markdown]);
+  useEffect(() => () => { if (aiState.requestId) void window.fantasticEditor.cancelAi({ requestId: aiState.requestId }); }, [aiState.requestId]);
+
+  const generateAiTheme = async () => {
+    const provider = aiProviders.find((item) => item.providerId === aiProviderId);
+    if (!provider || provider.status !== "available") { setAiState({ status: "failed", error: "请先在 AI 写作助手中配置或启用这个提供商。" }); return; }
+    const disclosureKey = `fantastic-editor-ai-disclosure-accepted:${aiProviderId}`;
+    if (window.localStorage.getItem(disclosureKey) !== "true") {
+      if (!window.confirm(`AI 排版会把当前 Markdown 正文发送给 ${provider.displayName} 分析，但不会自动修改正文或发布。是否继续？`)) return;
+      window.localStorage.setItem(disclosureKey, "true");
+    }
+    const identity = { documentId, markdown };
+    const sourceHash = await sha256(markdown);
+    const requestId = newThemeRequestId();
+    setAiState({ requestId, status: "working" });
+    const result = await window.fantasticEditor.suggestWechatTheme({ requestId, providerId: aiProviderId, documentId, sourceHash, content: markdown, ...(aiInstruction.trim() ? { instruction: aiInstruction.trim() } : {}) });
+    if (identityRef.current.documentId !== identity.documentId || identityRef.current.markdown !== identity.markdown) return;
+    if (result.status === "cancelled") { setAiState({ status: "idle" }); return; }
+    if (result.status === "failed") { setAiState({ status: "failed", error: result.error }); return; }
+    setDraftBaseThemeId(result.suggestion.baseThemeId);
+    setCustomTokens({ ...normalizeWechatThemeTokens(result.suggestion.baseThemeId, result.suggestion.tokens) });
+    setCustomName(`AI 排版 · ${new Date().toLocaleDateString()}`);
+    setCustomizing(true);
+    setAiState({ status: "ready", reason: result.suggestion.reason, warnings: result.suggestion.warnings });
+  };
 
   useEffect(() => {
     const available = themes.filter((theme) => theme.source !== "official");
@@ -111,7 +158,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
 
   const submitCustomTheme = async () => {
     if (!previewDraft.valid) return;
-    if (await onSaveAsCustom({ schemaVersion: "0.1", name: customName, baseThemeId: definition.baseThemeId, tokens: customTokens })) setCustomizing(false);
+    if (await onSaveAsCustom({ schemaVersion: "0.1", name: customName, baseThemeId: draftBaseThemeId, tokens: customTokens })) { setCustomizing(false); setAiState({ status: "idle" }); }
   };
 
   const requestDeleteTheme = async () => {
@@ -188,14 +235,25 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
           <span className="viewport-buttons" role="group" aria-label="手机宽度">{MOBILE_WIDTHS.map((width) => { const widthSummary = reports[width] === null ? "running" : mobileAuditSummary(reports[width]!); return <button type="button" aria-pressed={viewportWidth === width} className={`${viewportWidth === width ? "active " : ""}${widthSummary}`} key={width} onClick={() => setViewportWidth(width)}><i />{width}px</button>; })}</span>
           <span className={`mobile-audit-state ${summary}`}><i />{summary === "running" ? "三档宽度审计中" : summary === "passed" ? "三档宽度全部通过" : summary === "review" ? "存在可滚动内容，建议复核" : "检测到质量警告"}</span>
         </div>
+        <section className="wechat-ai-layout" aria-label="AI 一键排版">
+          <div><strong>AI 一键排版</strong><small>分析当前 Markdown，只建议安全主题参数；不会改正文。先预览，满意后再保存。</small></div>
+          <select aria-label="AI 排版提供商" value={aiProviderId} disabled={aiState.status === "working"} onChange={(event) => onAiProviderChange(event.target.value as AiProviderId)}>{aiProviders.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.displayName}{provider.status === "unavailable" ? "（不可用）" : ""}</option>)}</select>
+          <input aria-label="AI 排版偏好" maxLength={1000} placeholder="可选：例如简洁科技风、适合科普长文" value={aiInstruction} disabled={aiState.status === "working"} onChange={(event) => setAiInstruction(event.target.value)} />
+          <button type="button" disabled={aiState.status === "working" || !markdown.trim()} onClick={() => void generateAiTheme()}>{aiState.status === "working" ? "分析中…" : aiState.status === "ready" ? "重新生成" : "一键排版"}</button>
+          {aiState.status === "ready" && <button type="button" className="secondary" onClick={() => onApplyAiThemeToEditor(aiThemeAppliedToEditor ? null : previewDraft.definition)}>{aiThemeAppliedToEditor ? "恢复写作区" : "应用到写作区"}</button>}
+          {aiState.status === "working" && <button type="button" onClick={() => { if (aiState.requestId) void window.fantasticEditor.cancelAi({ requestId: aiState.requestId }); }}>停止</button>}
+          {aiState.reason && <p><b>建议：</b>{aiState.reason}{aiState.warnings?.length ? ` · 提醒：${aiState.warnings.join("；")}` : ""}</p>}
+          {aiState.error && <p className="error">{aiState.error}</p>}
+        </section>
         {customizing && <section className="wechat-theme-customizer" aria-label="另存为自定义主题">
-          <header><strong>另存为自定义</strong><span>基于 {definition.baseThemeId}（只读）</span></header>
+          <header><strong>另存为自定义</strong><span>基于 {draftBaseThemeId}（只读）</span></header>
           <label>名称<input value={customName} maxLength={64} onChange={(event) => setCustomName(event.target.value)} /></label>
           <div className="theme-color-grid">
             {(["accent", "text", "page", "heading"] as const).map((key) => <label key={key}>{key}<span><input type="color" value={customTokens[key]} onChange={(event) => setCustomTokens((current) => ({ ...current, [key]: event.target.value }))} /><input value={customTokens[key]} onChange={(event) => setCustomTokens((current) => ({ ...current, [key]: event.target.value }))} /></span></label>)}
           </div>
           <label>字号<select value={customTokens.sizeBodyPx} onChange={(event) => setCustomTokens((current) => ({ ...current, sizeBodyPx: Number(event.target.value) as 15 | 16 | 17 }))}><option value={15}>15px</option><option value={16}>16px</option><option value={17}>17px</option></select></label>
           <label>对齐<select value={customTokens.align} onChange={(event) => setCustomTokens((current) => ({ ...current, align: event.target.value as "left" | "justify" }))}><option value="left">左对齐</option><option value="justify">两端对齐</option></select></label>
+          <label>标题装饰<select value={customTokens.headingDecoration} onChange={(event) => setCustomTokens((current) => ({ ...current, headingDecoration: event.target.value as WechatHeadingDecoration }))}><option value="none">无</option><option value="spark">星芒 ✦</option><option value="book">书页 ▣</option><option value="check">勾选 ✓</option></select></label>
           <div><button type="button" onClick={() => void submitCustomTheme()} disabled={!customName.trim() || !previewDraft.valid}>保存主题</button><button type="button" onClick={() => setCustomizing(false)}>取消</button></div>
         </section>}
         <div className="wechat-preview-workspace">

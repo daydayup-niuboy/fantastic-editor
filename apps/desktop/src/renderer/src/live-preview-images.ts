@@ -1,8 +1,8 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { isTrailingSnapshotEdit } from "./live-preview-snapshot";
+import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
 
-interface ImageProjection { from: number; to: number; src: string; alt: string }
+interface ImageProjection { from: number; to: number; src: string; alt: string; kind?: "image" | "svg-content" }
 export interface ImageSnapshot { source: string; images: ImageProjection[] }
 const ASSET_URL = /^fantastic-asset:\/\/asset\/[a-f\d]{8}-[a-f\d]{4}-[1-5][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
 
@@ -10,11 +10,12 @@ const ASSET_URL = /^fantastic-asset:\/\/asset\/[a-f\d]{8}-[a-f\d]{4}-[1-5][a-f\d
 export function imageSnapshotFromHtml(source: string, html: string): ImageSnapshot {
   const template = document.createElement("template");
   template.innerHTML = html;
-  const images = [...template.content.querySelectorAll('[data-source-kind="image"]')].map((element) => ({
+  const images = [...template.content.querySelectorAll('[data-source-kind="image"], [data-source-kind="svg-content"]')].map((element) => ({
     from: Number(element.getAttribute("data-source-from")),
     to: Number(element.getAttribute("data-source-to")),
     src: element.getAttribute("src") ?? "",
     alt: element.getAttribute("alt") ?? element.getAttribute("data-alt") ?? "图片",
+    kind: element.getAttribute("data-source-kind") === "svg-content" ? "svg-content" as const : "image" as const,
   }));
   return { source, images };
 }
@@ -22,9 +23,9 @@ export function imageSnapshotFromHtml(source: string, html: string): ImageSnapsh
 export const setImageSnapshot = StateEffect.define<ImageSnapshot | null>();
 
 class ImageWidget extends WidgetType {
-  constructor(readonly image: ImageProjection, readonly source: string) { super(); }
+  constructor(readonly image: ImageProjection, readonly expectedSource: string) { super(); }
   eq(other: ImageWidget): boolean {
-    return this.source === other.source && JSON.stringify(this.image) === JSON.stringify(other.image);
+    return this.expectedSource === other.expectedSource && JSON.stringify(this.image) === JSON.stringify(other.image);
   }
   toDOM(view: EditorView): HTMLElement {
     const root = document.createElement("span");
@@ -44,15 +45,18 @@ class ImageWidget extends WidgetType {
     }
     const status = document.createElement("span");
     status.className = "cm-live-image-caption";
-    status.textContent = ASSET_URL.test(this.image.src) ? this.image.alt : "图片尚未加载，请查看文档诊断（路径授权、文件不存在或正在解析）。";
+    status.textContent = ASSET_URL.test(this.image.src)
+      ? this.image.alt
+      : this.image.kind === "svg-content" ? "SVG 正在安全转换，请稍候或查看诊断。" : "图片尚未加载，请查看文档诊断（路径授权、文件不存在或正在解析）。";
     root.append(status);
     for (const remove of [false, true]) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = remove ? "删除图片引用" : "编辑图片引用";
+      const label = this.image.kind === "svg-content" ? "SVG 内容" : "图片引用";
+      button.textContent = remove ? `删除${label}` : `编辑${label}`;
       button.onmousedown = (event) => event.preventDefault();
       button.onclick = () => {
-        if (view.state.doc.toString() !== this.source) return;
+        if (view.state.sliceDoc(this.image.from, this.image.to) !== this.expectedSource) return;
         if (remove) view.dispatch({ changes: { from: this.image.from, to: this.image.to, insert: "" }, selection: { anchor: this.image.from }, userEvent: "delete.selection" });
         else view.dispatch({ selection: { anchor: this.image.from, head: this.image.to }, scrollIntoView: true });
         view.focus();
@@ -70,8 +74,8 @@ export function imageDecorations(state: EditorState, snapshot: ImageSnapshot | n
   const ranges = snapshot.images.flatMap((image) => {
     if (!Number.isInteger(image.from) || !Number.isInteger(image.to) || image.from < 0 || image.to <= image.from || image.to > state.doc.length || image.from < previousEnd) return [];
     previousEnd = image.to;
-    if (state.selection.ranges.some((range) => range.empty ? range.head >= image.from && range.head <= image.to : range.from < image.to && range.to > image.from)) return [];
-    return [Decoration.replace({ widget: new ImageWidget(image, snapshot.source) }).range(image.from, image.to)];
+    if (state.selection.ranges.some((range) => range.empty ? range.head >= image.from && range.head < image.to : range.from < image.to && range.to > image.from)) return [];
+    return [Decoration.replace({ widget: new ImageWidget(image, snapshot.source.slice(image.from, image.to)) }).range(image.from, image.to)];
   });
   return Decoration.set(ranges, true);
 }
@@ -79,9 +83,14 @@ export function imageDecorations(state: EditorState, snapshot: ImageSnapshot | n
 export const livePreviewImages = StateField.define<{ snapshot: ImageSnapshot | null; decorations: DecorationSet }>({
   create: () => ({ snapshot: null, decorations: Decoration.none }),
   update(value, transaction) {
-    const boundary = value.snapshot?.images.at(-1)?.to ?? 0;
     let snapshot = transaction.docChanged
-      ? value.snapshot && isTrailingSnapshotEdit(transaction, boundary) ? { ...value.snapshot, source: transaction.state.doc.toString() } : null
+      ? value.snapshot ? {
+          source: transaction.state.doc.toString(),
+          images: value.snapshot.images.flatMap((image) => {
+            const mapped = remapUnchangedSnapshotRange(transaction, image);
+            return mapped ? [{ ...image, ...mapped }] : [];
+          }),
+        } : null
       : value.snapshot;
     for (const effect of transaction.effects) if (effect.is(setImageSnapshot)) snapshot = effect.value;
     return { snapshot, decorations: imageDecorations(transaction.state, snapshot) };

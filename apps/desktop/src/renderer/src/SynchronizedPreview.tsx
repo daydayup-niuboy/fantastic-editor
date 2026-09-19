@@ -16,6 +16,8 @@ import {
 } from "./preview-sync";
 import { renderMermaidPreview } from "./mermaid-preview";
 import { applyVisibleTextSearch, clearVisibleTextSearch, type SearchNavigationResult, type TextSearchOptions } from "./visible-text-search";
+import { createStructuredCodeVisualization } from "./structured-code";
+import { writeClipboardText } from "./clipboard-write";
 
 interface SynchronizedPreviewProps {
   html: string;
@@ -224,35 +226,44 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
     if (!content) return;
     const decorate = () => {
       content.querySelectorAll<HTMLElement>(".preview-code-toolbar").forEach((item) => item.remove());
+      content.querySelectorAll<HTMLElement>(".preview-structured-code").forEach((item) => item.remove());
+      content.querySelectorAll<HTMLElement>("pre[data-structured-source]").forEach((item) => { item.hidden = false; delete item.dataset.structuredSource; });
       content.querySelectorAll<HTMLElement>("pre > code").forEach((code) => {
         const pre = code.parentElement;
         if (!pre || pre.closest(".mermaid-diagram")) return;
         pre.classList.add("preview-code-block");
+        const language = code.className.match(/language-([\w-]+)/i)?.[1] ?? "";
+        const visualization = createStructuredCodeVisualization(language, code.textContent ?? "");
+        if (visualization) {
+          const visual = document.createElement("div");
+          visual.className = "preview-structured-code";
+          visual.append(visualization);
+          const sourceToggle = document.createElement("button");
+          sourceToggle.type = "button";
+          sourceToggle.className = "preview-structured-source-toggle";
+          sourceToggle.ariaExpanded = "false";
+          sourceToggle.textContent = "查看源码";
+          sourceToggle.addEventListener("click", () => {
+            pre.hidden = !pre.hidden;
+            sourceToggle.ariaExpanded = String(!pre.hidden);
+            sourceToggle.textContent = pre.hidden ? "查看源码" : "收起源码";
+          });
+          visual.append(sourceToggle);
+          pre.before(visual);
+          pre.dataset.structuredSource = "true";
+          pre.hidden = true;
+        }
         const button = document.createElement("button");
         button.type = "button";
         button.className = "preview-code-toolbar";
-        const language = code.className.match(/language-([\w-]+)/i)?.[1];
         button.textContent = "复制";
         button.ariaLabel = language ? `复制 ${language} 代码块` : "复制代码块";
         button.title = button.ariaLabel;
         button.addEventListener("click", async () => {
           const text = (code.textContent ?? "").replace(/\r\n?/g, "\n");
-          try {
-            if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
-            await navigator.clipboard.writeText(text);
-          } catch {
-            const textarea = document.createElement("textarea");
-            textarea.value = text;
-            textarea.style.position = "fixed";
-            textarea.style.opacity = "0";
-            document.body.append(textarea);
-            textarea.select();
-            const copied = document.execCommand("copy");
-            textarea.remove();
-            if (!copied) {
-              onStatus?.("代码复制失败，请选中代码后复制。");
-              return;
-            }
+          if (!await writeClipboardText(text)) {
+            onStatus?.("代码复制失败，请选中代码后复制。");
+            return;
           }
           button.textContent = "已复制";
           onStatus?.("代码块已复制到系统剪贴板。");
@@ -264,7 +275,7 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
     decorate();
     const timer = window.setTimeout(decorate, 0);
     return () => window.clearTimeout(timer);
-  }, [html, darkMode, fontFamily, onStatus]);
+  }, [html, darkMode, fontFamily, onStatus, active, enabled]);
 
   useEffect(() => {
     const content = contentRef.current;

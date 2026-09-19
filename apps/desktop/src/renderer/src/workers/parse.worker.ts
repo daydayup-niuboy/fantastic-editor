@@ -37,7 +37,7 @@ workerScope.onmessage = (event) => {
       taskSequence: request.taskSequence,
       parsedDocument,
       diagnostics: parsedDocument.diagnostics,
-      previewHtml: renderPreviewHtml(request.editorText, parsedDocument.resourceReferences),
+      previewHtml: renderPreviewHtml(request.editorText, parsedDocument.resourceReferences, parsedDocument.svgContents),
     });
   }).catch((error: unknown) => {
     workerScope.postMessage({

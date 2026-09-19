@@ -27,4 +27,8 @@ describe("clipboard contract", () => {
   it("keeps generated output free of unsafe resource URLs", () => {
     expect(auditGeneratedHtmlMarkup(renderMarkdownFragmentHtml("![图](file:///secret)"))).toEqual([]);
   });
+
+  it("allows the fixed internal theme decoration marker", () => {
+    expect(auditGeneratedHtmlMarkup('<h2><span data-fantastic-theme-decoration="true" aria-hidden="true" style="color:#123456">✦</span>标题</h2>')).toEqual([]);
+  });
 });

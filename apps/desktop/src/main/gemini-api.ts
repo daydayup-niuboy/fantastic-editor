@@ -4,11 +4,23 @@ import type { AiInvocationRequest, AiInvocationResult } from "@fantastic-editor/
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const MODEL = "gemini-3.8-flash";
 const KEY_RE = /^[A-Za-z0-9._-]{20,200}$/;
+const MAX_RETRIES = 4;
 type Protector = { isAvailable(): boolean; encrypt(value: string): string; decrypt(value: string): string };
+
+function retryable(status: number): boolean { return status === 408 || status === 429 || (status >= 500 && status <= 599); }
+function retryDelay(attempt: number): number { return Math.min(8_000, 1_000 * 2 ** attempt) + Math.floor(Math.random() * 250); }
+function apiError(status: number): string {
+  if (status === 400) return "Gemini API 拒绝了请求参数（400）。当前软件固定使用 3.8 Flash，请升级软件或检查该模型是否向你的项目开放。";
+  if (status === 401 || status === 403) return "Gemini API Key 无效、已被停用，或没有 3.8 Flash 模型权限。";
+  if (status === 404) return "当前 Google 项目找不到 Gemini 3.8 Flash（404）。请检查 AI Studio 中该模型是否可用；程序不会自动切换模型。";
+  if (status === 429) return "Gemini 项目配额或速率限制已用尽（429），自动重试仍失败。请稍后再试；免费层可能达到 RPM、TPM 或 RPD 限额，同一项目下的 API Key 共用配额。";
+  if (status === 503) return "Gemini 3.8 Flash 服务暂时不可用（503），指数退避重试仍失败，请稍后再试。";
+  return `Gemini API 临时请求失败（${status}），指数退避重试仍失败，请稍后再试。`;
+}
 
 export class GeminiApi {
   #controller: AbortController | null = null;
-  constructor(readonly path: string, readonly protector: Protector, readonly fetcher: typeof fetch = fetch) {}
+  constructor(readonly path: string, readonly protector: Protector, readonly fetcher: typeof fetch = fetch, readonly wait: (ms: number) => Promise<unknown> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {}
   async configured(): Promise<boolean> { return Boolean(await this.#key()); }
   async save(apiKey: string): Promise<boolean> {
     const key = apiKey.trim();
@@ -30,18 +42,12 @@ export class GeminiApi {
     try {
       const request = () => this.fetcher(`${ENDPOINT}/models/${MODEL}:generateContent`, { method: "POST", signal: controller.signal, headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }) });
       let response = await request();
-      if (!response.ok && (response.status === 408 || response.status === 429 || response.status >= 500)) {
-        await new Promise((resolve) => setTimeout(resolve, 1_000 + Math.floor(Math.random() * 250)));
+      for (let attempt = 0; !response.ok && retryable(response.status) && attempt < MAX_RETRIES; attempt++) {
+        await this.wait(retryDelay(attempt));
         if (controller.signal.aborted) return { status: "cancelled" };
         response = await request();
       }
-      if (!response.ok) return { status: "failed", code: "API_FAILED", error: response.status === 400 || response.status === 401 || response.status === 403
-        ? "Gemini API Key 无效或没有 3.8 Flash 模型权限。"
-        : response.status === 429
-          ? "Gemini API 请求过于频繁或额度不足（429），请稍后重试。"
-          : response.status === 503
-            ? "Gemini 3.8 Flash 服务暂时不可用（503），自动重试仍失败，请稍后再试。"
-            : `Gemini API 临时请求失败（${response.status}），请稍后重试。` };
+      if (!response.ok) return { status: "failed", code: "API_FAILED", error: apiError(response.status) };
       const text = await response.text();
       if (Buffer.byteLength(text) > 320 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       const data = JSON.parse(text) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };

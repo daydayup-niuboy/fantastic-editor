@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState } from "@codemirror/state";
+import { Annotation, Transaction, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 
 export type LivePreviewTokenKind =
@@ -16,6 +16,8 @@ export type LivePreviewTokenKind =
   | "strike"
   | "link"
   | "list-marker"
+  | "task-marker"
+  | "thematic-break"
   | "quote-line"
   | "paragraph-line"
   | "unordered-list-line"
@@ -26,6 +28,8 @@ export interface LivePreviewToken {
   to: number;
   kind: LivePreviewTokenKind;
   text?: string;
+  checked?: boolean;
+  toggleAt?: number;
 }
 
 function selectionTouches(state: EditorState, from: number, to: number): boolean {
@@ -52,7 +56,7 @@ function pushInlineToken(
   }
 }
 
-export function collectLivePreviewTokens(state: EditorState, from = 0, to = state.doc.length): LivePreviewToken[] {
+export function collectLivePreviewTokens(state: EditorState, from = 0, to = state.doc.length, projectedTaskLineFrom: number | null = null): LivePreviewToken[] {
   const tokens: LivePreviewToken[] = [];
   const tree = syntaxTree(state);
 
@@ -67,6 +71,10 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
           if (line.to >= node.to || line.number === state.doc.lines) break;
           line = state.doc.line(line.number + 1);
         }
+        return false;
+      }
+      if (name === "HorizontalRule") {
+        if (!selectionTouches(state, node.from, node.to)) tokens.push({ from: node.from, to: node.to, kind: "thematic-break" });
         return false;
       }
       const headingMatch = /^ATXHeading([1-6])$/.exec(name);
@@ -112,11 +120,23 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
       if (name === "ListItem") {
         const mark = node.node.getChildren("ListMark")[0];
         if (mark) {
+          const line = state.doc.lineAt(mark.from);
           const source = state.sliceDoc(mark.from, mark.to).trim();
           const ordered = /^\d/.test(source);
           tokens.push({ from: state.doc.lineAt(node.from).from, to: state.doc.lineAt(node.from).from, kind: ordered ? "ordered-list-line" : "unordered-list-line" });
-          if (!selectionTouches(state, node.from, node.to)) {
-            const line = state.doc.lineAt(mark.from);
+          if (line.from === projectedTaskLineFrom || !selectionTouches(state, line.from, line.to)) {
+            const afterMark = state.sliceDoc(mark.to, line.to);
+            const task = /^(\s*)\[([ xX])\](\s+)/.exec(afterMark);
+            if (task) {
+              tokens.push({
+                from: mark.from,
+                to: mark.to + task[0].length,
+                kind: "task-marker",
+                checked: task[2]?.toLowerCase() === "x",
+                toggleAt: mark.to + task[1]!.length + 1,
+              });
+              return;
+            }
             const end = Math.min(line.to, mark.to + (/\s/.test(state.sliceDoc(mark.to, mark.to + 1)) ? 1 : 0));
             tokens.push({
               from: mark.from,
@@ -129,10 +149,14 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
         return;
       }
       if (name === "Blockquote") {
-        const line = state.doc.lineAt(node.from);
-        tokens.push({ from: line.from, to: line.from, kind: "quote-line" });
-        if (!selectionTouches(state, node.from, node.to)) {
-          for (const mark of node.node.getChildren("QuoteMark")) {
+        const quoteLineStarts = new Set<number>();
+        for (const mark of node.node.getChildren("QuoteMark")) {
+          const line = state.doc.lineAt(mark.from);
+          if (!quoteLineStarts.has(line.from)) {
+            tokens.push({ from: line.from, to: line.from, kind: "quote-line" });
+            quoteLineStarts.add(line.from);
+          }
+          if (!selectionTouches(state, node.from, node.to)) {
             const end = Math.min(line.to, mark.to + (state.sliceDoc(mark.to, mark.to + 1) === " " ? 1 : 0));
             tokens.push({ from: mark.from, to: end, kind: "hide" });
           }
@@ -141,7 +165,9 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
     },
   });
 
-  return tokens;
+  const taskMarkers = tokens.filter((token) => token.kind === "task-marker");
+  return tokens.filter((token) => token.kind === "task-marker" || token.from === token.to
+    || !taskMarkers.some((task) => token.from < task.to && token.to > task.from));
 }
 
 class ListMarkerWidget extends WidgetType {
@@ -157,12 +183,54 @@ class ListMarkerWidget extends WidgetType {
   ignoreEvent(): boolean { return false; }
 }
 
-function buildDecorations(view: EditorView): DecorationSet {
-  const ranges = collectLivePreviewTokens(view.state, view.visibleRanges[0]?.from ?? 0, view.visibleRanges.at(-1)?.to ?? view.state.doc.length)
+class ThematicBreakWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const rule = document.createElement("span");
+    rule.className = "cm-live-thematic-break";
+    rule.setAttribute("role", "separator");
+    rule.setAttribute("aria-label", "分隔线");
+    return rule;
+  }
+}
+
+const taskToggleLine = Annotation.define<number>();
+
+class TaskMarkerWidget extends WidgetType {
+  constructor(private readonly checked: boolean, private readonly toggleAt: number, private readonly contentAt: number) { super(); }
+  toDOM(view: EditorView): HTMLElement {
+    const marker = document.createElement("button");
+    marker.type = "button";
+    marker.className = "cm-live-task-marker";
+    marker.textContent = this.checked ? "☑" : "☐";
+    marker.setAttribute("aria-label", this.checked ? "标记为未完成" : "标记为已完成");
+    marker.setAttribute("aria-pressed", String(this.checked));
+    marker.addEventListener("mousedown", (event) => event.preventDefault());
+    marker.addEventListener("click", () => {
+      view.dispatch({
+        changes: { from: this.toggleAt, to: this.toggleAt + 1, insert: this.checked ? " " : "x" },
+        selection: { anchor: this.contentAt },
+        annotations: [Transaction.userEvent.of("input"), taskToggleLine.of(view.state.doc.lineAt(this.toggleAt).from)],
+      });
+      view.focus();
+    });
+    return marker;
+  }
+  eq(other: TaskMarkerWidget): boolean { return other.checked === this.checked && other.toggleAt === this.toggleAt; }
+  ignoreEvent(): boolean { return true; }
+}
+
+function buildDecorations(view: EditorView, projectedTaskLineFrom: number | null = null): DecorationSet {
+  const ranges = collectLivePreviewTokens(view.state, view.visibleRanges[0]?.from ?? 0, view.visibleRanges.at(-1)?.to ?? view.state.doc.length, projectedTaskLineFrom)
     .map((token) => {
       if (token.kind === "hide") return Decoration.replace({}).range(token.from, token.to);
       if (token.kind === "list-marker") {
         return Decoration.replace({ widget: new ListMarkerWidget(token.text ?? "• ") }).range(token.from, token.to);
+      }
+      if (token.kind === "task-marker") {
+        return Decoration.replace({ widget: new TaskMarkerWidget(token.checked === true, token.toggleAt ?? token.from, token.to) }).range(token.from, token.to);
+      }
+      if (token.kind === "thematic-break") {
+        return Decoration.replace({ widget: new ThematicBreakWidget() }).range(token.from, token.to);
       }
       if (token.kind.startsWith("heading-") || token.kind.endsWith("-line")) {
         return Decoration.line({ class: `cm-live-${token.kind}` }).range(token.from);
@@ -174,10 +242,14 @@ function buildDecorations(view: EditorView): DecorationSet {
 
 const livePreviewPlugin = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
+  projectedTaskLineFrom: number | null = null;
   constructor(view: EditorView) { this.decorations = buildDecorations(view); }
   update(update: ViewUpdate): void {
+    const toggledLine = update.transactions.map((transaction) => transaction.annotation(taskToggleLine)).find((line) => line !== undefined);
+    if (toggledLine !== undefined) this.projectedTaskLineFrom = toggledLine;
+    else if (update.selectionSet || update.docChanged) this.projectedTaskLineFrom = null;
     if (update.docChanged || update.selectionSet || update.viewportChanged) {
-      this.decorations = buildDecorations(update.view);
+      this.decorations = buildDecorations(update.view, this.projectedTaskLineFrom);
     }
   }
 }, { decorations: (plugin) => plugin.decorations });

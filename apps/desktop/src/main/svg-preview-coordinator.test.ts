@@ -14,7 +14,7 @@ import { SvgPreviewCoordinator } from "./svg-preview-coordinator.js";
 const temporaryDirectories: string[] = [];
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
 
-async function environment(): Promise<{
+async function environment(editorText = "![svg](image.svg)\n"): Promise<{
   handles: AssetHandleRegistry;
   cache: PreviewDerivedAssetCache;
   context: SingleFileResolutionContext;
@@ -25,8 +25,8 @@ async function environment(): Promise<{
   if (!root.startsWith(resolve(tmpdir()))) throw new Error("Unsafe temporary test path.");
   temporaryDirectories.push(root);
   const articlePath = join(root, "article.md");
-  await writeFile(articlePath, "![svg](image.svg)\n", "utf8");
-  await writeFile(join(root, "image.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>', "utf8");
+  await writeFile(articlePath, editorText, "utf8");
+  if (editorText.includes("image.svg")) await writeFile(join(root, "image.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>', "utf8");
   const sessions = new FileSessionManager();
   const opened = await sessions.openPath(articlePath);
   if (opened.status !== "opened" || !opened.session) throw new Error(opened.error ?? "open failed");
@@ -48,6 +48,7 @@ async function environment(): Promise<{
     parseCommitId: commit.parseCommitId,
     workspaceRevision: commit.workspaceRevision,
     resourceReferences: parsed.resourceReferences,
+    ...(parsed.svgContents ? { svgContents: parsed.svgContents } : {}),
   };
   const handles = new AssetHandleRegistry();
   const resolver = new SingleFileResourceResolver(commits, handles);
@@ -93,6 +94,21 @@ describe("SvgPreviewCoordinator", () => {
       referenceKey: value.request.resourceReferences[0]?.referenceKey,
     });
     expect(updates[0]?.entries).toEqual({});
+  });
+
+  it("renders fenced SVG content through the same isolated cache without a file handle", async () => {
+    const value = await environment("```svg\n<svg width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg>\n```\n");
+    const reference = value.request.svgContents?.[0];
+    const coordinator = new SvgPreviewCoordinator(value.handles, value.cache, {
+      transformSvg: async (bytes) => {
+        expect(new TextDecoder().decode(bytes)).toContain("<svg");
+        return { status: "completed", png, width: 10, height: 10 };
+      },
+    });
+    const updates: PreviewDerivedUpdate[] = [];
+    await coordinator.schedule(value.request, value.result, value.context, () => true, (update) => updates.push(update));
+    expect(updates[0]?.entries[reference!.referenceKey]).toMatchObject({ sourceContentHash: reference?.sourceContentHash, mimeType: "image/png" });
+    expect(updates[0]?.diagnostics).toEqual([]);
   });
 
   it("revokes and drops a transform result when the parse identity becomes stale", async () => {

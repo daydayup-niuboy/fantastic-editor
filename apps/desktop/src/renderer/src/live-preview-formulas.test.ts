@@ -9,6 +9,17 @@ it("renders inactive formulas, exposes selected source and rejects stale ranges"
   expect(formulaDecorations(state, snapshot).size).toBe(1);
   expect(formulaDecorations(state.update({ selection: { anchor: 2 } }).state, snapshot).size).toBe(0);
   const projected = state.update({ effects: setFormulaSnapshot.of(snapshot) }).state;
-  expect(projected.update({ changes: { from: 0, insert: "x" } }).state.field(livePreviewFormulas).decorations.size).toBe(0);
+  expect(projected.update({ changes: { from: 0, insert: "x" } }).state.field(livePreviewFormulas).decorations.size).toBe(1);
+  expect(projected.update({ changes: { from: 2, insert: "x" } }).state.field(livePreviewFormulas).decorations.size).toBe(0);
   expect(formulaDecorations(state, { ...snapshot, formulas: [{ ...snapshot.formulas[0]!, from: -1 }] }).size).toBe(0);
+});
+
+it("sorts formula ranges before creating decorations", () => {
+  const source = "$a$ 后 $b$";
+  const snapshot = { source, formulas: [
+    { from: 6, to: 9, html: "<span>b</span>", block: false },
+    { from: 0, to: 3, html: "<span>a</span>", block: false },
+  ] };
+  const state = EditorState.create({ doc: source, selection: { anchor: 4 }, extensions: [livePreviewFormulas] });
+  expect(formulaDecorations(state, snapshot).size).toBe(2);
 });

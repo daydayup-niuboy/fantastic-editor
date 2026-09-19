@@ -1,8 +1,4 @@
-import type { WechatThemeDefinition, WechatThemeStyleTag } from "@fantastic-editor/shared";
-
-const THEME_TAGS: readonly WechatThemeStyleTag[] = [
-  "h1", "h2", "h3", "p", "blockquote", "ul", "ol", "pre", "code", "table", "th", "td", "hr", "a",
-];
+import { wechatHeadingDecorationGlyph, type WechatThemeDefinition } from "@fantastic-editor/shared";
 
 const LIVE_BLOCK_PROPERTIES = new Set([
   "background", "background-color", "border-bottom", "border-left", "color", "font-size", "font-weight",
@@ -19,16 +15,12 @@ function projectDeclarations(style: string, allowed: ReadonlySet<string>): strin
   }).join("");
 }
 
-export function buildWechatThemeProjectionCss(definition: WechatThemeDefinition): string {
-  const scope = ".wysiwyg-editor.wechat-theme-active .wysiwyg-content";
-  return [
-    `${scope}{${definition.wrapperStyle}}`,
-    ...THEME_TAGS.map((tag) => `${scope} ${tag}{${definition.styles[tag]}}`),
-  ].join("\n");
-}
-
 export function buildCodeMirrorWechatThemeProjectionCss(definition: WechatThemeDefinition): string {
   const scope = ".editor-host.wechat-theme-active .cm-editor.cm-live-preview";
+  const glyph = wechatHeadingDecorationGlyph(definition.tokens.headingDecoration);
+  const decoration = glyph
+    ? `${scope} .cm-live-heading-2::before,${scope} .cm-live-heading-3::before{content:"${glyph}";display:inline-block;margin-right:.45em;color:${definition.tokens.accent};font-weight:700;}`
+    : "";
   return [
     `${scope} .cm-content{${projectDeclarations(definition.wrapperStyle, LIVE_WRAPPER_PROPERTIES)}}`,
     `${scope} .cm-live-heading-1{${projectDeclarations(definition.styles.h1, LIVE_BLOCK_PROPERTIES)}}`,
@@ -37,5 +29,6 @@ export function buildCodeMirrorWechatThemeProjectionCss(definition: WechatThemeD
     `${scope} .cm-live-paragraph-line{${projectDeclarations(definition.styles.p, LIVE_BLOCK_PROPERTIES)}}`,
     `${scope} .cm-live-quote-line{${projectDeclarations(definition.styles.blockquote, LIVE_BLOCK_PROPERTIES)}}`,
     `${scope} .cm-live-link{${projectDeclarations(definition.styles.a, LIVE_BLOCK_PROPERTIES)}}`,
+    decoration,
   ].join("\n");
 }

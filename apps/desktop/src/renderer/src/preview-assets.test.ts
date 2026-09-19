@@ -107,6 +107,30 @@ describe("applyResolutionToPreviewHtml", () => {
     }))).toBe(PLACEHOLDER);
   });
 
+  it("maps fenced SVG content only through its parsed identity and derived PNG", () => {
+    const svgKey = "f".repeat(64);
+    const svgHash = "e".repeat(64);
+    const placeholder = `<span class="inline-svg-placeholder" role="img" data-reference-key="${svgKey}" data-source-content-hash="${svgHash}" data-source-from="0" data-source-to="42" data-source-kind="svg-content" data-source-block="true">[SVG 等待安全转换]</span>`;
+    const value = session(record());
+    value.resolutionSnapshot.records = {};
+    value.parsedDocument.svgContents = [{
+      referenceKey: svgKey,
+      nodeId: "node-svg",
+      source: { from: 0, to: 42, startLine: 1, startColumn: 1, endLine: 3, endColumn: 4, precision: "exact" },
+      sourceContentHash: svgHash,
+      content: "<svg/>",
+    }];
+    value.previewDerivedManifest.entries = {
+      [svgKey]: { referenceKey: svgKey, sourceContentHash: svgHash, transformProfile: "svg-safe-png-0.1", previewAssetHandle: DERIVED_HANDLE, mimeType: "image/png", width: 20, height: 10 },
+    };
+    const html = applyResolutionToPreviewHtml(placeholder, value);
+    expect(html).toContain(`src="fantastic-asset://asset/${DERIVED_HANDLE}"`);
+    expect(html).toContain('data-source-kind="svg-content"');
+    expect(html).not.toContain("inline-svg-placeholder");
+    value.parsedDocument.svgContents[0]!.sourceContentHash = "d".repeat(64);
+    expect(applyResolutionToPreviewHtml(placeholder, value)).toBe(placeholder);
+  });
+
   it("keeps placeholders for invalid handles and non-resolved records", () => {
     expect(applyResolutionToPreviewHtml(PLACEHOLDER, session(record({ assetHandle: "not-a-handle" })))).toBe(PLACEHOLDER);
     expect(applyResolutionToPreviewHtml(PLACEHOLDER, session(record({ state: "blocked" })))).toBe(PLACEHOLDER);

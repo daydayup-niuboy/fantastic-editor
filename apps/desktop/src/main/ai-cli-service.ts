@@ -163,11 +163,20 @@ export class AiCliService {
 
   async invoke(request: AiInvocationRequest, emit: (event: AiInvocationEvent) => void): Promise<AiInvocationResult> {
     if (!validateAiRequest(request)) return { status: "failed", code: "INVALID_REQUEST", error: "AI 请求内容无效或超过长度上限。" };
+    return this.invokePrompt(request, buildAiPrompt(request), emit);
+  }
+
+  async invokePrompt(request: Pick<AiInvocationRequest, "requestId" | "providerId">, prompt: string, emit: (event: AiInvocationEvent) => void = () => undefined): Promise<AiInvocationResult> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.requestId)
+      || !Object.hasOwn(PROVIDERS, request.providerId)
+      || !prompt || Buffer.byteLength(prompt) > INPUT_LIMIT + 16 * 1024) {
+      return { status: "failed", code: "INVALID_REQUEST", error: "AI 请求内容无效或超过长度上限。" };
+    }
     if (this.#active) return { status: "failed", code: "BUSY", error: "已有 AI 请求正在处理中。" };
     if (request.providerId === "deepseek-api") {
       if (!this.#deepSeek) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 DeepSeek API Key。" };
       this.#active = { requestId: request.requestId, cancel: () => this.#deepSeek?.cancel() };
-      const result = await this.#deepSeek.invoke(request, buildAiPrompt(request));
+      const result = await this.#deepSeek.invoke(request as AiInvocationRequest, prompt);
       this.#active = null;
       emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
       return result;
@@ -175,7 +184,7 @@ export class AiCliService {
     if (request.providerId === "gemini-api") {
       if (!this.#gemini) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Gemini API Key。" };
       this.#active = { requestId: request.requestId, cancel: () => this.#gemini?.cancel() };
-      const result = await this.#gemini.invoke(request, buildAiPrompt(request));
+      const result = await this.#gemini.invoke(request as AiInvocationRequest, prompt);
       this.#active = null;
       emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
       return result;
@@ -250,7 +259,7 @@ export class AiCliService {
         else void finish({ status: "failed", code: "CLI_FAILED", error: stderrBytes > 64 * 1024 ? `${provider.displayName} 错误信息过长。` : `${provider.displayName} 未返回有效建议，请确认已登录且当前额度可用。` }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "CLI_FAILED", message: `${provider.displayName} 未返回有效建议。` });
       });
       const timer = setTimeout(() => { child.kill(); void finish({ status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "TIMEOUT", message: "AI 请求超时。" }); }, this.#timeoutMs);
-      child.stdin.end(buildAiPrompt(request));
+      child.stdin.end(prompt);
     });
   }
 
