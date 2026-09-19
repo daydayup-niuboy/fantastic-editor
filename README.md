@@ -6,20 +6,20 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-GitHub 最新公开版：**0.3.0-rc.7**（Windows x64）。
+GitHub 最新公开版：**0.3.0-rc.8**（Windows x64，预发布）。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.7/fantastic-editor-0.3.0-rc.7-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.7/fantastic-editor-0.3.0-rc.7-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.7)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.8/fantastic-editor-0.3.0-rc.8-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.8/fantastic-editor-0.3.0-rc.8-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.8)
 
-本地发布候选：**0.3.0-rc.8**（2026-09-19，尚未上传 GitHub）。RC.8 已通过发布门禁，但上面的公开下载链接仍指向 RC.7；在 RC.8 正式上传前不要把两者的文件名或校验值混用。
+RC.8 已于 2026-09-19 上传为 GitHub 预发布版本；下载链接、文件名和校验值均对应本地已核对的产物。
 
 本项目暂未采购商业代码签名证书，RC.8 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.8-setup.exe`（本地候选） | 137038739 | `6B423A5D6E26B60356262C934FDCC9030D42B35BB86189241B8AE7746AA6338E` |
-| `fantastic-editor-0.3.0-rc.8-portable.exe`（本地候选） | 136780669 | `1478041801AB109645B4621DD3D29A6B7AC9629642BE0572DB8C5A4857DAD26D` |
+| `fantastic-editor-0.3.0-rc.8-setup.exe` | 137038739 | `6B423A5D6E26B60356262C934FDCC9030D42B35BB86189241B8AE7746AA6338E` |
+| `fantastic-editor-0.3.0-rc.8-portable.exe` | 136780669 | `1478041801AB109645B4621DD3D29A6B7AC9629642BE0572DB8C5A4857DAD26D` |
 
 ## 编辑与预览
 
