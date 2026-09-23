@@ -2373,6 +2373,7 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
                   onMermaidRender={(result) => {
                     if (result.failed > 0 || result.limited > 0) setStatus(`Mermaid：${result.rendered} 个已渲染，${result.failed + result.limited} 个未完成。`);
                   }}
+                  onStatus={setStatus}
                   onErrorCapture={handlePreviewImageError}
                   onLoadCapture={handlePreviewImageLoad}
                 />
