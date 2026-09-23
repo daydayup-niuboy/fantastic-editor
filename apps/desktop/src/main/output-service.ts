@@ -136,6 +136,24 @@ function normalizeOutputFont(value: unknown): string {
   return font && font.length <= 64 && !/[\u0000-\u001f\u007f{};<>]/.test(font) ? font : "Microsoft YaHei UI";
 }
 
+/**
+ * 导出另存为对话框的建议文件名主体。
+ * 只接受 Renderer 传来的显示名，去掉扩展名、路径分隔符和非法字符；
+ * 未提供或清洗后为空时回退到 "document"。
+ */
+function suggestedOutputBaseName(value: unknown): string {
+  if (typeof value !== "string") return "document";
+  const trimmed = value.trim().replace(/[\\/]+/g, " ").replace(/\s+/g, " ");
+  const withoutExtension = trimmed.replace(/\.(?:md|markdown|txt|html?|docx?|pdf)$/i, "");
+  const cleaned = withoutExtension
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, "")
+    .replace(/^\.+/, "")
+    .replace(/[. ]+$/, "")
+    .trim();
+  if (!cleaned) return "document";
+  return [...cleaned].slice(0, 80).join("");
+}
+
 function mergeDiagnostics(...groups: readonly Diagnostic[][]): Diagnostic[] {
   const seen = new Set<string>();
   return groups.flat().filter((item) => {
@@ -440,9 +458,10 @@ export class OutputService {
       }
     }
     if ((status === "completed" || status === "completed-with-omissions") && generated.bytes) {
+      const baseName = suggestedOutputBaseName(runtime.request.suggestedBaseName);
       const suggestedName = runtime.context.target === "docx"
-        ? "document.docx"
-        : runtime.context.target === "pdf" ? "document.pdf" : runtime.context.target === "wechat-clipboard" ? "公众号剪贴板" : runtime.context.target === "wechat-html" ? "wechat.html" : "document.html";
+        ? `${baseName}.docx`
+        : runtime.context.target === "pdf" ? `${baseName}.pdf` : runtime.context.target === "wechat-clipboard" ? "公众号剪贴板" : runtime.context.target === "wechat-html" ? `${baseName}.html` : `${baseName}.html`;
       const saved = await this.#saveOutput(suggestedName, generated.bytes, runtime.context.target);
       if (saved.status === "saved") artifact = saved.artifact;
       else if (saved.status === "cancelled") status = "cancelled";

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties, type DragEvent } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, type CSSProperties, type DragEvent } from "react";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab, moveLineUp, redo, undo } from "@codemirror/commands";
 import { moveLineDownWithSpace } from "./move-line-down";
@@ -17,23 +17,26 @@ import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync
 import { applyWysiwygTextChange, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
 import { livePreviewExtension } from "./live-preview";
 import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
-import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
+import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot, showSelectionFormatMenu } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { livePreviewStructuredCode, setStructuredCodeSnapshot, structuredCodeSnapshotFromHtml } from "./live-preview-structured-code";
 import { livePreviewMermaid, mermaidSnapshotFromHtml, setMermaidSnapshot } from "./live-preview-mermaid";
 import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projection";
 import type { SearchNavigationResult, TextSearchOptions } from "./visible-text-search";
 import { applyEditorTextReplacement, captureEditorTextAnchor, type EditorTextAnchor } from "./editor-text-transaction";
+import { DEFAULT_PREVIEW_FONT_SIZE } from "./preview-font";
+import { shouldPrefixUntitledHeading } from "./untitled-heading";
 
 interface MarkdownEditorProps {
   imagePreviewHtml?: string;
   value: string;
-  onChange(value: string): void;
+  onChange(value: string, pasted: boolean): void;
   onImageDrop?(files: File[], anchorId: string): void;
   onDropRejected?(message: string): void;
   onViewportAnchorChange?(anchor: EditorViewportAnchor): void;
   onSelectionChange?(selection: EditorSourceSelection | null): void;
   onStatus?(message: string): void;
+  prefixUntitledHeading?: boolean;
   livePreview?: boolean;
   fontFamily?: string;
   readingMaxWidth?: string;
@@ -42,6 +45,10 @@ interface MarkdownEditorProps {
   typewriterMode?: boolean;
   darkMode?: boolean;
   spellCheck?: boolean;
+}
+
+export function transactionsIncludePaste(transactions: readonly { isUserEvent(event: string): boolean }[]): boolean {
+  return transactions.some((transaction) => transaction.isUserEvent("input.paste"));
 }
 
 export interface MarkdownEditorHandle {
@@ -103,7 +110,7 @@ const editorTabBinding = {
 };
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor(
-  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition, typewriterMode = false, darkMode = false, spellCheck = true },
+  { value, imagePreviewHtml, onChange, onImageDrop, onDropRejected, onViewportAnchorChange, onSelectionChange, onStatus, prefixUntitledHeading = false, livePreview = false, fontFamily, readingMaxWidth, fontSize, wechatThemeDefinition, typewriterMode = false, darkMode = false, spellCheck = true },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -115,15 +122,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onStatusRef = useRef(onStatus);
   const literalPasteUntilRef = useRef(0);
+  const prefixUntitledHeadingRef = useRef(prefixUntitledHeading);
   const livePreviewCompartmentRef = useRef(new Compartment());
   const spellCheckCompartmentRef = useRef(new Compartment());
   const typewriterModeRef = useRef(typewriterMode);
   const typewriterLineRef = useRef<number | null>(null);
+  const typewriterPointerRef = useRef(false);
+  const lastSentValueRef = useRef(value);
   typewriterModeRef.current = typewriterMode;
   onChangeRef.current = onChange;
   onViewportAnchorChangeRef.current = onViewportAnchorChange;
   onSelectionChangeRef.current = onSelectionChange;
   onStatusRef.current = onStatus;
+  prefixUntitledHeadingRef.current = prefixUntitledHeading;
 
   const createAnchor = (coordinates?: { x: number; y: number }): string | null => {
     const view = viewRef.current;
@@ -136,6 +147,72 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     anchorsRef.current.set(anchorId, { from, to });
     return anchorId;
   };
+
+  const toggleSelectionMark = useCallback((mark: MarkdownSelectionMark): boolean => {
+    const view = viewRef.current;
+    if (!view) return false;
+    const selection = view.state.selection.main;
+    const marker = mark === "bold" ? "**" : mark === "italic" ? "*" : mark === "code" ? "`" : "~~";
+    if (selection.empty) {
+      view.dispatch({
+        changes: { from: selection.from, insert: marker + marker },
+        selection: { anchor: selection.from + marker.length },
+        userEvent: "input.format",
+      });
+    } else {
+      const firstLine = view.state.doc.lineAt(selection.from);
+      const lastOffset = selection.to > selection.from && selection.to === view.state.doc.lineAt(selection.to).from ? selection.to - 1 : selection.to;
+      const lastLine = view.state.doc.lineAt(lastOffset);
+      const fragments: Array<{ from: number; to: number }> = [];
+      for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber += 1) {
+        const line = view.state.doc.line(lineNumber);
+        const prefixLength = /^(?: {0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+)/.exec(line.text)?.[0].length ?? 0;
+        const from = Math.max(selection.from, line.from + prefixLength);
+        const to = Math.min(selection.to, line.to);
+        if (to > from) fragments.push({ from, to });
+      }
+      if (fragments.length === 0) return false;
+      const isFormatted = (fragment: { from: number; to: number }) => fragment.from >= marker.length
+        && fragment.to + marker.length <= view.state.doc.length
+        && view.state.sliceDoc(fragment.from - marker.length, fragment.from) === marker
+        && view.state.sliceDoc(fragment.to, fragment.to + marker.length) === marker;
+      const allFormatted = fragments.every(isFormatted);
+      const changes = fragments.flatMap((fragment) => allFormatted
+        ? [
+            { from: fragment.from - marker.length, to: fragment.from, insert: "" },
+            { from: fragment.to, to: fragment.to + marker.length, insert: "" },
+          ]
+        : isFormatted(fragment) ? [] : [
+            { from: fragment.from, insert: marker },
+            { from: fragment.to, insert: marker },
+          ]);
+      const changeSet = view.state.changes(changes);
+      view.dispatch({
+        changes: changeSet,
+        selection: {
+          anchor: changeSet.mapPos(selection.anchor, selection.anchor <= selection.head ? 1 : -1),
+          head: changeSet.mapPos(selection.head, selection.head >= selection.anchor ? -1 : 1),
+        },
+        userEvent: "input.format",
+      });
+    }
+    view.focus();
+    return true;
+  }, []);
+  const insertLink = useCallback((url: string): boolean => {
+    const view = viewRef.current;
+    if (!view || !/^(?:https?:\/\/|mailto:|#|\/|\.\/|\.\.\/)/i.test(url.trim())) return false;
+    const selection = view.state.selection.main;
+    const label = selection.empty ? "链接文字" : view.state.sliceDoc(selection.from, selection.to);
+    const insert = `[${label}](${url.trim()})`;
+    view.dispatch({
+      changes: { from: selection.from, to: selection.to, insert },
+      selection: { anchor: selection.from + 1, head: selection.from + 1 + label.length },
+      userEvent: "input.link",
+    });
+    view.focus();
+    return true;
+  }, []);
 
   useImperativeHandle(ref, () => ({
     createInsertionAnchor: createAnchor,
@@ -265,71 +342,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       viewRef.current?.requestMeasure();
       viewRef.current?.focus();
     },
-    toggleSelectionMark(mark) {
-      const view = viewRef.current;
-      if (!view) return false;
-      const selection = view.state.selection.main;
-      const marker = mark === "bold" ? "**" : mark === "italic" ? "*" : "~~";
-      if (selection.empty) {
-        view.dispatch({
-          changes: { from: selection.from, insert: marker + marker },
-          selection: { anchor: selection.from + marker.length },
-          userEvent: "input.format",
-        });
-      } else {
-        const firstLine = view.state.doc.lineAt(selection.from);
-        const lastOffset = selection.to > selection.from && selection.to === view.state.doc.lineAt(selection.to).from ? selection.to - 1 : selection.to;
-        const lastLine = view.state.doc.lineAt(lastOffset);
-        const fragments: Array<{ from: number; to: number }> = [];
-        for (let lineNumber = firstLine.number; lineNumber <= lastLine.number; lineNumber += 1) {
-          const line = view.state.doc.line(lineNumber);
-          const prefixLength = /^(?: {0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+)/.exec(line.text)?.[0].length ?? 0;
-          const from = Math.max(selection.from, line.from + prefixLength);
-          const to = Math.min(selection.to, line.to);
-          if (to > from) fragments.push({ from, to });
-        }
-        if (fragments.length === 0) return false;
-        const isFormatted = (fragment: { from: number; to: number }) => fragment.from >= marker.length
-          && fragment.to + marker.length <= view.state.doc.length
-          && view.state.sliceDoc(fragment.from - marker.length, fragment.from) === marker
-          && view.state.sliceDoc(fragment.to, fragment.to + marker.length) === marker;
-        const allFormatted = fragments.every(isFormatted);
-        const changes = fragments.flatMap((fragment) => allFormatted
-          ? [
-              { from: fragment.from - marker.length, to: fragment.from, insert: "" },
-              { from: fragment.to, to: fragment.to + marker.length, insert: "" },
-            ]
-          : isFormatted(fragment) ? [] : [
-              { from: fragment.from, insert: marker },
-              { from: fragment.to, insert: marker },
-            ]);
-        const changeSet = view.state.changes(changes);
-        view.dispatch({
-          changes: changeSet,
-          selection: {
-            anchor: changeSet.mapPos(selection.anchor, selection.anchor <= selection.head ? 1 : -1),
-            head: changeSet.mapPos(selection.head, selection.head >= selection.anchor ? -1 : 1),
-          },
-          userEvent: "input.format",
-        });
-      }
-      view.focus();
-      return true;
-    },
-    insertLink(url) {
-      const view = viewRef.current;
-      if (!view || !/^(?:https?:\/\/|mailto:|#|\/|\.\/|\.\.\/)/i.test(url.trim())) return false;
-      const selection = view.state.selection.main;
-      const label = selection.empty ? "链接文字" : view.state.sliceDoc(selection.from, selection.to);
-      const insert = `[${label}](${url.trim()})`;
-      view.dispatch({
-        changes: { from: selection.from, to: selection.to, insert },
-        selection: { anchor: selection.from + 1, head: selection.from + 1 + label.length },
-        userEvent: "input.link",
-      });
-      view.focus();
-      return true;
-    },
+    toggleSelectionMark,
+    insertLink,
     moveSelection(direction) {
       const view = viewRef.current;
       if (!view) return false;
@@ -412,7 +426,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           spellCheckCompartmentRef.current.of(EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", autocorrect: spellCheck ? "on" : "off" })),
           livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas, livePreviewStructuredCode, livePreviewMermaid] : []),
           Prec.highest(keymap.of([editorTabBinding])), keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
+          EditorState.transactionFilter.of((tr) => {
+            if (!prefixUntitledHeadingRef.current || !tr.docChanged) return tr;
+            const offset = shouldPrefixUntitledHeading(tr.startState.doc.toString(), tr.newDoc.toString(), tr.isUserEvent("input.paste"));
+            return offset === null ? tr : [tr, { changes: { from: offset, insert: "# " }, sequential: true }];
+          }),
           EditorView.domEventHandlers({
+            mousedown: (event) => {
+              if (event.button === 0) typewriterPointerRef.current = true;
+              return false;
+            },
+            mouseup: () => {
+              typewriterPointerRef.current = false;
+              return false;
+            },
             keydown: (event, editorView) => {
               if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
                 literalPasteUntilRef.current = Date.now() + 2000;
@@ -477,10 +504,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
               for (const [anchorId, anchor] of anchorsRef.current) {
                 anchorsRef.current.set(anchorId, mapImageInsertionAnchor(anchor, update.changes));
               }
-              onChangeRef.current(update.state.doc.toString());
+              const nextValue = update.state.doc.toString();
+              lastSentValueRef.current = nextValue;
+              onChangeRef.current(nextValue, transactionsIncludePaste(update.transactions));
             }
             if (update.selectionSet || update.docChanged) emitSelection(update.view);
-            if (update.selectionSet && typewriterModeRef.current) {
+            if (update.selectionSet && typewriterModeRef.current && !typewriterPointerRef.current) {
               const head = update.state.selection.main.head;
               const line = typewriterLine;
               if (typewriterLineRef.current !== line) {
@@ -495,7 +524,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     });
     viewRef.current = view;
     const clearLiteralPasteIntent = () => { literalPasteUntilRef.current = 0; };
+    const clearTypewriterPointer = () => { typewriterPointerRef.current = false; };
     window.addEventListener("blur", clearLiteralPasteIntent);
+    window.addEventListener("mouseup", clearTypewriterPointer);
     document.addEventListener("visibilitychange", clearLiteralPasteIntent);
     hostRef.current.addEventListener("contextmenu", clearLiteralPasteIntent);
     view.scrollDOM.addEventListener("scroll", scheduleViewportAnchor, { passive: true });
@@ -510,6 +541,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (viewportFrame !== null) window.cancelAnimationFrame(viewportFrame);
       resizeObserver?.disconnect();
       window.removeEventListener("blur", clearLiteralPasteIntent);
+      window.removeEventListener("mouseup", clearTypewriterPointer);
       document.removeEventListener("visibilitychange", clearLiteralPasteIntent);
       hostRef.current?.removeEventListener("contextmenu", clearLiteralPasteIntent);
       view.scrollDOM.removeEventListener("scroll", scheduleViewportAnchor);
@@ -519,6 +551,27 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       literalPasteUntilRef.current = 0;
     };
   }, []);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const showFormatMenu = (event: MouseEvent) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const target = event.target as Element | null;
+      if (target?.closest(".cm-live-table-context-menu, th[data-table-row], td[data-table-row]")) return;
+      if (view.state.selection.main.empty) return;
+      const line = view.state.doc.lineAt(view.state.selection.main.from);
+      const lineStart = view.coordsAtPos(line.from);
+      const lineEnd = view.coordsAtPos(line.to);
+      showSelectionFormatMenu(event, (kind) => {
+        if (kind === "link") insertLink("https://");
+        else toggleSelectionMark(kind);
+      }, lineStart ? { left: lineStart.left, right: lineEnd?.right ?? lineStart.right, top: lineStart.top, bottom: lineStart.bottom } : null);
+    };
+    host.addEventListener("contextmenu", showFormatMenu);
+    return () => host.removeEventListener("contextmenu", showFormatMenu);
+  }, [insertLink, toggleSelectionMark]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -544,7 +597,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === value) return;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (current === value) {
+      lastSentValueRef.current = value;
+      return;
+    }
+    // 本地输入已经通过 onChange 发出 lastSent，父组件滞后的 value 不得整篇回写。
+    if (current === lastSentValueRef.current) return;
+    lastSentValueRef.current = value;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
       annotations: Transaction.addToHistory.of(false),
@@ -588,7 +649,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const editorStyle = {
     "--live-font-family": fontFamily,
     "--live-reading-width": readingMaxWidth,
-    "--live-font-size": fontSize ? `${fontSize}px` : undefined,
+    "--editor-canvas-zoom": fontSize ? String(fontSize / DEFAULT_PREVIEW_FONT_SIZE) : "1",
   } as CSSProperties;
 
   return <><div className={`editor-host${wechatThemeDefinition ? " wechat-theme-active" : ""}${typewriterMode ? " typewriter-mode" : ""}`} ref={hostRef} style={editorStyle} onDragOverCapture={(event) => {

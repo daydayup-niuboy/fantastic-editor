@@ -14,6 +14,10 @@ export interface MarkdownDocumentFenceResult {
   detected: boolean;
 }
 
+export function nextWebMarkdownRepairSource(current: string | null, pasted: boolean, value: string): string | null {
+  return pasted ? value : current;
+}
+
 const MARKDOWN_FENCE_LANGUAGE = /^(?:markdown|md|mkd|mdown)$/i;
 const LEADING_WEB_SPACE_BEFORE_MARKDOWN = /^([\u00A0\u202F]+)(?=(?:#{1,6}(?:\s|$)|>(?:\s|$)|(?:[-+*]|\d{1,9}[.)])\s|(?:-{3,}|\*{3,}|_{3,})\s*$|\|.*\|\s*$|`{3,}|~{3,}))/;
 
@@ -145,7 +149,7 @@ export function repairWebMarkdown(source: string): WebMarkdownRepairResult {
   const markdown = output.join("\n");
   return {
     markdown,
-    changed: markdown !== normalizeLineEndings(source),
+    changed: repairedMarkers > 0 || repairedInlinePairs > 0 || removedBlankLines > 0 || repairedTableGaps > 0,
     repairedMarkers,
     repairedInlinePairs,
     removedBlankLines,

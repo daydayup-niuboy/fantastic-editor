@@ -6,6 +6,9 @@ import { delimiter, join } from "node:path";
 import type { AiActionId, AiInvocationEvent, AiInvocationRequest, AiInvocationResult, AiProviderId, AiProviderStatus } from "@fantastic-editor/shared";
 import type { DeepSeekApi } from "./deepseek-api.js";
 import type { GeminiApi } from "./gemini-api.js";
+import type { KimiApi } from "./kimi-api.js";
+import type { MiniMaxApi } from "./minimax-api.js";
+import type { OpenAiCompatibleApi } from "./openai-compatible-api.js";
 
 const INPUT_LIMIT = 64 * 1024;
 const INSTRUCTION_LIMIT = 1_000;
@@ -14,9 +17,11 @@ const RESULT_LIMIT = 256 * 1024;
 const RAW_OUTPUT_LIMIT = RESULT_LIMIT + 64 * 1024;
 const TIMEOUT_MS = 180_000;
 type SpawnSpec = { executable: string; argsPrefix?: string[] };
-type AiCliServiceOptions = { spawnSpec?: SpawnSpec; timeoutMs?: number; deepSeek?: DeepSeekApi; gemini?: GeminiApi };
+type ApiProvider = { configured(): Promise<boolean>; invoke(request: AiInvocationRequest, prompt: string): Promise<AiInvocationResult>; cancel(): void };
+type AiCliServiceOptions = { spawnSpec?: SpawnSpec; timeoutMs?: number; deepSeek?: DeepSeekApi; gemini?: GeminiApi; kimi?: KimiApi; miniMax?: MiniMaxApi; openAiCompatible?: OpenAiCompatibleApi };
 const ACTIONS: Record<AiActionId, string> = {
   polish: "润色文字，使表达清楚、自然、准确，保持原意和 Markdown 结构",
+  deai: "重写文字，去掉 AI 腔，让读者或检测工具难以判断由 AI 写成。保留意义、事实和 Markdown 结构，只交付最终正文。删除夸大重要性、假深度动名词、广告套话、AI 高频词、滥用系动词、否定式排比、机械三段式、被动语态、长破折号、表情和聊天机器人套话。注入变化节奏、具体观点、允许不确定、必要时用第一人称，并保留自然口语。分三遍自检后再输出，不要引言、评论或修改摘要",
   rewrite: "改写文字，改善组织和表达，保持事实、原意和 Markdown 结构",
   condense: "精简文字，删除重复和赘述，保留关键信息和 Markdown 结构",
   expand: "扩写文字，补足必要说明，避免编造事实，保持 Markdown 结构",
@@ -27,11 +32,22 @@ const ACTIONS: Record<AiActionId, string> = {
   custom: "按照用户提供的自定义要求处理文字，保持事实准确和 Markdown 结构",
 };
 
-const PROVIDERS: Record<AiProviderId, { displayName: string; executable: string }> = {
+const PROVIDERS: Record<AiProviderId, { displayName: string; executable: string; apiKeyLabel?: string }> = {
   "codex-cli": { displayName: "Codex CLI", executable: "codex" },
   "claude-cli": { displayName: "Claude CLI", executable: "claude" },
-  "deepseek-api": { displayName: "DeepSeek API", executable: "" },
-  "gemini-api": { displayName: "Gemini API", executable: "" },
+  "deepseek-api": { displayName: "DeepSeek API", executable: "", apiKeyLabel: "DeepSeek" },
+  "gemini-api": { displayName: "Gemini API", executable: "", apiKeyLabel: "Gemini" },
+  "kimi-api": { displayName: "Kimi API", executable: "", apiKeyLabel: "Kimi" },
+  "minimax-api": { displayName: "MiniMax API", executable: "", apiKeyLabel: "MiniMax" },
+  "openai-compatible": { displayName: "OpenAI 兼容 API", executable: "", apiKeyLabel: "自定义" },
+};
+
+/** API 提供商的稳定模型标识，用于探测结果展示；不对外暴露端点。 */
+const API_PROVIDER_MODELS: Partial<Record<AiProviderId, string>> = {
+  "deepseek-api": "deepseek-chat",
+  "gemini-api": "gemini-3.8-flash",
+  "kimi-api": "kimi-k3",
+  "minimax-api": "MiniMax-M3",
 };
 
 async function executableFromPath(providerId: AiProviderId, pathValue = process.env.PATH ?? ""): Promise<string | null> {
@@ -102,7 +118,11 @@ export function validateAiRequest(value: unknown): value is AiInvocationRequest 
   const anchorKeys = request.anchor && typeof request.anchor === "object" ? Object.keys(request.anchor) : [];
   return Object.hasOwn(PROVIDERS, request.providerId)
     && requestKeys.length === (request.actionId === "custom" ? 7 : 6)
-    && requestKeys.every((key) => ["requestId", "providerId", "scope", "actionId", "anchor", "content", "customInstruction"].includes(key))
+      + (request.providerId === "openai-compatible" ? 1 : 0)
+    && requestKeys.every((key) => ["requestId", "providerId", "scope", "actionId", "anchor", "content", "customInstruction", "modelSlot"].includes(key))
+    && (request.providerId === "openai-compatible"
+      ? request.modelSlot === 0 || request.modelSlot === 1
+      : request.modelSlot === undefined)
     && anchorKeys.length === 5 && anchorKeys.every((key) => ["documentId", "sourceHash", "from", "to", "expectedText"].includes(key))
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.requestId)
     && (request.scope === "selection" || request.scope === "block")
@@ -130,24 +150,49 @@ export class AiCliService {
   readonly #timeoutMs: number;
   readonly #deepSeek: DeepSeekApi | undefined;
   readonly #gemini: GeminiApi | undefined;
+  readonly #kimi: KimiApi | undefined;
+  readonly #miniMax: MiniMaxApi | undefined;
+  readonly #openAiCompatible: OpenAiCompatibleApi | undefined;
 
   constructor(options: AiCliServiceOptions = {}) {
     this.#spawnSpec = options.spawnSpec;
     this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.#deepSeek = options.deepSeek;
     this.#gemini = options.gemini;
+    this.#kimi = options.kimi;
+    this.#miniMax = options.miniMax;
+    this.#openAiCompatible = options.openAiCompatible;
+  }
+
+  /** API 提供商实例；返回 undefined 表示该 providerId 走本机 CLI。 */
+  #apiProvider(providerId: AiProviderId): ApiProvider | undefined {
+    switch (providerId) {
+      case "deepseek-api": return this.#deepSeek;
+      case "gemini-api": return this.#gemini;
+      case "kimi-api": return this.#kimi;
+      case "minimax-api": return this.#miniMax;
+      case "openai-compatible": return this.#openAiCompatible;
+      default: return undefined;
+    }
   }
 
   async detect(): Promise<AiProviderStatus[]> {
-    if (this.#spawnSpec) return (Object.keys(PROVIDERS) as AiProviderId[]).map((providerId) => providerId === "deepseek-api" || providerId === "gemini-api" ? ({ providerId, displayName: PROVIDERS[providerId].displayName, status: "unavailable", guidance: `请先配置 ${providerId === "deepseek-api" ? "DeepSeek" : "Gemini"} API Key。` }) : ({ providerId, displayName: PROVIDERS[providerId].displayName, status: "available", version: "fake-cli" }));
+    if (this.#spawnSpec) return (Object.keys(PROVIDERS) as AiProviderId[]).map((providerId) => PROVIDERS[providerId].executable === ""
+      ? ({ providerId, displayName: PROVIDERS[providerId].displayName, status: "unavailable", guidance: providerId === "openai-compatible" ? "请先配置订阅地址、API Key 和至少一个模型。" : `请先配置 ${PROVIDERS[providerId].apiKeyLabel} API Key。` })
+      : ({ providerId, displayName: PROVIDERS[providerId].displayName, status: "available", version: "fake-cli" }));
     return Promise.all((Object.keys(PROVIDERS) as AiProviderId[]).map(async (providerId): Promise<AiProviderStatus> => {
       const provider = PROVIDERS[providerId];
-      if (providerId === "deepseek-api") return await this.#deepSeek?.configured()
-        ? { providerId, displayName: provider.displayName, status: "available", version: "deepseek-chat" }
-        : { providerId, displayName: provider.displayName, status: "unavailable", guidance: "请先配置 DeepSeek API Key。" };
-      if (providerId === "gemini-api") return await this.#gemini?.configured()
-        ? { providerId, displayName: provider.displayName, status: "available", version: "gemini-3.8-flash" }
-        : { providerId, displayName: provider.displayName, status: "unavailable", guidance: "请先配置 Gemini API Key。" };
+      const api = this.#apiProvider(providerId);
+      if (provider.executable === "" && providerId === "openai-compatible") {
+        const summary = await this.#openAiCompatible?.summary();
+        if (summary?.configured) return { providerId, displayName: summary.localName || summary.providerName || provider.displayName, status: "available", version: summary.providerName || provider.displayName };
+        return { providerId, displayName: provider.displayName, status: "unavailable", guidance: "请先配置订阅地址、API Key 和至少一个模型。" };
+      }
+      if (provider.executable === "") {
+        return api && await api.configured()
+          ? { providerId, displayName: provider.displayName, status: "available", version: API_PROVIDER_MODELS[providerId] ?? provider.displayName }
+          : { providerId, displayName: provider.displayName, status: "unavailable", guidance: `请先配置 ${provider.apiKeyLabel} API Key。` };
+      }
       const executable = await executableFromPath(providerId);
       if (!executable) return { providerId, displayName: provider.displayName, status: "unavailable", guidance: `未找到 ${provider.displayName}，请先安装并登录。` };
       try {
@@ -166,25 +211,18 @@ export class AiCliService {
     return this.invokePrompt(request, buildAiPrompt(request), emit);
   }
 
-  async invokePrompt(request: Pick<AiInvocationRequest, "requestId" | "providerId">, prompt: string, emit: (event: AiInvocationEvent) => void = () => undefined): Promise<AiInvocationResult> {
+  async invokePrompt(request: Pick<AiInvocationRequest, "requestId" | "providerId" | "modelSlot">, prompt: string, emit: (event: AiInvocationEvent) => void = () => undefined): Promise<AiInvocationResult> {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.requestId)
       || !Object.hasOwn(PROVIDERS, request.providerId)
+      || (request.providerId === "openai-compatible" ? request.modelSlot !== 0 && request.modelSlot !== 1 : request.modelSlot !== undefined)
       || !prompt || Buffer.byteLength(prompt) > INPUT_LIMIT + 16 * 1024) {
       return { status: "failed", code: "INVALID_REQUEST", error: "AI 请求内容无效或超过长度上限。" };
     }
     if (this.#active) return { status: "failed", code: "BUSY", error: "已有 AI 请求正在处理中。" };
-    if (request.providerId === "deepseek-api") {
-      if (!this.#deepSeek) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 DeepSeek API Key。" };
-      this.#active = { requestId: request.requestId, cancel: () => this.#deepSeek?.cancel() };
-      const result = await this.#deepSeek.invoke(request as AiInvocationRequest, prompt);
-      this.#active = null;
-      emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
-      return result;
-    }
-    if (request.providerId === "gemini-api") {
-      if (!this.#gemini) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Gemini API Key。" };
-      this.#active = { requestId: request.requestId, cancel: () => this.#gemini?.cancel() };
-      const result = await this.#gemini.invoke(request as AiInvocationRequest, prompt);
+    const api = this.#apiProvider(request.providerId);
+    if (api) {
+      this.#active = { requestId: request.requestId, cancel: () => api.cancel() };
+      const result = await api.invoke(request as AiInvocationRequest, prompt);
       this.#active = null;
       emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
       return result;

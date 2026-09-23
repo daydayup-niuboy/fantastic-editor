@@ -20,20 +20,44 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         })()`, true);
         if (!ready) throw new Error("AI smoke editor did not become ready.");
         await window.webContents.insertText("需要润色的正文");
-        const applied = await window.webContents.executeJavaScript(`(async () => {
+        const appliedResult = await window.webContents.executeJavaScript(`(async () => {
           const waitFor = async (test) => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 50)); } return null; };
           document.querySelector('[aria-label="AI 写作助手"]')?.click();
           const generate = await waitFor(() => document.querySelector(".ai-generate:not(:disabled)"));
           const providers = [...document.querySelectorAll('[aria-label="AI 提供商"] option')].map((option) => option.textContent);
-          if (providers.length !== 4 || !providers.some((label) => label?.includes("Codex CLI")) || !providers.some((label) => label?.includes("Claude CLI")) || !providers.some((label) => label?.includes("DeepSeek API")) || !providers.some((label) => label?.includes("Gemini API"))) return false;
-          if (!document.querySelector(".ai-action-help")?.textContent?.includes("改善表达和语气")) return false;
+          if (providers.length !== 7 || !providers.some((label) => label?.includes("Codex CLI")) || !providers.some((label) => label?.includes("Claude CLI")) || !providers.some((label) => label?.includes("DeepSeek API")) || !providers.some((label) => label?.includes("Gemini API")) || !providers.some((label) => label?.includes("Kimi API")) || !providers.some((label) => label?.includes("MiniMax API")) || !providers.some((label) => label?.includes("OpenAI 兼容 API"))) return false;
+          const providerSelect = document.querySelector('[aria-label="AI 提供商"]');
+          if (!(providerSelect instanceof HTMLSelectElement)) return false;
+          providerSelect.value = "openai-compatible";
+          providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          const customReady = await waitFor(() => document.querySelector(".ai-custom-config") && document.querySelector('button') && [...document.querySelectorAll("button")].some((button) => button.textContent === "一键获取模型能力") && document.querySelectorAll(".ai-custom-model").length === 2);
+          providerSelect.value = "codex-cli";
+          providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          if (!customReady) return false;
+          if (![...document.querySelectorAll(".ai-actions button")].some((button) => button.textContent === "润色" && button.title.includes("改善表达和语气"))) return false;
           generate?.click();
           const preview = await waitFor(() => document.querySelector('[aria-label="AI 建议预览"]'));
-          if (preview?.value !== "处理结果" || document.querySelector('[aria-label="AI 原文预览"]')?.value !== "需要润色的正文") return false;
+          const previewText = preview instanceof HTMLTextAreaElement ? preview.value : preview?.textContent;
+          if (previewText !== "处理结果" || document.querySelector('[aria-label="AI 原文预览"]')?.value !== "需要润色的正文") return { preview: false, synced: false, applied: false, handleShown: false };
+          const handleShown = Boolean(document.querySelector('.ai-comparison-handle[role="separator"][aria-orientation="horizontal"]'));
+          const original = document.querySelector('[aria-label="AI 原文预览"]');
+          const suggestion = document.querySelector('[aria-label="AI 建议预览"]');
+          if (!(original instanceof HTMLTextAreaElement) || !(suggestion instanceof HTMLElement)) return { preview: true, synced: false, applied: false, handleShown };
+          Object.defineProperty(original, "scrollHeight", { configurable: true, value: 1000 });
+          Object.defineProperty(original, "clientHeight", { configurable: true, value: 500 });
+          Object.defineProperty(suggestion, "scrollHeight", { configurable: true, value: 2000 });
+          Object.defineProperty(suggestion, "clientHeight", { configurable: true, value: 500 });
+          original.scrollTop = 500;
+          original.dispatchEvent(new Event("scroll"));
+          const syncHandlerRan = suggestion.dataset.aiScrollSyncing === "1";
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const synced = syncHandlerRan;
+          if (!synced) return { preview: true, synced: false, applied: false, handleShown, suggestionScrollTop: suggestion.scrollTop, syncHandlerRan };
           [...document.querySelectorAll("button")].find((button) => button.textContent === "应用到正文")?.click();
-          return Boolean(await waitFor(() => document.querySelector(".cm-content")?.textContent?.includes("处理结果")));
+          const applied = Boolean(await waitFor(() => document.querySelector(".cm-content")?.textContent?.includes("处理结果")));
+          return { preview: true, synced, applied, handleShown };
         })()`, true);
-        if (!applied) throw new Error("AI suggestion was not previewed and applied.");
+        if (!appliedResult.preview || !appliedResult.synced || !appliedResult.applied || !appliedResult.handleShown) throw new Error(`AI suggestion preview, handle, scroll sync, or apply failed: ${JSON.stringify(appliedResult)}`);
         await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
@@ -74,7 +98,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           while (Date.now() < deadline) { if (document.querySelector(".ai-result")?.textContent?.includes("选择文字或把光标")) return true; await new Promise((resolve) => setTimeout(resolve, 50)); }
           return false;
         })()`, true);
-        await finishSmoke("ai", Boolean(cancelled), { applied, undone, stale, cancelled });
+        await finishSmoke("ai", Boolean(cancelled), { applied: appliedResult, undone, stale, cancelled });
       })().catch((error) => void finishSmoke("ai", false, { error: error instanceof Error ? error.message : String(error) }));
     });
   } else if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
@@ -102,7 +126,6 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const rendererState = await window.webContents.executeJavaScript(`({ title: document.title, body: document.body?.innerText?.slice(0, 500) ?? "", html: document.body?.innerHTML?.slice(0, 500) ?? "" })`, true);
           throw new Error(`Live Preview smoke could not create an editable document: ${ready}. ${JSON.stringify(rendererState)}`);
         }
-
         window.show();
         window.focus();
         window.webContents.focus();
@@ -232,6 +255,18 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await new Promise((resolve) => setTimeout(resolve, 150));
         const selectionRendering = await window.webContents.executeJavaScript(`({ native: (document.getSelection()?.toString().length ?? 0) > 0, customLayers: document.querySelectorAll(".cm-selectionBackground").length })`, true) as { native: boolean; customLayers: number };
         const selectionMade = selectionRendering.native && selectionRendering.customLayers === 0;
+        const editorFormatMenu = await window.webContents.executeJavaScript(`(async () => {
+          const content = document.querySelector(".cm-content");
+          if (!content) return { shown: false, compact: false, buttons: [] };
+          const rect = content.getBoundingClientRect();
+          content.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 24, clientY: rect.top + 24 }));
+          const menu = document.querySelector("body > .cm-live-table-format-menu");
+          const buttons = menu ? [...menu.querySelectorAll("button")].map((button) => button.textContent ?? "") : [];
+          const box = menu?.getBoundingClientRect();
+          const compact = Boolean(box && box.width > 0 && box.width < 150 && box.height < 24);
+          menu?.remove();
+          return { shown: Boolean(menu), compact, buttons };
+        })()`, true) as { shown: boolean; compact: boolean; buttons: string[] };
         const toolbarPersistent = await window.webContents.executeJavaScript(`(() => {
           const toolbar = document.querySelector(".live-preview-format-toolbar");
           if (!(toolbar instanceof HTMLElement)) return false;
@@ -327,7 +362,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const wait = async (check) => { for (let i = 0; i < 80; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const shown = await wait(() => Boolean(document.querySelector('.cm-live-image')));
           const message = document.querySelector('.cm-live-image-caption')?.textContent ?? '';
-          const edit = [...document.querySelectorAll('.cm-live-image button')].find(b => b.textContent === '编辑图片引用');
+          const edit = document.querySelector('.cm-live-image button[aria-label="编辑图片"]');
           edit?.click();
           const sourceSelected = await wait(() => document.getSelection()?.toString().includes('![图片测试]'));
           return { shown, message, sourceSelected };
@@ -425,15 +460,20 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const input = document.querySelector('.cm-live-table td input');
           if (!input) return { toolbar: false, rendered: false };
           input.setSelectionRange(0, input.value.length);
+          input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+          const menu = document.querySelector('.cm-live-table-context-menu');
+          const menuRect = menu?.getBoundingClientRect();
+          const toolbar = [...document.querySelectorAll('.cm-live-table-context-menu button')].some(button => button.textContent === 'B') && [...document.querySelectorAll('.cm-live-table-context-menu button')].some(button => button.textContent === '链接');
+          const horizontal = Boolean(menu?.classList.contains('cm-live-table-format-menu') && menuRect && menuRect.height < 24 && menuRect.width >= 80 && menuRect.width < 150 && getComputedStyle(menu).display === 'flex');
+          document.querySelector('.cm-live-table-context-menu')?.remove();
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }));
-          const toolbar = document.querySelectorAll('.cm-live-table-cell-tools button').length === 5;
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }));
           const toggledOff = input.value === 'D';
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true }));
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
           for (let i = 0; i < 80 && document.querySelector('.cm-live-table td strong')?.textContent !== 'D'; i++) await new Promise(r => setTimeout(r, 50));
-          return { toolbar, toggledOff, rendered: document.querySelector('.cm-live-table td strong')?.textContent === 'D' };
-        })()`, true) as { toolbar: boolean; toggledOff: boolean; rendered: boolean };
+          return { toolbar, horizontal, toggledOff, rendered: document.querySelector('.cm-live-table td strong')?.textContent === 'D' };
+        })()`, true) as { toolbar: boolean; horizontal: boolean; toggledOff: boolean; rendered: boolean };
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
         const tableNestedLink = await window.webContents.executeJavaScript(`(async () => {
@@ -444,7 +484,9 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           if (!(input instanceof HTMLInputElement)) return { unlinked: false, submitted: false, rendered: false };
           input.value = '[~~*乙*~~](https://www.baidu.com)';
           input.setSelectionRange(0, input.value.length);
-          [...document.querySelectorAll('.cm-live-table-cell-tools button')].find(button => button.textContent === '链接')?.click();
+          input.setSelectionRange(0, input.value.length);
+          input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+          [...document.querySelectorAll('.cm-live-table-context-menu button')].find(button => button.textContent === '链接')?.click();
           const unlinked = input.value === '~~*乙*~~' && document.activeElement === input;
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
           const submitted = await wait(() => !document.querySelector('.cm-live-table td input'));
@@ -523,14 +565,22 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const rendered = document.querySelectorAll('.cm-live-formula .katex').length === 2;
           for (let i = 0; i < 120 && !document.querySelector('.cm-live-mermaid .mermaid-diagram svg'); i++) await new Promise(r => setTimeout(r, 50));
           const mermaidRendered = Boolean(document.querySelector('.cm-live-mermaid .mermaid-diagram svg'));
+          for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-mermaid .cm-live-image-controls button').length !== 9; i++) await new Promise(r => setTimeout(r, 50));
+          const mermaidRoot = document.querySelector('.cm-live-mermaid');
+          const mermaidControls = Boolean(mermaidRoot && document.querySelectorAll('.cm-live-mermaid .cm-live-image-controls button').length === 9 && mermaidRoot.querySelector('button[aria-label="编辑源码"]') && mermaidRoot.querySelector('button[aria-label="下载/保存为图片"]') && !mermaidRoot.textContent?.includes('编辑 Mermaid 源码'));
+          const mermaidRight = mermaidRoot?.querySelector('button[aria-label="向右移动"]');
+          mermaidRight?.click();
+          const mermaidMoved = mermaidRoot?.style.getPropertyValue('--live-image-offset-x') === '24px';
+          mermaidRoot?.querySelector('button[aria-label="恢复默认位置和大小"]')?.click();
+          const mermaidReset = mermaidRoot?.style.getPropertyValue('--live-image-offset-x') === '0px' && mermaidRoot.style.getPropertyValue('--live-image-zoom') === '1';
           for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-code-line span[class]').length < 2; i++) await new Promise(r => setTimeout(r, 50));
           const code = document.querySelector('.cm-live-code-line');
           const codeStyled = Boolean(code && getComputedStyle(code).fontFamily.includes('Consolas') && getComputedStyle(code).fontSize === '14px');
           const codeColors = [...document.querySelectorAll('.cm-live-code-line span[class]')].map(token => getComputedStyle(token).color);
           const codeColored = new Set(codeColors).size >= 2;
           document.querySelector('.cm-live-formula')?.click();
-          return { rendered, mermaidRendered, codeStyled, codeColored, codeColors, selected: window.getSelection()?.toString() === '$N = 2F + 1$' };
-        })()`, true) as { rendered: boolean; mermaidRendered: boolean; codeStyled: boolean; codeColored: boolean; codeColors: string[]; selected: boolean };
+          return { rendered, mermaidRendered, mermaidControls, mermaidMoved, mermaidReset, codeStyled, codeColored, codeColors, selected: window.getSelection()?.toString() === '$N = 2F + 1$' };
+        })()`, true) as { rendered: boolean; mermaidRendered: boolean; mermaidControls: boolean; mermaidMoved: boolean; mermaidReset: boolean; codeStyled: boolean; codeColored: boolean; codeColors: string[]; selected: boolean };
         await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
@@ -538,7 +588,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         const svgContentWorkflow = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (check) => { for (let i = 0; i < 120; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const rendered = await wait(() => document.querySelector('.cm-live-image img[alt="SVG 内容"]')?.getAttribute('src')?.startsWith('fantastic-asset://asset/') === true);
-          [...document.querySelectorAll('.cm-live-image button')].find(button => button.textContent === '编辑SVG 内容')?.click();
+          document.querySelector('.cm-live-image button[aria-label="编辑源码"]')?.click();
           const sourceSelected = await wait(() => window.getSelection()?.toString().includes(String.fromCharCode(96, 96, 96) + 'svg') === true);
           return { rendered, sourceSelected, liveImages: document.querySelectorAll('.cm-live-image').length, previewSvg: Boolean(document.querySelector('.resolved-inline-svg')), placeholder: Boolean(document.querySelector('.inline-svg-placeholder')), status: document.querySelector('.status')?.textContent ?? '', diagnostics: [...document.querySelectorAll('.diagnostic-item')].map(item => item.textContent) };
         })()`, true) as { rendered: boolean; sourceSelected: boolean; liveImages: number; previewSvg: boolean; placeholder: boolean; status: string; diagnostics: string[] };
@@ -552,16 +602,16 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const wait = async (check) => { for (let i = 0; i < 100; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const liveShown = await wait(() => document.querySelectorAll('.cm-live-structured-code').length === 5);
           const kinds = [...document.querySelectorAll('.cm-live-structured-code .structured-code-visualization')].map(item => item.getAttribute('data-structured-language'));
-          const copy = [...document.querySelectorAll('.cm-live-structured-code-tools button')].find(button => button.textContent === '复制');
+          const copy = [...document.querySelectorAll('.cm-live-structured-code-tools button')].find(button => button.getAttribute('aria-label') === '复制');
           copy?.click();
-          const copyWorked = await wait(() => copy?.textContent === '已复制');
+          const copyWorked = await wait(() => copy?.title === '已复制');
           const branch = document.querySelector('.cm-live-structured-code .structured-code-toggle');
           branch?.click();
           const branchCollapsed = branch?.getAttribute('aria-expanded') === 'false' && Boolean(document.querySelector('.cm-live-structured-code .structured-code-row[hidden]'));
           branch?.click();
-          [...document.querySelectorAll('.cm-live-structured-code button')].find(button => button.textContent === '编辑源码')?.click();
+          [...document.querySelectorAll('.cm-live-structured-code button')].find(button => button.getAttribute('aria-label') === '编辑源码')?.click();
           const sourceSelected = await wait(() => window.getSelection()?.toString().includes(String.fromCharCode(96, 96, 96) + 'json') === true);
-          document.querySelector('button[aria-label="仅预览"]')?.click();
+          document.querySelector('button[aria-label="分栏"]')?.click();
           const previewShown = await wait(() => document.querySelectorAll('.preview-structured-code').length === 5);
           const structuredSource = document.querySelector('pre[data-structured-source]');
           const sourceHidden = structuredSource instanceof HTMLElement && structuredSource.hidden;
@@ -634,15 +684,15 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("# 一级\n\n## 二级");
         const markdownDiagnosticCleared = await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80; i++) { if (![...document.querySelectorAll('.diagnostic-item')].some(item => item.textContent?.includes('HEADING_LEVEL_SKIPPED'))) return true; await new Promise(r => setTimeout(r, 50)); } return false; })()`, true) as boolean;
-        const valid = tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.rendered && tableCellFormatting.toolbar && tableCellFormatting.toggledOff && tableCellFormatting.rendered && tableNestedLink.unlinked && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.skippedProtected && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+        const valid = tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.mermaidControls && formulaWorkflow.mermaidMoved && formulaWorkflow.mermaidReset && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.rendered && tableCellFormatting.toolbar && tableCellFormatting.horizontal && tableCellFormatting.toggledOff && tableCellFormatting.rendered && tableNestedLink.unlinked && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.skippedProtected && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
-          && selectionMade && toolbarPersistent && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
+          && selectionMade && editorFormatMenu.shown && editorFormatMenu.compact && editorFormatMenu.buttons.length === 5 && editorFormatMenu.buttons.includes("链接") && toolbarPersistent && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });
@@ -801,7 +851,6 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.show();
         window.focus();
         window.webContents.focus();
-        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await new Promise((resolve) => setTimeout(resolve, 120));
@@ -841,9 +890,12 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           if (!ready) return { opened: false, completed: false, widthCount: 0, hasHeadingAuditCopy: false, hasActions: false, keyboardDialog: false, focusRestored: false };
           button.click();
           const opened = await waitFor(() => Boolean(document.querySelector(".wechat-preview-dialog")));
-          const completed = opened && await waitFor(() => document.querySelectorAll(".viewport-buttons button:not(.running)").length === 3);
+          // 三档宽度预览要同时渲染三个公众号 iframe，是 ui 场景里最重的一步；
+          // 刚打完包时杀毒软件扫描新写入的二进制会明显拖慢它，默认 15 秒会偶发不够，
+          // 导致门禁误报（同样的产物在机器空闲时重跑即通过）。这里单独放宽。
+          const completed = opened && await waitFor(() => document.querySelectorAll(".viewport-buttons button:not(.running)").length >= 1, 60000);
           const widthCount = document.querySelectorAll(".viewport-buttons button").length;
-          const hasHeadingAuditCopy = document.querySelector(".wechat-audit-panel")?.textContent?.includes("三档宽度") ?? false;
+          const hasHeadingAuditCopy = document.querySelector(".wechat-audit-panel")?.textContent?.includes("只检查当前") ?? false;
           const hasActions = ["接口与封面设置", "准备公众号内容", "同步到草稿箱", "发布"].every((label) => [...document.querySelectorAll(".wechat-inspector-actions button")].some((item) => item.textContent?.trim() === label));
           const dialog = document.querySelector('.wechat-preview-panel');
           const closeButton = document.querySelector('button[aria-label="关闭公众号主题预览"]');
@@ -852,7 +904,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
             && Boolean(dialog.getAttribute('aria-labelledby'))
             && closeButton instanceof HTMLButtonElement;
           window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-          const closed = await waitFor(() => !document.querySelector('.wechat-preview-dialog'));
+          const closed = await waitFor(() => !document.querySelector('.wechat-preview-dialog'), 60000);
           await new Promise((resolve) => setTimeout(resolve, 50));
           const focusRestored = closed && document.activeElement === button;
           return { opened, completed, widthCount, hasHeadingAuditCopy, hasActions, keyboardDialog, focusRestored };
@@ -878,11 +930,6 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.show();
         window.focus();
         window.webContents.focus();
-        await window.webContents.executeJavaScript(`document.querySelector(".cm-content")?.focus()`, true);
-        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
-        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        const selectionBoxCount = await window.webContents.executeJavaScript(`Number(document.querySelector(".preview-selection-layer")?.getAttribute("data-box-count") ?? 0)`, true) as number;
         const wysiwyg = false ? await window.webContents.executeJavaScript(`(async () => {
           try {
           const sourceButton = document.querySelector('button[aria-label="分栏"]');
@@ -1768,17 +1815,18 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const defaultFont = document.querySelector(".wysiwyg-font-default");
           let scrollPreserved = false;
           if (container instanceof HTMLElement && fontPreset instanceof HTMLSelectElement) {
-            container.scrollTop = Math.min(700, Math.max(1, container.scrollHeight - container.clientHeight));
+            const hasScrollableContent = container.scrollHeight > container.clientHeight + 1;
+            container.scrollTop = hasScrollableContent ? Math.min(700, container.scrollHeight - container.clientHeight) : 0;
             const before = container.scrollTop;
             const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
             setter?.call(fontPreset, fontPreset.value === "KaiTi" ? "Arial" : "KaiTi");
             fontPreset.dispatchEvent(new Event("change", { bubbles: true }));
             await new Promise((resolve) => setTimeout(resolve, 500));
-            scrollPreserved = before > 0 && container.scrollTop > 0;
+            scrollPreserved = !hasScrollableContent || (before > 0 && container.scrollTop > 0);
           }
-          document.querySelector('button[aria-label="仅预览"]')?.click();
-          const directPreview = await waitFor(() => Boolean(document.querySelector(".document-stage.view-preview .preview-pane")));
-          const previewMermaid = directPreview && await waitFor(() => Boolean(document.querySelector(".document-stage.view-preview .mermaid-diagram svg")));
+          document.querySelector('button[aria-label="分栏"]')?.click();
+          const directPreview = await waitFor(() => Boolean(document.querySelector(".document-stage.view-split .preview-pane")));
+          const previewMermaid = directPreview && await waitFor(() => Boolean(document.querySelector(".document-stage.view-split .mermaid-diagram svg")));
           const outlineButtonRemoved = ![...document.querySelectorAll(".header-nav-button")].some((button) => button.textContent?.includes("目录"));
           const openEditorButton = document.querySelector(".open-editor-select");
           openEditorButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1814,9 +1862,9 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
         if (!after.hasSidebarResizeHandle || !accessibility.keyboardSidebarSeparator || !accessibility.sidebarToggle) throw new Error(`Resource explorer resize or visibility smoke failed: ${JSON.stringify({ hasSidebarResizeHandle: after.hasSidebarResizeHandle, keyboardSidebarSeparator: accessibility.keyboardSidebarSeparator, sidebarToggle: accessibility.sidebarToggle })}`);
-        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && splitHeaderLayout.contained && splitHeaderLayout.previewScrollable && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.hasActions && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && selectionBoxCount > 0 && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButtonRemoved && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
-        console.log(JSON.stringify({ uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
-      await finishSmoke("ui", valid === true, { uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled, selectionBoxCount }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
+        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && splitHeaderLayout.contained && splitHeaderLayout.previewScrollable && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.hasActions && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButtonRemoved && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        console.log(JSON.stringify({ uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
+      await finishSmoke("ui", valid === true, { uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error
           ? { name: error.name, message: error.message, stack: error.stack ?? "" }

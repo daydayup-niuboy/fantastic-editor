@@ -28,12 +28,19 @@ describe("FileSessionManager", () => {
     const request = { workspaceId: workspace.workspaceId, workspaceRevision: workspace.workspaceRevision, fileId: file.fileId };
     const duplicated = await manager.mutateWorkspaceFile(request, "duplicate");
     expect(duplicated?.files.some((item) => item.displayName.includes("副本"))).toBe(true);
+    const duplicateFile = duplicated!.files.find((item) => item.displayName.includes("副本"))!;
     const original = duplicated!.files.find((item) => item.displayName === "article.md")!;
     const movedResult = await manager.mutateWorkspaceFile({ ...request, workspaceRevision: duplicated!.workspaceRevision, fileId: original.fileId }, "move", moved);
     expect(movedResult?.files.some((item) => item.relativePath === "moved/article.md")).toBe(true);
     const movedFile = movedResult!.files.find((item) => item.relativePath === "moved/article.md")!;
     const deleted = await manager.mutateWorkspaceFile({ ...request, workspaceRevision: movedResult!.workspaceRevision, fileId: movedFile.fileId }, "delete");
     expect(deleted?.files.some((item) => item.relativePath === "moved/article.md")).toBe(false);
+    const duplicateSession = await manager.openWorkspaceFile({ workspaceId: workspace.workspaceId, workspaceRevision: deleted!.workspaceRevision, fileId: duplicateFile.fileId });
+    if (duplicateSession.status !== "opened" || !duplicateSession.session) throw new Error("Expected duplicate workspace session.");
+    const viaOpenMenu = await manager.deleteOpenFile(duplicateSession.session.sessionId);
+    expect(viaOpenMenu.status).toBe("deleted");
+    expect(viaOpenMenu.status === "deleted" ? viaOpenMenu.workspace?.files.some((item) => item.fileId === duplicateFile.fileId) : false).toBe(false);
+    expect(viaOpenMenu.status === "deleted" ? viaOpenMenu.workspace?.removedSessionIds.includes(duplicateSession.session.sessionId) : false).toBe(true);
   });
   it("round-trips UTF-8 BOM and CRLF while exposing canonical LF text", async () => {
     const directory = await createTemporaryDirectory();
@@ -114,6 +121,13 @@ describe("FileSessionManager", () => {
     expect(await readFile(join(directory, "renamed.md"), "utf8")).toBe("# Article\n");
     expect(manager.getResolutionContext(opened.session.documentId)?.documentRealPath).toBe(resolve(directory, "renamed.md"));
     expect((await manager.renameOpenFile({ sessionId: opened.session.sessionId, newName: "outside.txt" })).status).toBe("failed");
+
+    const deleted = await manager.deleteOpenFile(opened.session.sessionId);
+    expect(deleted.status).toBe("deleted");
+    await expect(access(path)).rejects.toThrow();
+    expect(manager.getResolutionContext(opened.session.documentId)).toBeUndefined();
+    const untitled = await manager.createUntitled();
+    expect((await manager.deleteOpenFile(untitled.session!.sessionId)).status).toBe("failed");
   });
 
   it("creates an untitled session, requires Save As, and removes its isolated temporary root", async () => {
@@ -149,6 +163,26 @@ describe("FileSessionManager", () => {
     expect(manager.getSuggestedSaveName(sessionId)).toBe("草稿.md");
     expect((await manager.renameOpenFile({ sessionId, newName: "草稿.txt" })).status).toBe("failed");
     expect((await manager.save({ sessionId, editorText: "# 草稿\n" })).status).toBe("failed");
+    expect(await manager.closeSession(sessionId)).toEqual({ status: "closed" });
+  });
+
+  it("suggests an untitled document file name from its first non-empty line without rewriting the text", async () => {
+    const manager = new FileSessionManager();
+    const untitled = await manager.createUntitled();
+    const sessionId = untitled.session!.sessionId;
+
+    expect(manager.getSuggestedSaveName(sessionId)).toBe("document.md");
+    expect(manager.getSuggestedSaveName(sessionId, "")).toBe("document.md");
+    expect(manager.getSuggestedSaveName(sessionId, "\n\n   \n")).toBe("document.md");
+    expect(manager.getSuggestedSaveName(sessionId, "# 我的文章\n\n正文")).toBe("我的文章.md");
+    expect(manager.getSuggestedSaveName(sessionId, "> 引用开头\n正文")).toBe("引用开头.md");
+    expect(manager.getSuggestedSaveName(sessionId, "- 列表开头\n正文")).toBe("列表开头.md");
+    expect(manager.getSuggestedSaveName(sessionId, "```ts\nconst a = 1;\n```")).toBe("ts.md");
+    expect(manager.getSuggestedSaveName(sessionId, "标题/含:非法*字符?\n正文")).toBe("标题含非法字符.md");
+    expect(manager.getSuggestedSaveName(sessionId, `${"字".repeat(120)}\n`)).toBe(`${"字".repeat(80)}.md`);
+    expect(untitled.session!.editorText).toBe("");
+    expect(await manager.renameOpenFile({ sessionId, newName: "手写名" })).toMatchObject({ status: "renamed" });
+    expect(manager.getSuggestedSaveName(sessionId, "# 标题行\n")).toBe("手写名.md");
     expect(await manager.closeSession(sessionId)).toEqual({ status: "closed" });
   });
 

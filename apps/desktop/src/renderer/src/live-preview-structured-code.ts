@@ -33,21 +33,33 @@ class StructuredCodeWidget extends WidgetType {
     if (visualization) root.append(visualization);
     const tools = document.createElement("div");
     tools.className = "cm-live-structured-code-tools";
-    const button = (label: string, action: () => void) => {
+    const svgIcon = (path: string) => `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+    const copyIcon = svgIcon('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>');
+    const doneIcon = svgIcon('<path d="M20 6 9 17l-5-5"/>');
+    const button = (label: string, icon: string, action: () => void) => {
       const control = document.createElement("button");
       control.type = "button";
-      control.textContent = label;
+      control.title = label;
+      control.setAttribute("aria-label", label);
+      control.innerHTML = icon;
       control.onmousedown = (event) => event.preventDefault();
       control.onclick = action;
       tools.append(control);
       return control;
     };
-    const copy = button("复制", () => void (async () => {
+    const copy = button("复制", copyIcon, () => void (async () => {
       const copied = await writeClipboardText(this.block.code.replace(/\r\n?/g, "\n"));
-      copy.textContent = copied ? "已复制" : "复制失败";
-      window.setTimeout(() => { if (copy.isConnected) copy.textContent = "复制"; }, 1200);
+      copy.innerHTML = copied ? doneIcon : copyIcon;
+      copy.title = copied ? "已复制" : "复制失败";
+      copy.setAttribute("aria-label", copy.title);
+      window.setTimeout(() => {
+        if (!copy.isConnected) return;
+        copy.innerHTML = copyIcon;
+        copy.title = "复制";
+        copy.setAttribute("aria-label", "复制");
+      }, 1200);
     })());
-    button("编辑源码", () => {
+    button("编辑源码", svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>'), () => {
       if (view.state.sliceDoc(this.block.from, this.block.to) !== this.expectedSource) return;
       view.dispatch({ selection: { anchor: this.block.from, head: this.block.to }, scrollIntoView: true });
       view.focus();

@@ -2,9 +2,23 @@ import { markdown } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { repairWebMarkdown, unwrapMarkdownDocumentFence } from "./web-markdown-repair";
+import { nextWebMarkdownRepairSource, repairWebMarkdown, unwrapMarkdownDocumentFence } from "./web-markdown-repair";
 
 describe("web Markdown repair", () => {
+  it("only refreshes the repair snapshot for open or paste, not ordinary input", () => {
+    const opened = "\\# 标题";
+    expect(nextWebMarkdownRepairSource(null, false, "\\# 手动输入")).toBeNull();
+    expect(nextWebMarkdownRepairSource(opened, false, "\\# 标题\n普通输入")).toBe(opened);
+    expect(nextWebMarkdownRepairSource(opened, true, "\\# 粘贴标题")).toBe("\\# 粘贴标题");
+  });
+
+  it("does not flag ordinary text or a single trailing newline as repairable", () => {
+    expect(repairWebMarkdown("").changed).toBe(false);
+    expect(repairWebMarkdown("你好世界").changed).toBe(false);
+    expect(repairWebMarkdown("你好世界\n").changed).toBe(false);
+    expect(repairWebMarkdown("# 标题\n正文").changed).toBe(false);
+  });
+
   it("repairs escaped structure and webpage spacing", () => {
     const source = "\\# 标题\n   \n\n1\\. \\*\\*重点\\*\\* 和 \\`代码\\`\n\n\\- \\[ \\] 任务\n\n| 键 | 值 |\n\n|---|---|\n\n\\`\\`\\`ts\nconst path = 'C:\\\\temp';\nconst value = `${token}`;\n\\`\\`\\`";
     const repaired = repairWebMarkdown(source);
@@ -13,6 +27,7 @@ describe("web Markdown repair", () => {
     expect(repaired.repairedInlinePairs).toBe(2);
     expect(repaired.repairedTableGaps).toBe(1);
     expect(repaired.changed).toBe(true);
+    expect(repairWebMarkdown(repaired.markdown).changed).toBe(false);
   });
 
   it("leaves ordinary escapes and fenced code content unchanged", () => {
@@ -27,6 +42,7 @@ describe("web Markdown repair", () => {
     expect(repaired.markdown).toBe(" # 标题\n\n > 引用\n\n ---\n\n | 键 | 值 |\n| --- | --- |\n| A | B |\n\n```txt\n\u00A0# code\n```");
     expect(repaired.repairedMarkers).toBe(4);
     expect(repaired.changed).toBe(true);
+    expect(repairWebMarkdown(repaired.markdown).changed).toBe(false);
     const nodeNames: string[] = [];
     syntaxTree(EditorState.create({ doc: repaired.markdown, extensions: [markdown()] })).iterate({ enter: (node) => { nodeNames.push(node.type.name); } });
     expect(nodeNames).toEqual(expect.arrayContaining(["ATXHeading1", "Blockquote", "HorizontalRule", "FencedCode"]));

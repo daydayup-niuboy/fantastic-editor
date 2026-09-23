@@ -77,6 +77,9 @@ import { AiCliService, validateAiCancelRequest } from "./ai-cli-service.js";
 import { buildWechatThemeSuggestionPrompt, parseWechatThemeSuggestion, validateWechatThemeSuggestionRequest } from "./ai-wechat-theme.js";
 import { DeepSeekApi } from "./deepseek-api.js";
 import { GeminiApi } from "./gemini-api.js";
+import { KimiApi } from "./kimi-api.js";
+import { MiniMaxApi } from "./minimax-api.js";
+import { OpenAiCompatibleApi, validateConfigSaveRequest, validateModelListRequest } from "./openai-compatible-api.js";
 import { DocumentHistoryStore } from "./document-history-store.js";
 import { installRendererSmokeTests } from "./renderer-smoke-tests.js";
 
@@ -135,9 +138,24 @@ const geminiApi = new GeminiApi(join(app.getPath("userData"), "gemini-api-config
   encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
   decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
 });
+const kimiApi = new KimiApi(join(app.getPath("userData"), "kimi-api-config-v1.json"), {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+});
+const miniMaxApi = new MiniMaxApi(join(app.getPath("userData"), "minimax-api-config-v1.json"), {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+});
+const openAiCompatibleApi = new OpenAiCompatibleApi(join(app.getPath("userData"), "openai-compatible-api-config-v1.json"), {
+  isAvailable: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (value) => safeStorage.encryptString(value).toString("base64"),
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, "base64")),
+});
 const aiCliService = aiSmokeNode && aiSmokeScript
   ? new AiCliService({ spawnSpec: { executable: aiSmokeNode, argsPrefix: [aiSmokeScript, "ui"] }, timeoutMs: 10_000 })
-  : new AiCliService({ deepSeek: deepSeekApi, gemini: geminiApi });
+  : new AiCliService({ deepSeek: deepSeekApi, gemini: geminiApi, kimi: kimiApi, miniMax: miniMaxApi, openAiCompatible: openAiCompatibleApi });
 app.on("before-quit", () => aiCliService.dispose());
 const wechatPublishRecords = new Map<string, { status: "processing" | "published"; draftMediaId: string; publishId: string }>();
 const pendingExternalOpens = new Map<string, { path: string; displayName: string; announced: boolean; queuedAt: number }>();
@@ -463,6 +481,51 @@ function registerIpc(): void {
   });
   ipcMain.handle(IPC_CHANNELS.clearGeminiConfig, async (event) => { requireTrustedRenderer(event); await geminiApi.clear(); return { status: "cleared", configured: false } as const; });
   ipcMain.handle(IPC_CHANNELS.testGeminiConnection, async (event) => { requireTrustedRenderer(event); return await geminiApi.test() ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查 API Key、模型权限和网络。" } as const; });
+  ipcMain.handle(IPC_CHANNELS.getKimiConfig, async (event) => { requireTrustedRenderer(event); return { status: "loaded", configured: await kimiApi.configured() } as const; });
+  ipcMain.handle(IPC_CHANNELS.saveKimiConfig, async (event, request: { apiKey?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || Object.keys(request).length !== 1 || typeof request.apiKey !== "string") return { status: "failed", error: "API Key 格式无效。" } as const;
+    return await kimiApi.save(request.apiKey) ? { status: "saved", configured: true } as const : { status: "failed", error: "API Key 格式无效，或系统加密不可用。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.clearKimiConfig, async (event) => { requireTrustedRenderer(event); await kimiApi.clear(); return { status: "cleared", configured: false } as const; });
+  ipcMain.handle(IPC_CHANNELS.testKimiConnection, async (event) => { requireTrustedRenderer(event); return await kimiApi.test() ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查 API Key、余额和网络。" } as const; });
+  ipcMain.handle(IPC_CHANNELS.getMiniMaxConfig, async (event) => { requireTrustedRenderer(event); return { status: "loaded", configured: await miniMaxApi.configured() } as const; });
+  ipcMain.handle(IPC_CHANNELS.saveMiniMaxConfig, async (event, request: { apiKey?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (!request || Object.keys(request).length !== 1 || typeof request.apiKey !== "string") return { status: "failed", error: "API Key 格式无效。" } as const;
+    return await miniMaxApi.save(request.apiKey) ? { status: "saved", configured: true } as const : { status: "failed", error: "API Key 格式无效，或系统加密不可用。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.clearMiniMaxConfig, async (event) => { requireTrustedRenderer(event); await miniMaxApi.clear(); return { status: "cleared", configured: false } as const; });
+  ipcMain.handle(IPC_CHANNELS.testMiniMaxConnection, async (event) => { requireTrustedRenderer(event); return await miniMaxApi.test() ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查 API Key、余额、模型权限和网络。" } as const; });
+  ipcMain.handle(IPC_CHANNELS.getOpenAiCompatibleConfig, async (event) => {
+    requireTrustedRenderer(event);
+    const config = await openAiCompatibleApi.summary();
+    if (config) return { status: "loaded", configured: config.configured, config } as const;
+    return { status: "loaded", configured: false, config: { configured: false, baseUrl: "", providerName: "", localName: "", modelSlots: [null, null], modelOptions: [] } } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.saveOpenAiCompatibleConfig, async (event, request: unknown) => {
+    requireTrustedRenderer(event);
+    if (!validateConfigSaveRequest(request)) return { status: "failed", error: "订阅地址、API Key 或模型设置格式无效。" } as const;
+    if (!await openAiCompatibleApi.save(request)) return { status: "failed", error: "无法保存配置，请检查地址、API Key、模型和系统加密状态。" } as const;
+    const config = await openAiCompatibleApi.summary();
+    return config ? { status: "saved", configured: config.configured, config } as const : { status: "failed", error: "配置保存后无法读取。" } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.clearOpenAiCompatibleConfig, async (event) => {
+    requireTrustedRenderer(event);
+    await openAiCompatibleApi.clear();
+    return { status: "cleared", configured: false, config: { configured: false, baseUrl: "", providerName: "", localName: "", modelSlots: [null, null], modelOptions: [] } } as const;
+  });
+  ipcMain.handle(IPC_CHANNELS.listOpenAiCompatibleModels, async (event, request: unknown) => {
+    requireTrustedRenderer(event);
+    if (!validateModelListRequest(request)) return { status: "failed", error: "订阅地址或 API Key 格式无效。" } as const;
+    try { return { status: "listed", models: await openAiCompatibleApi.listModels(request.baseUrl, request.apiKey) } as const; }
+    catch (error) { return { status: "failed", error: error instanceof Error ? error.message : "无法获取模型列表。" } as const; }
+  });
+  ipcMain.handle(IPC_CHANNELS.testOpenAiCompatibleConnection, async (event, request: unknown) => {
+    requireTrustedRenderer(event);
+    if (!validateModelListRequest(request)) return { status: "failed", error: "订阅地址或 API Key 格式无效。" } as const;
+    return await openAiCompatibleApi.test(request.baseUrl, request.apiKey) ? { status: "connected" } as const : { status: "failed", error: "连接失败，请检查订阅地址、API Key 和网络。" } as const;
+  });
   ipcMain.handle(IPC_CHANNELS.listRecentFiles, async (event) => {
     requireTrustedRenderer(event);
     try {
@@ -706,7 +769,7 @@ function registerIpc(): void {
       if (choice.response === 0) return await fileSessions.saveImportedStructured(request);
       const saveOptions = {
         title: "另存为 Markdown",
-        defaultPath: fileSessions.getSuggestedSaveName(request.sessionId),
+        defaultPath: fileSessions.getSuggestedSaveName(request.sessionId, request.editorText),
         filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
       };
       const result = owner ? await dialog.showSaveDialog(owner, saveOptions) : await dialog.showSaveDialog(saveOptions);
@@ -729,7 +792,7 @@ function registerIpc(): void {
     requireTrustedRenderer(event);
     const result = await dialog.showSaveDialog({
       title: "另存为 Markdown",
-      defaultPath: fileSessions.getSuggestedSaveName(request.sessionId),
+      defaultPath: fileSessions.getSuggestedSaveName(request.sessionId, request.editorText),
       filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
     });
     if (result.canceled || !result.filePath) return { status: "cancelled" } as const;
@@ -768,13 +831,39 @@ function registerIpc(): void {
     if (choice.response === 2) return { status: "save-as" } as const;
     return { status: "unchanged" } as const;
   });
+  ipcMain.handle(IPC_CHANNELS.savePreviewAsset, async (event, request: { url?: unknown; suggestedName?: unknown }) => {
+    requireTrustedRenderer(event);
+    if (typeof request?.url !== "string") return { status: "failed", error: "图片地址无效。" } as const;
+    const handleId = parseAssetHandleUrl(request.url);
+    if (!handleId) return { status: "failed", error: "只能另存当前文档中的本地图片。" } as const;
+    const context = fileSessions.getActiveResolutionContext();
+    let result = await assetHandles.read(handleId, context);
+    if (result.status === "not-found") result = previewDerivedCache.read(handleId, context);
+    if (result.status !== "ok") return { status: "failed", error: "图片已失效，请重新解析后再另存。" } as const;
+    const ext = result.mimeType === "image/jpeg" ? ".jpg" : result.mimeType === "image/webp" ? ".webp" : result.mimeType === "image/gif" ? ".gif" : result.mimeType === "image/svg+xml" ? ".svg" : ".png";
+    const base = typeof request.suggestedName === "string" ? request.suggestedName.replace(/[\\/:*?"<>|]+/g, "").replace(/[. ]+$/g, "").trim().slice(0, 80) : "";
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const picked = await dialog.showSaveDialog({ ...(owner ? { window: owner } : {}), title: "另存图片", defaultPath: `${base || "image"}${ext}` });
+    if (picked.canceled || !picked.filePath) return { status: "cancelled" } as const;
+    await writeFile(picked.filePath, Buffer.from(result.bytes));
+    return { status: "saved", displayName: basename(picked.filePath) } as const;
+  });
   ipcMain.handle(IPC_CHANNELS.showOpenFileMenu, async (event, request: { sessionId?: unknown }) => {
     requireTrustedRenderer(event);
     if (typeof request?.sessionId !== "string") return { action: "none" } as const;
     const path = fileSessions.getSavedPath(request.sessionId);
-    return await new Promise<{ action: "activate" | "history" | "rename" | "none" }>((resolve) => {
+    return await new Promise<{ action: "activate" | "history" | "rename" | "delete" | "none"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }>((resolve) => {
       let settled = false;
       const choose = (action: "activate" | "history" | "rename") => { settled = true; resolve({ action }); };
+      const remove = async () => {
+        if (typeof request.sessionId !== "string") return;
+        if (!path) return;
+        const confirmed = await dialog.showMessageBox({ type: "warning", title: "删除 Markdown 文件", message: `确定删除“${basename(path)}”吗？`, detail: "文件将从磁盘永久删除，此操作不能撤销。", buttons: ["取消", "删除"], defaultId: 0, cancelId: 0, noLink: true });
+        if (confirmed.response !== 1) { settled = true; resolve({ action: "none" }); return; }
+        const result = await fileSessions.deleteOpenFile(request.sessionId);
+        settled = true;
+        resolve(result.status === "deleted" ? { action: "delete", ...(result.workspace ? { workspace: result.workspace } : {}) } : { action: "none" });
+      };
       const owner = BrowserWindow.fromWebContents(event.sender);
       Menu.buildFromTemplate([
         { label: "打开", click: () => choose("activate") },
@@ -784,6 +873,7 @@ function registerIpc(): void {
         { label: "打开版本历史", enabled: Boolean(path), click: () => choose("history") },
         { type: "separator" },
         { label: "重命名", click: () => choose("rename") },
+        { label: "删除", enabled: Boolean(path), click: () => void remove() },
       ]).popup({ ...(owner ? { window: owner } : {}), callback: () => { if (!settled) resolve({ action: "none" }); } });
     });
   });

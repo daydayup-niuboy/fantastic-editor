@@ -22,6 +22,12 @@ describe("AI WeChat theme suggestion boundary", () => {
     expect(parseWechatThemeSuggestion(JSON.stringify({ schemaVersion: "0.1", baseThemeId: "deep-blue-tech", tokens: { accent: "#336699", sizeBodyPx: 17, align: "justify" }, reason: "适合技术长文。", warnings: [] }))).toMatchObject({ baseThemeId: "deep-blue-tech", tokens: { accent: "#336699", sizeBodyPx: 17, align: "justify" } });
   });
 
+  it("requires a model slot only for the custom OpenAI-compatible provider", () => {
+    expect(validateWechatThemeSuggestionRequest({ ...request, providerId: "openai-compatible", modelSlot: 1 })).toBe(true);
+    expect(validateWechatThemeSuggestionRequest({ ...request, providerId: "openai-compatible" })).toBe(false);
+    expect(validateWechatThemeSuggestionRequest({ ...request, modelSlot: 1 })).toBe(false);
+  });
+
   it("accepts only the built-in heading decoration enum", () => {
     expect(parseWechatThemeSuggestion(JSON.stringify({ schemaVersion: "0.1", baseThemeId: "minimal-ink", tokens: { headingDecoration: "book" }, reason: "适合知识类文章。", warnings: [] }))).toMatchObject({ tokens: { headingDecoration: "book" } });
     expect(() => parseWechatThemeSuggestion(JSON.stringify({ schemaVersion: "0.1", baseThemeId: "minimal-ink", tokens: { headingDecoration: "<svg>" }, reason: "x", warnings: [] }))).toThrow();

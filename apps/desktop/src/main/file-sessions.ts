@@ -242,6 +242,29 @@ function normalizeWorkspaceRename(name: string): string {
   return normalized;
 }
 
+/**
+ * 未命名文档的建议文件名：取正文首个非空行，去掉 Markdown 标记和 Windows 非法字符。
+ * 只用于另存为建议名和标签显示，绝不改写 canonical Markdown，也不改变标题层级。
+ */
+function suggestedNameFromText(editorText: string): string | null {
+  for (const rawLine of editorText.split("\n")) {
+    const stripped = rawLine.trim()
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/^[>*+-]\s+/, "")
+      .replace(/^`+/, "")
+      .replace(/`+$/, "")
+      .trim();
+    if (!stripped) continue;
+    const cleaned = stripped
+      .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, "")
+      .replace(/[. ]+$/, "")
+      .trim();
+    if (!cleaned) continue;
+    return [...cleaned].slice(0, 80).join("");
+  }
+  return null;
+}
+
 function entrySort(left: Dirent, right: Dirent): number {
   if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
   return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
@@ -333,14 +356,23 @@ export class FileSessionManager {
     this.#temporaryBaseDirectory = path;
   }
 
-  getSuggestedSaveName(sessionId: string): string {
+  getSuggestedSaveName(sessionId: string, editorText?: string): string {
     const session = this.#sessions.get(sessionId);
     if (!session) return "document.md";
     if (session.importedStructured) {
       const sourceName = basename(session.importedStructured.sourcePath);
       return `${sourceName.slice(0, -extname(sourceName).length)}.md`;
     }
-    return session.displayNameOverride ?? (session.isUntitled ? "document.md" : basename(session.path));
+    if (session.displayNameOverride) return session.displayNameOverride;
+    if (session.isUntitled) {
+      // 未命名文档：用首个非空行做建议文件名（去掉 Markdown 标记），不改写正文。
+      if (typeof editorText === "string") {
+        const name = suggestedNameFromText(editorText);
+        if (name) return `${name}.md`;
+      }
+      return "document.md";
+    }
+    return basename(session.path);
   }
 
   getSavedPath(sessionId: string): string | null {
@@ -901,6 +933,40 @@ export class FileSessionManager {
     }
   }
 
+  async deleteOpenFile(sessionId: string): Promise<
+    | { status: "deleted"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }
+    | { status: "failed"; error: string }
+  > {
+    const session = this.#sessions.get(sessionId);
+    if (!session) return { status: "failed", error: "文件会话已失效，请重新打开文件。" };
+    if (session.isUntitled) return { status: "failed", error: "未命名文档没有磁盘文件可删除。" };
+    if (session.workspaceMode === "folder-workspace") {
+      const workspace = this.#folderWorkspace;
+      const file = workspace && [...workspace.files.values()].find((item) => {
+        const candidate = join(workspace.rootRealPath, ...item.relativePath.split("/"));
+        return candidate.toLocaleLowerCase("en-US") === session.path.toLocaleLowerCase("en-US");
+      });
+      if (!workspace || !file) return { status: "failed", error: "工作区文件身份已失效，请重新打开文件夹。" };
+      const workspaceResult = await this.mutateWorkspaceFile({
+        workspaceId: workspace.workspaceId,
+        workspaceRevision: workspace.workspaceRevision,
+        fileId: file.fileId,
+      }, "delete");
+      return workspaceResult ? { status: "deleted", workspace: workspaceResult } : { status: "failed", error: "删除 Markdown 文件失败。" };
+    }
+    try {
+      const oldRealPath = await realpath(session.path);
+      const beforeStat = await stat(oldRealPath);
+      if (!beforeStat.isFile() || !isMarkdownFile(oldRealPath) || !isPathInside(session.authorizationRootRealPath, oldRealPath)) {
+        return { status: "failed", error: "所选文件越出授权边界。" };
+      }
+      await rm(oldRealPath);
+      await this.closeSession(sessionId);
+      return { status: "deleted" };
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : "删除 Markdown 文件失败。" };
+    }
+  }
   async save(request: SaveFileRequest, targetPath?: string): Promise<SaveFileResult> {
     const session = this.#sessions.get(request.sessionId);
     if (!session) return { status: "failed", error: "文件会话已失效，请重新打开文件。" };

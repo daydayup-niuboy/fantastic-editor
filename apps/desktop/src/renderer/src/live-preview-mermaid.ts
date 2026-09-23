@@ -2,6 +2,7 @@ import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { renderMermaidPreview } from "./mermaid-preview";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
+import { attachPinnedHoverPreview, createLiveTransformControls, DEFAULT_LIVE_IMAGE_TRANSFORM, liveImageTransformAfterControl, type LiveImageTransform } from "./live-preview-images";
 
 interface MermaidDiagram { from: number; to: number; source: string }
 export interface MermaidSnapshot {
@@ -26,6 +27,18 @@ export function mermaidSnapshotFromHtml(source: string, html: string, darkMode: 
 
 export const setMermaidSnapshot = StateEffect.define<MermaidSnapshot | null>();
 
+function downloadSvgAsImage(svg: SVGElement, name: string): void {
+  const clone = svg.cloneNode(true) as SVGElement;
+  if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const blob = new Blob([`<?xml version="1.0" encoding="UTF-8"?>${new XMLSerializer().serializeToString(clone)}`], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
 class MermaidWidget extends WidgetType {
   constructor(readonly diagram: MermaidDiagram, readonly expectedSource: string, readonly snapshot: MermaidSnapshot) { super(); }
   eq(other: MermaidWidget): boolean {
@@ -38,23 +51,42 @@ class MermaidWidget extends WidgetType {
     const root = document.createElement("div");
     root.className = "cm-live-mermaid";
     root.contentEditable = "false";
+    let transform: LiveImageTransform = { ...DEFAULT_LIVE_IMAGE_TRANSFORM };
+    const applyTransform = (next: LiveImageTransform) => {
+      transform = next;
+      root.style.setProperty("--live-image-offset-x", `${transform.offsetX}px`);
+      root.style.setProperty("--live-image-offset-y", `${transform.offsetY}px`);
+      root.style.setProperty("--live-image-zoom", String(transform.zoom));
+      view.requestMeasure();
+    };
+    applyTransform(transform);
     const pre = document.createElement("pre");
     const code = document.createElement("code");
     code.className = "language-mermaid";
     code.textContent = this.diagram.source;
     pre.append(code);
     root.append(pre);
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.className = "cm-live-mermaid-edit";
-    edit.textContent = "编辑 Mermaid 源码";
-    edit.onclick = () => {
+    const editSource = () => {
       if (view.state.sliceDoc(this.diagram.from, this.diagram.to) !== this.expectedSource) return;
       view.dispatch({ selection: { anchor: this.diagram.from, head: this.diagram.to }, scrollIntoView: true });
       view.focus();
     };
-    root.append(edit);
-    void renderMermaidPreview(root, { darkMode: this.snapshot.darkMode, fontFamily: this.snapshot.fontFamily });
+    const saveImage = () => {
+      const svg = root.querySelector("svg");
+      if (!(svg instanceof SVGElement)) return;
+      downloadSvgAsImage(svg, "mermaid.svg");
+    };
+    const attachControls = () => {
+      if (root.querySelector(".cm-live-image-controls")) return;
+      root.append(createLiveTransformControls((control) => applyTransform(liveImageTransformAfterControl(transform, control)), { onEdit: editSource, onSave: saveImage }));
+    };
+    attachPinnedHoverPreview(root);
+    void renderMermaidPreview(root, { darkMode: this.snapshot.darkMode, fontFamily: this.snapshot.fontFamily })
+      .then((result) => {
+        if (result.rendered === 0) return;
+        attachControls();
+        view.requestMeasure();
+      });
     return root;
   }
   ignoreEvent(): boolean { return true; }

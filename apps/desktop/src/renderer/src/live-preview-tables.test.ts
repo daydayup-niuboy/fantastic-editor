@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, replaceTableSnapshotCell, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
+import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, replaceTableSnapshotCell, tableCellContextMenuKind, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
 
 const source = "| A | B |\n| --- | --- |\n| C | D |\n\n正文";
 const cell = (text: string) => ({ from: source.indexOf(text), to: source.indexOf(text) + 1, text, html: text, protected: false });
@@ -73,5 +73,13 @@ describe("Live Preview tables", () => {
     const nestedLink = "[~~*乙*~~](https://www.baidu.com)";
     expect(formatTableCellMarkdown(nestedLink, 0, nestedLink.length, "link")).toEqual({ value: "~~*乙*~~", from: 0, to: 7 });
     expect(formatTableCellMarkdown("**粗体**", 2, 4, "italic").value).toBe("***粗体***");
+  });
+});
+
+describe("table cell context menu", () => {
+  it("shows format actions only when editing a non-empty text selection", () => {
+    expect(tableCellContextMenuKind(false, 0, 2)).toBe("structure");
+    expect(tableCellContextMenuKind(true, 1, 1)).toBe("structure");
+    expect(tableCellContextMenuKind(true, 0, 2)).toBe("format");
   });
 });

@@ -35,6 +35,13 @@ describe("AI CLI boundary", () => {
     expect(validateAiCancelRequest({ requestId: request.requestId, pid: 1 })).toBe(false);
   });
 
+  it("uses the de-AI preset without a custom instruction field", () => {
+    const deai = { ...request, actionId: "deai" as const };
+    expect(validateAiRequest(deai)).toBe(true);
+    expect(buildAiPrompt(deai)).toContain("去掉 AI 腔");
+    expect(validateAiRequest({ ...deai, customInstruction: "不应出现" })).toBe(false);
+  });
+
   it("accepts only bounded custom instructions and keeps them in stdin prompt", () => {
     const custom = { ...request, actionId: "custom" as const, customInstruction: "改成口语表达" };
     expect(validateAiRequest(custom)).toBe(true);
@@ -75,7 +82,18 @@ describe("AI CLI boundary", () => {
       { providerId: "claude-cli", displayName: "Claude CLI", status: "available", version: "fake-cli" },
       { providerId: "deepseek-api", displayName: "DeepSeek API", status: "unavailable", guidance: "请先配置 DeepSeek API Key。" },
       { providerId: "gemini-api", displayName: "Gemini API", status: "unavailable", guidance: "请先配置 Gemini API Key。" },
+      { providerId: "kimi-api", displayName: "Kimi API", status: "unavailable", guidance: "请先配置 Kimi API Key。" },
+      { providerId: "minimax-api", displayName: "MiniMax API", status: "unavailable", guidance: "请先配置 MiniMax API Key。" },
+      { providerId: "openai-compatible", displayName: "OpenAI 兼容 API", status: "unavailable", guidance: "请先配置订阅地址、API Key 和至少一个模型。" },
     ]);
+  });
+
+  it("requires an explicit official-model slot only for the custom provider", () => {
+    const custom = { ...request, providerId: "openai-compatible" as const, modelSlot: 1 as const };
+    expect(validateAiRequest(custom)).toBe(true);
+    expect(validateAiRequest({ ...custom, modelSlot: undefined })).toBe(false);
+    expect(validateAiRequest({ ...custom, modelId: "local-alias" })).toBe(false);
+    expect(validateAiRequest({ ...request, modelSlot: 0 })).toBe(false);
   });
 
   it("uses the fixed Claude safety invocation and accepts only its success envelope", async () => {

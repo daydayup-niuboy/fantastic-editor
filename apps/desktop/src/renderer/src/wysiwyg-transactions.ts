@@ -30,12 +30,13 @@ export interface MarkdownBlockSelectionFragment {
   selectionTo: number;
 }
 
-export type MarkdownSelectionMark = "bold" | "italic" | "strike";
+export type MarkdownSelectionMark = "bold" | "italic" | "strike" | "code";
 
 const MARKDOWN_SELECTION_MARKERS: Record<MarkdownSelectionMark, string> = {
   bold: "**",
   italic: "*",
   strike: "~~",
+  code: "`",
 };
 
 export function wrapMarkdownSelectionMark(value: string, mark: MarkdownSelectionMark): string {

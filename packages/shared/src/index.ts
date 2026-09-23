@@ -637,6 +637,8 @@ export interface BeginOutputRequest {
   fontFamily?: string;
   darkMode?: boolean;
   wechatThemeId?: WechatThemeId;
+  /** 导出另存为对话框的建议文件名主体（不含扩展名），来自当前文档显示名。 */
+  suggestedBaseName?: string;
 }
 
 export interface OutputCommandResult {
@@ -708,18 +710,58 @@ export interface FantasticEditorApi {
   saveGeminiConfig(request: { apiKey: string }): Promise<GeminiConfigResult>;
   clearGeminiConfig(): Promise<GeminiConfigResult>;
   testGeminiConnection(): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
+  getKimiConfig(): Promise<KimiConfigResult>;
+  saveKimiConfig(request: { apiKey: string }): Promise<KimiConfigResult>;
+  clearKimiConfig(): Promise<KimiConfigResult>;
+  testKimiConnection(): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
+  getMiniMaxConfig(): Promise<MiniMaxConfigResult>;
+  saveMiniMaxConfig(request: { apiKey: string }): Promise<MiniMaxConfigResult>;
+  clearMiniMaxConfig(): Promise<MiniMaxConfigResult>;
+  testMiniMaxConnection(): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
+  getOpenAiCompatibleConfig(): Promise<OpenAiCompatibleConfigResult>;
+  saveOpenAiCompatibleConfig(request: OpenAiCompatibleConfigSaveRequest): Promise<OpenAiCompatibleConfigResult>;
+  clearOpenAiCompatibleConfig(): Promise<OpenAiCompatibleConfigResult>;
+  listOpenAiCompatibleModels(request: OpenAiCompatibleModelListRequest): Promise<OpenAiCompatibleModelListResult>;
+  testOpenAiCompatibleConnection(request: OpenAiCompatibleModelListRequest): Promise<{ status: "connected" } | { status: "failed"; error: string }>;
   listDocumentHistory(request: { sessionId: string }): Promise<{ status: "listed"; items: DocumentHistoryItem[] } | { status: "failed"; error: string }>;
   restoreDocumentHistory(request: { sessionId: string; snapshotId: string; currentText: string }): Promise<{ status: "restored"; editorText: string } | { status: "failed"; error: string }>;
-  showOpenFileMenu(request: { sessionId: string }): Promise<{ action: "activate" | "history" | "rename" | "none" }>;
+  showOpenFileMenu(request: { sessionId: string }): Promise<{ action: "activate" | "history" | "rename" | "delete" | "none"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }>;
   showWorkspaceFileMenu(request: OpenWorkspaceFileRequest): Promise<{ action: "open" | "open-new-tab" | "duplicate" | "move" | "history" | "rename" | "delete" | "none"; workspace?: { workspaceRevision: number; files: WorkspaceFileEntry[]; removedSessionIds: string[] } }>;
+  savePreviewAsset(request: { url: string; suggestedName?: string }): Promise<{ status: "saved"; displayName: string } | { status: "cancelled" } | { status: "failed"; error: string }>;
 }
 
 export interface DocumentHistoryItem { snapshotId: string; createdAt: string; characterCount: number; }
 
-export type AiActionId = "polish" | "rewrite" | "condense" | "expand" | "correct" | "continue" | "title" | "summarize" | "custom";
-export type AiProviderId = "codex-cli" | "claude-cli" | "deepseek-api" | "gemini-api";
+export type AiActionId = "polish" | "deai" | "rewrite" | "condense" | "expand" | "correct" | "continue" | "title" | "summarize" | "custom";
+export type AiProviderId = "codex-cli" | "claude-cli" | "deepseek-api" | "gemini-api" | "kimi-api" | "minimax-api" | "openai-compatible";
 export type DeepSeekConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
 export type GeminiConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
+export type KimiConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
+export type MiniMaxConfigResult = { status: "loaded" | "saved" | "cleared"; configured: boolean } | { status: "failed"; error: string };
+export type OpenAiCompatibleModelSlot = { modelId: string; localName: string };
+export type OpenAiCompatibleConfigSummary = {
+  configured: boolean;
+  baseUrl: string;
+  providerName: string;
+  localName: string;
+  modelSlots: [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null];
+  modelOptions: string[];
+};
+export type OpenAiCompatibleConfigResult =
+  | { status: "loaded" | "saved" | "cleared"; configured: boolean; config: OpenAiCompatibleConfigSummary }
+  | { status: "failed"; error: string };
+export type OpenAiCompatibleConfigSaveRequest = {
+  baseUrl: string;
+  apiKey: string;
+  providerName: string;
+  localName: string;
+  modelSlots: [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null];
+  modelOptions?: string[];
+};
+export type OpenAiCompatibleModelListRequest = { baseUrl: string; apiKey?: string };
+export type OpenAiCompatibleModelListResult =
+  | { status: "listed"; models: string[] }
+  | { status: "failed"; error: string };
 export type AiScope = "selection" | "block";
 export interface AiTextAnchor { documentId: string; sourceHash: string; from: number; to: number; expectedText: string; }
 export interface AiInvocationRequest {
@@ -730,6 +772,7 @@ export interface AiInvocationRequest {
   anchor: AiTextAnchor;
   content: string;
   customInstruction?: string;
+  modelSlot?: 0 | 1;
 }
 export type AiInvocationEvent =
   | { requestId: string; sequence: number; type: "chunk"; text: string }
@@ -751,6 +794,7 @@ export interface AiWechatThemeSuggestionRequest {
   sourceHash: string;
   content: string;
   instruction?: string;
+  modelSlot?: 0 | 1;
 }
 export interface AiWechatThemeSuggestion {
   schemaVersion: "0.1";

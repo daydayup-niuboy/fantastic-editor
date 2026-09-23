@@ -14,9 +14,11 @@ export function validateWechatThemeSuggestionRequest(value: unknown): value is A
   const request = value as AiWechatThemeSuggestionRequest;
   const keys = Object.keys(request);
   return keys.length === (request.instruction === undefined ? 5 : 6)
-    && keys.every((key) => ["requestId", "providerId", "documentId", "sourceHash", "content", "instruction"].includes(key))
+      + (request.providerId === "openai-compatible" ? 1 : 0)
+    && keys.every((key) => ["requestId", "providerId", "documentId", "sourceHash", "content", "instruction", "modelSlot"].includes(key))
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.requestId)
-    && ["codex-cli", "claude-cli", "deepseek-api", "gemini-api"].includes(request.providerId)
+    && ["codex-cli", "claude-cli", "deepseek-api", "gemini-api", "kimi-api", "minimax-api", "openai-compatible"].includes(request.providerId)
+    && (request.providerId === "openai-compatible" ? request.modelSlot === 0 || request.modelSlot === 1 : request.modelSlot === undefined)
     && typeof request.documentId === "string" && request.documentId.length > 0 && request.documentId.length <= 200
     && /^[0-9a-f]{64}$/i.test(request.sourceHash)
     && typeof request.content === "string" && request.content.trim().length > 0 && Buffer.byteLength(request.content) <= CONTENT_LIMIT

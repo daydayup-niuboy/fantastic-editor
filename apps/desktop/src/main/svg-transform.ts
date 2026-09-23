@@ -72,7 +72,7 @@ export function transformSvgToPng(bytes: Uint8Array): SvgTransformResult {
   try {
     const inspect = new Resvg(validated.source, {
       fitTo: { mode: "original" },
-      font: { loadSystemFonts: false },
+      font: { loadSystemFonts: true },
       logLevel: "off",
     });
     if (inspect.imagesToResolve().length > 0) {
@@ -88,7 +88,7 @@ export function transformSvgToPng(bytes: Uint8Array): SvgTransformResult {
         fitTo: inspect.width >= inspect.height
           ? { mode: "width", value: MAX_OUTPUT_DIMENSION }
           : { mode: "height", value: MAX_OUTPUT_DIMENSION },
-        font: { loadSystemFonts: false },
+        font: { loadSystemFonts: true },
         logLevel: "off",
       });
     if (renderer.imagesToResolve().length > 0) {

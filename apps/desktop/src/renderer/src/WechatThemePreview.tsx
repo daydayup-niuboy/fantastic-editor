@@ -14,6 +14,7 @@ interface WechatThemePreviewProps {
   documentId: string;
   aiProviders: AiProviderStatus[];
   aiProviderId: AiProviderId;
+  aiModelSlot: 0 | 1;
   onAiProviderChange(providerId: AiProviderId): void;
   aiThemeAppliedToEditor: boolean;
   onApplyAiThemeToEditor(definition: WechatThemeDefinition | null): void;
@@ -49,25 +50,7 @@ function themeLabel(theme: WechatThemeListItem): string {
   return `${theme.name} · ${theme.baseThemeId} · ${hash}${theme.source === "workspace" ? " · 本文" : ""}`;
 }
 
-function WechatAuditProbe({ width, html, fontFamily, onResult }: { width: MobileWidth; html: string; fontFamily: string; onResult(width: MobileWidth, issues: WechatMobileAuditIssue[]): void }) {
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const content = ref.current;
-    if (!content) return;
-    let cancelled = false;
-    const audit = () => { if (!cancelled && ref.current) onResult(width, auditWechatMobileLayout(ref.current)); };
-    const frame = requestAnimationFrame(() => {
-      audit();
-      void renderMermaidPreview(content, { darkMode: false, fontFamily }).then(audit).catch(audit);
-    });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(audit);
-    observer?.observe(content);
-    return () => { cancelled = true; cancelAnimationFrame(frame); observer?.disconnect(); };
-  }, [fontFamily, html, onResult, width]);
-  return <article ref={ref} className="wechat-themed-content" style={{ width, fontFamily }} dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, markdown, documentId, aiProviders, aiProviderId, onAiProviderChange, aiThemeAppliedToEditor, onApplyAiThemeToEditor, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose, display = "dialog" }: WechatThemePreviewProps) {
+export function WechatThemePreview({ html, themeId, themes, definition, fontFamily, markdown, documentId, aiProviders, aiProviderId, aiModelSlot, onAiProviderChange, aiThemeAppliedToEditor, onApplyAiThemeToEditor, onThemeChange, onSaveAsCustom, onDeleteCustom, onExportCustom, onImportCustom, onClose, display = "dialog" }: WechatThemePreviewProps) {
   const [viewportWidth, setViewportWidth] = useState<MobileWidth>(375);
   const [reports, setReports] = useState<AuditReports>(() => emptyReports());
   const [customizing, setCustomizing] = useState(false);
@@ -93,8 +76,16 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
     }
   }, [customTokens, customizing, definition, draftBaseThemeId]);
   const previewDefinition = useDeferredValue(previewDraft.definition);
-  const themedHtml = useMemo(() => compileWechatPublishHtml({ fragment: withoutLeadingPreviewTitle(html), definition: previewDefinition, wrapperFontFromContext: fontFamily }), [fontFamily, html, previewDefinition]);
-  const [auditedHtml, setAuditedHtml] = useState(themedHtml);
+  const [previewReady, setPreviewReady] = useState(false);
+  useEffect(() => {
+    setPreviewReady(false);
+    let timeout = 0;
+    const frame = window.requestAnimationFrame(() => {
+      timeout = window.setTimeout(() => setPreviewReady(true), 50);
+    });
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timeout); };
+  }, [fontFamily, html, previewDefinition]);
+  const themedHtml = useMemo(() => previewReady ? compileWechatPublishHtml({ fragment: withoutLeadingPreviewTitle(html), definition: previewDefinition, wrapperFontFromContext: fontFamily }) : "", [fontFamily, html, previewDefinition, previewReady]);
   const issues = reports[viewportWidth] ?? [];
   const allIssues = MOBILE_WIDTHS.flatMap((width) => reports[width] ?? []);
   const summary = Object.values(reports).some((report) => report === null) ? "running" : mobileAuditSummary(allIssues);
@@ -131,7 +122,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
     const sourceHash = await sha256(markdown);
     const requestId = newThemeRequestId();
     setAiState({ requestId, status: "working" });
-    const result = await window.fantasticEditor.suggestWechatTheme({ requestId, providerId: aiProviderId, documentId, sourceHash, content: markdown, ...(aiInstruction.trim() ? { instruction: aiInstruction.trim() } : {}) });
+    const result = await window.fantasticEditor.suggestWechatTheme({ requestId, providerId: aiProviderId, documentId, sourceHash, content: markdown, ...(aiInstruction.trim() ? { instruction: aiInstruction.trim() } : {}), ...(aiProviderId === "openai-compatible" ? { modelSlot: aiModelSlot } : {}) });
     if (identityRef.current.documentId !== identity.documentId || identityRef.current.markdown !== identity.markdown) return;
     if (result.status === "cancelled") { setAiState({ status: "idle" }); return; }
     if (result.status === "failed") { setAiState({ status: "failed", error: result.error }); return; }
@@ -150,11 +141,6 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
   useEffect(() => {
     if (confirmDeleteThemeId && confirmDeleteThemeId !== safeDeleteThemeId) setConfirmDeleteThemeId("");
   }, [confirmDeleteThemeId, safeDeleteThemeId]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setAuditedHtml(themedHtml), 300);
-    return () => window.clearTimeout(timeout);
-  }, [themedHtml]);
 
   const submitCustomTheme = async () => {
     if (!previewDraft.valid) return;
@@ -212,10 +198,12 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
     const content = contentRef.current;
     if (!content) return;
     const timeout = window.setTimeout(() => {
-      void renderMermaidPreview(content, { darkMode: false, fontFamily }).catch(() => undefined);
+      void renderMermaidPreview(content, { darkMode: false, fontFamily })
+        .catch(() => undefined)
+        .finally(() => handleAuditResult(viewportWidth, auditWechatMobileLayout(content)));
     }, 300);
     return () => window.clearTimeout(timeout);
-  }, [fontFamily, themedHtml, viewportWidth]);
+  }, [fontFamily, handleAuditResult, themedHtml, viewportWidth]);
 
   return (
     <div className={display === "dialog" ? "wechat-preview-overlay" : "wechat-preview-panel"} role={display === "dialog" ? "dialog" : "region"} aria-modal={display === "dialog" ? true : undefined} aria-labelledby="wechat-preview-title" aria-describedby="wechat-preview-description" onMouseDown={(event) => { if (display === "dialog" && event.target === event.currentTarget) onClose(); }}>
@@ -260,17 +248,17 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
           <div className="wechat-phone-shell" style={{ width: viewportWidth + 28 }}>
             <div className="wechat-phone-bar"><span>公众号预览</span><small>{viewportWidth}px</small></div>
             <div className="wechat-phone-viewport" style={{ width: viewportWidth }}>
-              <article ref={contentRef} className="wechat-themed-content" style={{ fontFamily }} dangerouslySetInnerHTML={{ __html: themedHtml }} />
+              {themedHtml ? <article ref={contentRef} className="wechat-themed-content" style={{ fontFamily }} dangerouslySetInnerHTML={{ __html: themedHtml }} /> : <div className="wechat-preview-loading" role="status">处理中，请稍后</div>}
             </div>
           </div>
           <aside className="wechat-audit-panel">
             <strong>移动宽度质量审计</strong>
-            <p>三档宽度会自动并行检查；当前显示 {viewportWidth}px 的明细，按钮圆点表示各宽度结果。</p>
+            <p>只检查当前预览宽度，切换 320/375/414 后再测。</p>
             {reports[viewportWidth] === null ? <div className="audit-running">正在等待字体、图片和 Mermaid 完成布局……</div> : issues.length === 0 ? <div className="audit-empty">未发现横向溢出、过小文字、低对比度或标题间距异常。</div> : <ul>{issues.map((issue, index) => <li className={issue.severity} key={`${issue.kind}-${issue.label}-${index}`}><b>{issue.severity === "warning" ? "警告" : "复核"}</b><span>{issue.label}{issue.overflowPixels ? ` · 超出约 ${issue.overflowPixels}px` : issue.contrastRatio ? ` · 对比度 ${issue.contrastRatio}:1` : issue.spacingPixels !== undefined ? ` · 间距约 ${issue.spacingPixels}px` : " · 字号小于 12px"}</span></li>)}</ul>}
             <small>这是本地布局审计，不能替代公众号后台保存、重开和手机预览。</small>
           </aside>
         </div>
-        <div className="wechat-audit-probes" aria-hidden="true">{MOBILE_WIDTHS.map((width) => <WechatAuditProbe key={width} width={width} html={auditedHtml} fontFamily={fontFamily} onResult={handleAuditResult} />)}</div>
+
       </section>
     </div>
   );

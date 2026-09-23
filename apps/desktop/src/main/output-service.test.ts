@@ -88,7 +88,7 @@ async function fixture(editorText = "# 可导出文档\n\n正文。") {
   return { context, snapshot, request };
 }
 
-function createService(saved: Uint8Array[], current: { value: boolean }) {
+function createService(saved: Uint8Array[], current: { value: boolean }, names?: string[]) {
   return new OutputService(
     new AssetHandleRegistry(),
     { transformSvg: async () => ({ status: "failed", code: "UNEXPECTED_SVG_TRANSFORM", message: "unexpected SVG transform" } as const) },
@@ -98,8 +98,9 @@ function createService(saved: Uint8Array[], current: { value: boolean }) {
       generateWechatHtml: async (context: OutputContext, assets, formulaAssets) => generateWechatHtml(context, assets, formulaAssets),
       cancelJob: () => true,
     },
-    async (_name, bytes) => {
+    async (name, bytes) => {
       saved.push(bytes);
+      names?.push(name);
       return {
         status: "saved" as const,
         artifact: { kind: "file" as const, displayName: "article.html", mimeType: "text/html", byteLength: bytes.byteLength },
@@ -446,5 +447,40 @@ describe("OutputService", () => {
     const result = await service.begin(value.request, value.context, () => current.value);
     expect(result.status).toBe("failed");
     expect(saved).toHaveLength(0);
+  });
+
+  it("uses the document display name as the suggested export file name", async () => {
+    for (const [target, expected] of [["offline-html", "我的文章.html"], ["docx", "我的文章.docx"]] as const) {
+      const value = await fixture();
+      value.request = { ...value.request, target, suggestedBaseName: " 我的文章.md " };
+      const saved: Uint8Array[] = [];
+      const names: string[] = [];
+      const service = createService(saved, { value: true }, names);
+      remember(service, value);
+      const result = await service.begin(value.request, value.context, () => true);
+      expect(result.status).toBe("completed");
+      expect(names).toEqual([expected]);
+    }
+  });
+
+  it("falls back to document and strips path or illegal characters from the export file name", async () => {
+    const cases: ReadonlyArray<readonly [string | undefined, string]> = [
+      [undefined, "document.html"],
+      ["", "document.html"],
+      ["   ", "document.html"],
+      ["a/b:c*d?.md", "a bcd.html"],
+    ];
+    for (const [suggestedBaseName, expected] of cases) {
+      const value = await fixture();
+      value.request = suggestedBaseName === undefined
+        ? { ...value.request, target: "offline-html" }
+        : { ...value.request, target: "offline-html", suggestedBaseName };
+      const names: string[] = [];
+      const service = createService([], { value: true }, names);
+      remember(service, value);
+      const result = await service.begin(value.request, value.context, () => true);
+      expect(result.status).toBe("completed");
+      expect(names).toEqual([expected]);
+    }
   });
 });

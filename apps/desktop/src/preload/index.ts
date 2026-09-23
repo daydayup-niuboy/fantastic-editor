@@ -31,6 +31,8 @@ import type {
   AiInvocationRequest,
   AiInvocationEvent,
   AiWechatThemeSuggestionRequest,
+  OpenAiCompatibleConfigSaveRequest,
+  OpenAiCompatibleModelListRequest,
 } from "@fantastic-editor/shared";
 
 const api: FantasticEditorApi = {
@@ -132,10 +134,24 @@ const api: FantasticEditorApi = {
   saveGeminiConfig: (request: { apiKey: string }) => ipcRenderer.invoke(IPC_CHANNELS.saveGeminiConfig, request),
   clearGeminiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearGeminiConfig),
   testGeminiConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testGeminiConnection),
+  getKimiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getKimiConfig),
+  saveKimiConfig: (request: { apiKey: string }) => ipcRenderer.invoke(IPC_CHANNELS.saveKimiConfig, request),
+  clearKimiConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearKimiConfig),
+  testKimiConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testKimiConnection),
+  getMiniMaxConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getMiniMaxConfig),
+  saveMiniMaxConfig: (request: { apiKey: string }) => ipcRenderer.invoke(IPC_CHANNELS.saveMiniMaxConfig, request),
+  clearMiniMaxConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearMiniMaxConfig),
+  testMiniMaxConnection: () => ipcRenderer.invoke(IPC_CHANNELS.testMiniMaxConnection),
+  getOpenAiCompatibleConfig: () => ipcRenderer.invoke(IPC_CHANNELS.getOpenAiCompatibleConfig),
+  saveOpenAiCompatibleConfig: (request: OpenAiCompatibleConfigSaveRequest) => ipcRenderer.invoke(IPC_CHANNELS.saveOpenAiCompatibleConfig, request),
+  clearOpenAiCompatibleConfig: () => ipcRenderer.invoke(IPC_CHANNELS.clearOpenAiCompatibleConfig),
+  listOpenAiCompatibleModels: (request: OpenAiCompatibleModelListRequest) => ipcRenderer.invoke(IPC_CHANNELS.listOpenAiCompatibleModels, request),
+  testOpenAiCompatibleConnection: (request: OpenAiCompatibleModelListRequest) => ipcRenderer.invoke(IPC_CHANNELS.testOpenAiCompatibleConnection, request),
   listDocumentHistory: (request: { sessionId: string }) => ipcRenderer.invoke(IPC_CHANNELS.listDocumentHistory, request),
   restoreDocumentHistory: (request: { sessionId: string; snapshotId: string; currentText: string }) => ipcRenderer.invoke(IPC_CHANNELS.restoreDocumentHistory, request),
   showOpenFileMenu: (request: { sessionId: string }) => ipcRenderer.invoke(IPC_CHANNELS.showOpenFileMenu, request),
   showWorkspaceFileMenu: (request: OpenWorkspaceFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.showWorkspaceFileMenu, request),
+  savePreviewAsset: (request: { url: string; suggestedName?: string }) => ipcRenderer.invoke(IPC_CHANNELS.savePreviewAsset, request),
 };
 
 contextBridge.exposeInMainWorld("fantasticEditor", Object.freeze(api));

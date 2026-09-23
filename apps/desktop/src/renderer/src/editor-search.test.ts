@@ -1,9 +1,15 @@
 import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
-import { createSearchQuery, searchMatches, skipAutoClosedCharacter } from "./MarkdownEditor";
+import { createSearchQuery, searchMatches, skipAutoClosedCharacter, transactionsIncludePaste } from "./MarkdownEditor";
 
 describe("editor search and input helpers", () => {
+  it("distinguishes paste transactions from ordinary input", () => {
+    const transaction = (event: string) => ({ isUserEvent: (candidate: string) => candidate === event });
+    expect(transactionsIncludePaste([transaction("input.paste")])).toBe(true);
+    expect(transactionsIncludePaste([transaction("input.type")])).toBe(false);
+  });
+
   it("respects case-sensitive and whole-word search options", () => {
     const state = EditorState.create({ doc: "Test test tester" });
     expect(searchMatches(state, createSearchQuery("Test", { caseSensitive: true }))).toEqual([{ from: 0, to: 4 }]);

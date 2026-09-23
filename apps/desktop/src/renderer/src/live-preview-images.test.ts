@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { imageDecorations, livePreviewImages, setImageSnapshot } from "./live-preview-images";
+import { DEFAULT_LIVE_IMAGE_TRANSFORM, imageDecorations, liveImageTransformAfterControl, livePreviewImages, setImageSnapshot } from "./live-preview-images";
 
 const source = "![图片](./assets/image.png)\n正文";
 const snapshot = { source, images: [{ from: 0, to: source.indexOf("\n"), src: "fantastic-asset://asset/12345678-1234-4123-8123-123456789012", alt: "图片" }] };
@@ -29,5 +29,22 @@ describe("Live Preview image snapshot", () => {
   it("rejects invalid and overlapping ranges", () => {
     expect(imageDecorations(state(), { source, images: [{ ...snapshot.images[0]!, from: -1 }] }).size).toBe(0);
     expect(imageDecorations(state(), { source, images: [snapshot.images[0]!, snapshot.images[0]!] }).size).toBe(1);
+  });
+});
+
+describe("Live Preview image transform controls", () => {
+  it("moves the image in four directions and restores the default transform", () => {
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "up")).toEqual({ offsetX: 0, offsetY: -24, zoom: 1 });
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "down")).toEqual({ offsetX: 0, offsetY: 24, zoom: 1 });
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "left")).toEqual({ offsetX: -24, offsetY: 0, zoom: 1 });
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "right")).toEqual({ offsetX: 24, offsetY: 0, zoom: 1 });
+    expect(liveImageTransformAfterControl({ offsetX: 24, offsetY: -24, zoom: 1.2 }, "reset")).toEqual(DEFAULT_LIVE_IMAGE_TRANSFORM);
+  });
+
+  it("zooms in and out with bounded, stable values", () => {
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "zoom-in").zoom).toBe(1.2);
+    expect(liveImageTransformAfterControl(DEFAULT_LIVE_IMAGE_TRANSFORM, "zoom-out").zoom).toBe(0.833);
+    expect(liveImageTransformAfterControl({ offsetX: 0, offsetY: 0, zoom: 4 }, "zoom-in").zoom).toBe(4);
+    expect(liveImageTransformAfterControl({ offsetX: 0, offsetY: 0, zoom: 0.25 }, "zoom-out").zoom).toBe(0.25);
   });
 });

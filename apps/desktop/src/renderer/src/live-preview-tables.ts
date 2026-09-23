@@ -3,10 +3,59 @@ import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemir
 import { escapeMarkdownTableCell, markdownTableDetails, markdownTableInsertedCellOffset, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
 
+export function showSelectionFormatMenu(event: MouseEvent, apply: (kind: TableCellFormat) => void, anchorRect?: { left: number; right: number; top: number; bottom: number } | null): void {
+  event.preventDefault();
+  event.stopPropagation();
+  document.querySelectorAll(".cm-live-table-context-menu").forEach((item) => item.remove());
+  const menu = document.createElement("div");
+  menu.className = "cm-live-table-context-menu cm-live-table-format-menu";
+  menu.setAttribute("role", "menu");
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  menu.style.visibility = "hidden";
+  const close = () => {
+    menu.remove();
+    document.removeEventListener("pointerdown", closeOnPointer);
+    document.removeEventListener("keydown", closeOnEscape);
+  };
+  const closeOnPointer = (pointerEvent: PointerEvent) => { if (!menu.contains(pointerEvent.target as Node)) close(); };
+  const closeOnEscape = (keyboardEvent: KeyboardEvent) => { if (keyboardEvent.key === "Escape") close(); };
+  for (const [label, kind] of [["B", "bold"], ["I", "italic"], ["S", "strike"], ["`", "code"], ["链接", "link"]] as const) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.textContent = label;
+    item.setAttribute("role", "menuitem");
+    item.onmousedown = (pointerEvent) => { pointerEvent.preventDefault(); pointerEvent.stopPropagation(); };
+    item.onclick = () => { close(); apply(kind); };
+    menu.append(item);
+  }
+  document.body.append(menu);
+  const width = menu.offsetWidth;
+  const height = menu.offsetHeight;
+  if (anchorRect) {
+    const centeredLeft = (anchorRect.left + anchorRect.right) / 2 - width / 2;
+    menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, centeredLeft))}px`;
+    const aboveTop = anchorRect.top - height - 6;
+    menu.style.top = `${aboveTop < 8 ? Math.min(window.innerHeight - height - 8, anchorRect.bottom + 6) : aboveTop}px`;
+  } else {
+    menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8))}px`;
+  }
+  menu.style.visibility = "";
+  setTimeout(() => {
+    document.addEventListener("pointerdown", closeOnPointer);
+    document.addEventListener("keydown", closeOnEscape);
+  });
+}
+
+
 interface TableCell { from: number; to: number; text: string; html: string; protected: boolean }
 interface TableProjection { from: number; to: number; rows: TableCell[][] }
 export interface TableSnapshot { source: string; tables: TableProjection[] }
 export type TableCellFormat = "bold" | "italic" | "strike" | "code" | "link";
+export function tableCellContextMenuKind(editing: boolean, selectionStart: number, selectionEnd: number): "format" | "structure" {
+  return editing && selectionStart !== selectionEnd ? "format" : "structure";
+}
 
 export function formatTableCellMarkdown(value: string, from: number, to: number, kind: TableCellFormat): { value: string; from: number; to: number } {
   const start = Math.max(0, Math.min(from, to, value.length));
@@ -234,18 +283,7 @@ class TableWidget extends WidgetType {
             }
           };
           input.onblur = () => finish(true);
-          const cellTools = document.createElement("div");
-          cellTools.className = "cm-live-table-cell-tools";
-          for (const [label, title, kind] of [["B", "粗体（Ctrl+B）", "bold"], ["I", "斜体（Ctrl+I）", "italic"], ["S", "删除线", "strike"], ["`", "行内代码", "code"], ["链接", "链接（Ctrl+K）", "link"]] as const) {
-            const tool = document.createElement("button");
-            tool.type = "button";
-            tool.textContent = label;
-            tool.title = title;
-            tool.onmousedown = (event) => { event.preventDefault(); event.stopPropagation(); };
-            tool.onclick = (event) => { event.preventDefault(); event.stopPropagation(); format(kind); };
-            cellTools.append(tool);
-          }
-          editor.append(input, cellTools);
+          editor.append(input);
           button.replaceWith(editor);
           input.focus();
           input.select();
@@ -270,7 +308,7 @@ class TableWidget extends WidgetType {
     const openContextMenu = (event: MouseEvent, rowIndex: number, columnIndex: number) => {
       event.preventDefault();
       event.stopPropagation();
-      root.querySelector(".cm-live-table-context-menu")?.remove();
+      document.querySelectorAll(".cm-live-table-context-menu").forEach((item) => item.remove());
       const menu = document.createElement("div");
       menu.className = "cm-live-table-context-menu";
       menu.setAttribute("role", "menu");
@@ -312,9 +350,22 @@ class TableWidget extends WidgetType {
         document.addEventListener("keydown", closeOnEscape);
       });
     };
+    const openFormatMenu = (event: MouseEvent, input: HTMLInputElement) => {
+      showSelectionFormatMenu(event, (kind) => {
+        const result = formatTableCellMarkdown(input.value, input.selectionStart ?? 0, input.selectionEnd ?? 0, kind);
+        input.value = result.value;
+        input.focus();
+        input.setSelectionRange(result.from, result.to);
+      }, input.getBoundingClientRect());
+    };
     table.oncontextmenu = (event) => {
       const cell = (event.target as Element | null)?.closest<HTMLElement>("th[data-table-row], td[data-table-row]");
       if (!cell || !table.contains(cell)) return;
+      const input = cell.querySelector("input");
+      if (input instanceof HTMLInputElement && tableCellContextMenuKind(true, input.selectionStart ?? 0, input.selectionEnd ?? 0) === "format") {
+        openFormatMenu(event, input);
+        return;
+      }
       openContextMenu(event, Number(cell.dataset.tableRow), Number(cell.dataset.tableColumn));
     };
     return root;

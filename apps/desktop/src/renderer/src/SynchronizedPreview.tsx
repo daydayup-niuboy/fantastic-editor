@@ -242,11 +242,13 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
           sourceToggle.type = "button";
           sourceToggle.className = "preview-structured-source-toggle";
           sourceToggle.ariaExpanded = "false";
-          sourceToggle.textContent = "查看源码";
+          sourceToggle.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/></svg>';
+          const setToggleLabel = (label: string) => { sourceToggle.title = label; sourceToggle.setAttribute("aria-label", label); };
+          setToggleLabel("查看源码");
           sourceToggle.addEventListener("click", () => {
             pre.hidden = !pre.hidden;
             sourceToggle.ariaExpanded = String(!pre.hidden);
-            sourceToggle.textContent = pre.hidden ? "查看源码" : "收起源码";
+            setToggleLabel(pre.hidden ? "查看源码" : "收起源码");
           });
           visual.append(sourceToggle);
           pre.before(visual);
@@ -256,8 +258,10 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
         const button = document.createElement("button");
         button.type = "button";
         button.className = "preview-code-toolbar";
-        button.textContent = "复制";
         button.ariaLabel = language ? `复制 ${language} 代码块` : "复制代码块";
+        const copyIcon = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+        const doneIcon = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+        button.innerHTML = copyIcon;
         button.title = button.ariaLabel;
         button.addEventListener("click", async () => {
           const text = (code.textContent ?? "").replace(/\r\n?/g, "\n");
@@ -265,9 +269,14 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
             onStatus?.("代码复制失败，请选中代码后复制。");
             return;
           }
-          button.textContent = "已复制";
+          button.innerHTML = doneIcon;
+          button.title = "已复制";
           onStatus?.("代码块已复制到系统剪贴板。");
-          window.setTimeout(() => { if (button.isConnected) button.textContent = "复制"; }, 1200);
+          window.setTimeout(() => {
+            if (!button.isConnected) return;
+            button.innerHTML = copyIcon;
+            button.title = button.ariaLabel ?? "复制";
+          }, 1200);
         });
         pre.append(button);
       });

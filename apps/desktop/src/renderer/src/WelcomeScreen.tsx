@@ -11,7 +11,7 @@ interface WelcomeScreenProps {
 
 export function WelcomeScreen({ onNew, onOpen, onOpenFolder, recentFiles, onOpenRecent }: WelcomeScreenProps) {
   return (
-    <section className="welcome-screen">
+    <section className="welcome-screen" title="双击空白处新建文档" onDoubleClick={(event) => { if ((event.target as HTMLElement).closest("button, a, input, textarea")) return; onNew(); }}>
       <div className="welcome-content">
         <div className="welcome-mark"><Icon name="markdown" size={34} /></div>
         <p className="welcome-eyebrow">LOCAL-FIRST MARKDOWN WORKSPACE</p>

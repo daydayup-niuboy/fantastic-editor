@@ -28,7 +28,7 @@ const scenarios = [
   { id: "offline-html", env: { FANTASTIC_EDITOR_OFFLINE_HTML_SMOKE_TEST: "1", FANTASTIC_EDITOR_OFFLINE_HTML_SMOKE_OUTPUT: htmlPath }, timeout: 90_000 },
   { id: "formula", env: { FANTASTIC_EDITOR_FORMULA_SMOKE_TEST: "1" }, timeout: 45_000 },
   { id: "mermaid", env: { FANTASTIC_EDITOR_MERMAID_SMOKE_TEST: "1" }, timeout: 45_000 },
-  { id: "ui", env: { FANTASTIC_EDITOR_UI_SMOKE_TEST: "1" }, timeout: 180_000 },
+  { id: "ui", env: { FANTASTIC_EDITOR_UI_SMOKE_TEST: "1" }, timeout: 240_000 },
   { id: "live-preview", env: { FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST: "1" }, timeout: 120_000 },
   { id: "ai", env: {
     FANTASTIC_EDITOR_AI_SMOKE_TEST: "1",

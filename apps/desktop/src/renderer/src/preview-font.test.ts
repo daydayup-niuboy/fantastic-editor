@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PREVIEW_FONT, DEFAULT_PREVIEW_FONT_SIZE, DEFAULT_READING_WIDTH, PREVIEW_FONT_PRESETS, commitPreviewFontDraft, normalizePreviewFontName, normalizePreviewFontSize, normalizeReadingWidth, previewFontStack, readingWidthMaxWidth } from "./preview-font";
+import { DEFAULT_PREVIEW_FONT, DEFAULT_PREVIEW_FONT_SIZE, DEFAULT_READING_WIDTH, PREVIEW_FONT_PRESETS, commitPreviewFontDraft, normalizePreviewFontName, normalizePreviewFontSize, normalizeReadingWidth, normalizeReadingWidthPx, previewFontStack, readingWidthMaxWidth, readingWidthPxFromPreset } from "./preview-font";
 
 describe("preview font preference", () => {
   it("accepts a local font name and builds a safe fallback stack", () => {
@@ -24,8 +24,15 @@ describe("preview font preference", () => {
     expect(normalizeReadingWidth("wide")).toBe("wide");
     expect(normalizeReadingWidth("invalid")).toBe(DEFAULT_READING_WIDTH);
     expect(readingWidthMaxWidth("full")).toBe("none");
-    expect(normalizePreviewFontSize(11)).toBe(12);
-    expect(normalizePreviewFontSize(99)).toBe(24);
+    expect(normalizeReadingWidthPx(200)).toBe(360);
+    expect(normalizeReadingWidthPx(720)).toBe(720);
+    expect(normalizeReadingWidthPx(9999)).toBe(1400);
+    expect(readingWidthPxFromPreset("narrow")).toBe(680);
+    expect(readingWidthPxFromPreset("full", 1100)).toBe(1100);
+    expect(normalizePreviewFontSize(9)).toBe(10);
+    expect(normalizePreviewFontSize(10)).toBe(10);
+    expect(normalizePreviewFontSize(48)).toBe(48);
+    expect(normalizePreviewFontSize(99)).toBe(48);
     expect(normalizePreviewFontSize("bad")).toBe(DEFAULT_PREVIEW_FONT_SIZE);
   });
 });
