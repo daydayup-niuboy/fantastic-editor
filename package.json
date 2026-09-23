@@ -95,6 +95,8 @@
       "!node_modules/esbuild/**/*",
       "!node_modules/@esbuild/**/*",
       "!node_modules/rollup/**/*",
+      "!node_modules/mermaid/**",
+      "!node_modules/@mermaid-js/**",
       "!**/wechat-api-config-v1.json",
       "!**/.env*",
       "!**/*.{pfx,p12,pvk,key}"

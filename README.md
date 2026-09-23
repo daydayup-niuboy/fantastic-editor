@@ -6,7 +6,7 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前源码版本：**0.3.0-rc.13**。本候选已在本机完成安装版、便携版和完整发布门禁，但尚未上传 GitHub。
+当前源码版本：**0.3.0-rc.14**。RC.14 本地候选已完成安装版、便携版和完整发布门禁，但尚未上传 GitHub；后续未发布源码跟进见开发进度文档。
 
 GitHub 当前可下载的预发布安装包仍为：**0.3.0-rc.8**（Windows x64）。
 
@@ -23,14 +23,14 @@ RC.8 已于 2026-09-19 上传为 GitHub 预发布版本；下载链接、文件�
 | `fantastic-editor-0.3.0-rc.8-setup.exe` | 137038739 | `6B423A5D6E26B60356262C934FDCC9030D42B35BB86189241B8AE7746AA6338E` |
 | `fantastic-editor-0.3.0-rc.8-portable.exe` | 136780669 | `1478041801AB109645B4621DD3D29A6B7AC9629642BE0572DB8C5A4857DAD26D` |
 
-### 本地 RC.13 候选
+### 本地 RC.14 候选
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.13-setup.exe` | 137051120 | `8BA568AAB1A5791BF2DEC3E307737BB98138EFEEB81EA8C27FD9DC54CC6F4711` |
-| `fantastic-editor-0.3.0-rc.13-portable.exe` | 136793066 | `9422D75F5123DFA8EEE3B63BE9AA4B28CC16364406984FD41D23F4983B315A29` |
+| `fantastic-editor-0.3.0-rc.14-setup.exe` | 137054648 | `48934EF751ECA91277DE0458B41AB200AB9CF2286C0E4349BFF2829F6CFC6382` |
+| `fantastic-editor-0.3.0-rc.14-portable.exe` | 136796507 | `F98F1B9CB24BD611A164224E38F83A5896D68754703AC20920EB8CC0F74D7150` |
 
-RC.13 两个程序均为 `NotSigned`；便携版已通过隔离启动，安装版已通过隔离安装、启动和卸载门禁。
+RC.14 两个程序均为 `NotSigned`；便携版已通过隔离启动，安装版已通过隔离安装、启动和卸载门禁。
 
 ## 编辑与预览
 
