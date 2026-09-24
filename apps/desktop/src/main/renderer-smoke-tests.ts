@@ -265,7 +265,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
           window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
         };
-        const paste = (kind: "file" | "large-html", expectedCount: number, expectEmpty = false) => window.webContents.executeJavaScript(`(async () => {
+        const paste = (kind: "file" | "large-html", expectedCount: number, expectEmpty = false, shiftFocus = false) => window.webContents.executeJavaScript(`(async () => {
           const editor = document.querySelector('.cm-content');
           if (!(editor instanceof HTMLElement)) return { inserted: false, caretLine: -1, lines: -1 };
           const focusedBefore = document.activeElement === editor;
@@ -274,6 +274,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           else transfer.setData('text/html', '<p>' + 'x'.repeat(512 * 1024) + '</p>');
           const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer });
           editor.dispatchEvent(pasteEvent);
+          if (${shiftFocus}) document.querySelector('[data-testid="new-document"]')?.focus();
           const deadline = Date.now() + 5000;
           while (Date.now() < deadline && ${expectEmpty
             ? "!(document.querySelector('.status-message')?.textContent ?? '').includes('剪贴板中没有可粘贴的文字')"
@@ -284,19 +285,19 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const node = document.getSelection()?.anchorNode;
           const line = (node instanceof Element ? node : node?.parentElement)?.closest('.cm-line');
           return { count: editor.textContent?.match(/Outlook 剪贴板回退测试/g)?.length ?? 0, caretLine: lines.indexOf(line), lines: lines.length, focusedBefore, focusedAfter: document.activeElement === editor, prevented: pasteEvent.defaultPrevented, status: document.querySelector('.status-message')?.textContent?.slice(0, 120) ?? '' };
-        })()`, true) as Promise<{ count: number; caretLine: number; lines: number; prevented: boolean; status: string }>;
+        })()`, true) as Promise<{ count: number; caretLine: number; lines: number; focusedAfter: boolean; prevented: boolean; status: string }>;
         enter();
         await new Promise((resolve) => setTimeout(resolve, 100));
-        const filePaste = await paste("file", 1);
+        const filePaste = await paste("file", 1, false, true);
         enter();
         await new Promise((resolve) => setTimeout(resolve, 100));
         const largeHtmlPaste = await paste("large-html", 2);
         enter();
         await new Promise((resolve) => setTimeout(resolve, 100));
         const emptyPaste = await paste("file", 2, true);
-        await finishSmoke("paste", filePaste.count === 1 && filePaste.caretLine === 1 && filePaste.prevented
-          && largeHtmlPaste.count === 2 && largeHtmlPaste.caretLine === 2 && largeHtmlPaste.prevented
-          && emptyPaste.count === 2 && emptyPaste.caretLine === 3 && emptyPaste.prevented && emptyPaste.status.includes("剪贴板中没有可粘贴的文字"),
+        await finishSmoke("paste", filePaste.count === 1 && filePaste.caretLine === 1 && filePaste.prevented && filePaste.focusedAfter
+          && largeHtmlPaste.count === 2 && largeHtmlPaste.caretLine === 2 && largeHtmlPaste.prevented && largeHtmlPaste.focusedAfter
+          && emptyPaste.count === 2 && emptyPaste.caretLine === 3 && emptyPaste.prevented && emptyPaste.focusedAfter && emptyPaste.status.includes("剪贴板中没有可粘贴的文字"),
         { filePaste, largeHtmlPaste, emptyPaste });
       })().catch((error) => void finishSmoke("paste", false, { error: error instanceof Error ? error.message : String(error) }));
     });

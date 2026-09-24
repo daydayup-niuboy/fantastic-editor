@@ -1,6 +1,6 @@
 {
   "name": "fantastic-editor",
-  "version": "0.3.0-rc.16",
+  "version": "0.3.0-rc.17",
   "private": true,
   "type": "module",
   "description": "Local-first Markdown editor for Windows",

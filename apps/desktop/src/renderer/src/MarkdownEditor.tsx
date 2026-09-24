@@ -603,48 +603,39 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
               literalPasteUntilRef.current = 0;
               const plainText = event.clipboardData?.getData("text/plain") ?? "";
               const htmlText = event.clipboardData?.getData("text/html") ?? "";
-              const resolved = resolveClipboardPaste({
-                plainText,
-                htmlText,
-                intent,
-              });
-              if (!resolved.markdown) {
-                event.preventDefault();
-                const source = editorView.state.doc.toString();
-                const { from, to, anchor, head } = selection;
-                void window.fantasticEditor.readClipboard().then((clipboard) => {
-                  // Outlook may render clipboard data after the window briefly loses OS focus.
-                  if (viewRef.current !== editorView || editorView.contentDOM.ownerDocument.activeElement !== editorView.contentDOM) return;
-                  const current = editorView.state.selection.main;
-                  if (editorView.state.doc.toString() !== source || current.anchor !== anchor || current.head !== head) {
-                    onStatusRef.current?.("正文或光标已变化；请在当前位置重新粘贴。");
-                    return;
-                  }
-                  const fallback = resolveClipboardPaste({
-                    plainText: clipboard.plainText || plainText,
-                    htmlText: clipboard.htmlText || htmlText,
-                    intent,
-                  });
-                  if (fallback.rejected || !fallback.markdown) {
-                    onStatusRef.current?.(fallback.warnings.join(" ") || resolved.warnings.join(" ") || "剪贴板中没有可粘贴的文字；请在 Outlook 中重新复制后重试。");
-                    return;
-                  }
-                  editorView.dispatch({
-                    changes: { from, to, insert: fallback.markdown },
-                    selection: { anchor: from + fallback.markdown.length },
-                    userEvent: "input.paste",
-                  });
-                  if (fallback.warnings.length) onStatusRef.current?.(fallback.warnings.join(" "));
-                }).catch(() => onStatusRef.current?.("无法读取系统剪贴板；请重新复制后重试。"));
-                return true;
-              }
-              editorView.dispatch({
-                changes: { from: selection.from, to: selection.to, insert: resolved.markdown },
-                selection: { anchor: selection.from + resolved.markdown.length },
-                userEvent: "input.paste",
-              });
               event.preventDefault();
-              if (resolved.warnings.length > 0) onStatusRef.current?.(resolved.warnings.join(" "));
+              const source = editorView.state.doc.toString();
+              const { from, to, anchor, head } = selection;
+              const eventResolved = resolveClipboardPaste({ plainText, htmlText, intent });
+              const commitPaste = (resolved: ReturnType<typeof resolveClipboardPaste>) => {
+                if (viewRef.current !== editorView) return;
+                const current = editorView.state.selection.main;
+                if (editorView.state.doc.toString() !== source || current.anchor !== anchor || current.head !== head) {
+                  onStatusRef.current?.("正文或光标已变化；请在当前位置重新粘贴。");
+                  return;
+                }
+                if (resolved.rejected || !resolved.markdown) {
+                  editorView.focus();
+                  onStatusRef.current?.(resolved.warnings.join(" ") || "剪贴板中没有可粘贴的文字；请在 Outlook 中重新复制后重试。");
+                  return;
+                }
+                editorView.dispatch({
+                  changes: { from, to, insert: resolved.markdown },
+                  selection: { anchor: from + resolved.markdown.length },
+                  userEvent: "input.paste",
+                });
+                editorView.focus();
+                if (resolved.warnings.length > 0) onStatusRef.current?.(resolved.warnings.join(" "));
+              };
+              void window.fantasticEditor.readClipboard().then((clipboard) => {
+                commitPaste(resolveClipboardPaste({
+                  plainText: clipboard.plainText || plainText,
+                  htmlText: clipboard.htmlText || htmlText,
+                  intent,
+                }));
+              }).catch(() => commitPaste(eventResolved.markdown || eventResolved.rejected
+                ? eventResolved
+                : { ...eventResolved, warnings: ["无法读取系统剪贴板；请重新复制后重试。"] }));
               return true;
             },
           }),

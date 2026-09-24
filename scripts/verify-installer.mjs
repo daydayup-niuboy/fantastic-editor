@@ -113,15 +113,11 @@ if (completion?.schema !== "fantastic-editor-smoke-result-v1" || completion.scen
   throw new Error("Installed application returned an invalid smoke result.");
 }
 
-// Keep the mapping alive briefly after the NSIS launcher returns because its
-// temporary uninstaller child completes the actual directory removal.
-const uninstallCommand = `subst ${mappedDrive} "${repositoryRoot}" & set "TEMP=${driveTempRoot}" & set "TMP=${driveTempRoot}" & "${mappedDrive}\\build-tmp\\installer-smoke-${packageJson.version}\\installed-app\\${uninstallEntry.name}" /S /currentuser & set "gateExit=!ERRORLEVEL!" & ping 127.0.0.1 -n 6 >NUL & subst ${mappedDrive} /D & exit /b !gateExit!`;
-const uninstall = spawnSync("cmd.exe", ["/d", "/v:on", "/c", uninstallCommand], {
-  cwd: repositoryRoot,
+const uninstall = spawnSync(uninstallPath, ["/S"], {
+  cwd: installRoot,
   encoding: "utf8",
   timeout: 120_000,
   windowsHide: true,
-  windowsVerbatimArguments: true,
 });
 if (uninstall.error) throw new Error("Silent uninstaller could not run.", { cause: uninstall.error });
 if (uninstall.status !== 0) throw new Error(`Silent uninstaller exited with ${uninstall.status ?? "no status"}.\n${uninstall.stderr || uninstall.stdout || ""}`);
