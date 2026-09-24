@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildClipboardPayload } from "@fantastic-editor/document-core";
 import { buildEditorClipboardPayload, resolveClipboardPaste } from "./clipboard-paste";
+import { MAX_EXTERNAL_HTML_INPUT_CODE_UNITS } from "./html-to-markdown";
 
 it("preserves locally copied image source without trusting external image HTML", () => {
   const markdown = "![IGBT 典型结构对比](./assets/IGBT-典型结构对比-f212ebc8.png)";
@@ -13,6 +14,14 @@ it("preserves locally copied image source without trusting external image HTML",
 });
 
 describe("clipboard paste resolver", () => {
+  it("converts Outlook-style HTML when its plain-text flavor is unavailable", () => {
+    const resolved = resolveClipboardPaste({
+      htmlText: '<html><body><p class="MsoNormal"><span style="font-family:Calibri">会议结论：<b>同意</b>继续推进。</span></p></body></html>',
+    });
+    expect(resolved.source).toBe("html");
+    expect(resolved.markdown).toContain("会议结论：同意继续推进。");
+  });
+
   it("prefers a verified fantastic-editor payload over HTML", () => {
     const payload = buildClipboardPayload("# 标题\n\n**正文**");
     const resolved = resolveClipboardPaste({ plainText: payload.plain, ...(payload.html ? { htmlText: payload.html } : {}) });
@@ -84,5 +93,22 @@ describe("clipboard paste resolver", () => {
     expect(resolved.source).toBe("plain");
     expect(resolved.markdown).toBe(plainText);
     expect(resolved.warnings).toContain("富文本剪贴板正文不完整，已优先保留较完整的纯文本内容。");
+  });
+
+  it("falls back to complete plain text when HTML conversion is truncated", () => {
+    const plainText = "# 完整标题\n\n- 这是完整的纯文本内容。";
+    const htmlText = `<h1>${"超长富文本".repeat(MAX_EXTERNAL_HTML_INPUT_CODE_UNITS)}</h1>`;
+    const resolved = resolveClipboardPaste({ plainText, htmlText });
+    expect(resolved.source).toBe("markdown");
+    expect(resolved.markdown).toBe(plainText);
+    expect(resolved.warnings.join(" ")).toContain("截断");
+  });
+
+  it("rejects truncated HTML when no complete plain text is available", () => {
+    const htmlText = `<h1>${"超长富文本".repeat(MAX_EXTERNAL_HTML_INPUT_CODE_UNITS)}</h1>`;
+    const resolved = resolveClipboardPaste({ htmlText });
+    expect(resolved.markdown).toBe("");
+    expect(resolved.rejected).toBe(true);
+    expect(resolved.warnings.join(" ")).toContain("截断");
   });
 });

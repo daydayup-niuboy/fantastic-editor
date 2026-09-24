@@ -1,5 +1,5 @@
-export const UDM_VERSION = "0.5";
-export const PARSER_PROFILE = "fantastic-editor-p0-markdown-0.1";
+export const UDM_VERSION = "0.6";
+export const PARSER_PROFILE = "fantastic-editor-p0-markdown-0.2";
 
 export type SourcePrecision = "exact" | "block";
 
@@ -73,6 +73,10 @@ export type NodeType =
   | "emphasis"
   | "strong"
   | "strikethrough"
+  | "highlight"
+  | "markdownComment"
+  | "footnoteReference"
+  | "footnoteDefinition"
   | "inlineCode"
   | "link"
   | "image"

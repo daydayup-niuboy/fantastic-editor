@@ -9,6 +9,8 @@ Thumbs.db
 .fantastic-editor/
 /release/
 build-tmp/
+/commit.txt
+.workbuddy/
 %LOCAL~1/
 /fantastic-editor-ui-smoke.png
 /wechat-acceptance-*.md

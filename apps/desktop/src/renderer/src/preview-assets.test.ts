@@ -41,7 +41,7 @@ function session(
     workspaceRevision: 1,
     parsedDocument: {
       schema: "fantastic-editor-parsed-document",
-      udmVersion: "0.5",
+      udmVersion: "0.6",
       parserProfile: "test",
       documentId: "document-1",
       sourceHash: "d".repeat(64),

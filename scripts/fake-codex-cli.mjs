@@ -24,6 +24,10 @@ if (scenario === "normal") {
   event({ type: "item.completed", item: { type: "agent_message", text: "界".repeat(90_000) } });
 } else if (scenario === "raw-oversized") {
   process.stdout.write("x".repeat(330_000));
+} else if (scenario === "oversized-buffered") {
+  event({ type: "thread.started" });
+  event({ type: "turn.started" });
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "界".repeat(88_000) } }));
 } else if (scenario === "claude-normal") {
   let input = "";
   process.stdin.setEncoding("utf8");
@@ -51,7 +55,7 @@ if (scenario === "normal") {
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => { input += chunk; });
   process.stdin.on("end", () => {
-    if (input.includes("取消测试")) setInterval(() => undefined, 1_000);
+    if (input.includes("取消测试") || input.includes("翻译超时测试")) setInterval(() => undefined, 1_000);
     else setTimeout(complete, input.includes("陈旧测试") ? 300 : 0);
   });
 }

@@ -20,21 +20,167 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         })()`, true);
         if (!ready) throw new Error("AI smoke editor did not become ready.");
         await window.webContents.insertText("需要润色的正文");
+        const translationSelection = await window.webContents.executeJavaScript(`(() => {
+          const line = [...document.querySelectorAll(".cm-line")].find((item) => item.textContent?.includes("需要润色的正文"));
+          const text = line?.firstChild;
+          if (!(text instanceof Text)) return null;
+          const range = document.createRange();
+          range.setStart(text, 0);
+          range.setEnd(text, Math.min("需要润色的正文".length, text.length));
+          const rect = range.getBoundingClientRect();
+          return { fromX: rect.left + 1, toX: rect.right - 1, y: rect.top + rect.height / 2 };
+        })()`, true) as { fromX: number; toX: number; y: number } | null;
+        if (!translationSelection) throw new Error("AI smoke could not locate text for selection translation.");
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(translationSelection.fromX), y: Math.round(translationSelection.y) });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(translationSelection.fromX), y: Math.round(translationSelection.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(translationSelection.fromX), y: Math.round(translationSelection.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(translationSelection.toX), y: Math.round(translationSelection.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(translationSelection.toX), y: Math.round(translationSelection.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        const triggerRect = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline) {
+            const trigger = document.querySelector('.selection-translate-trigger');
+            if (trigger) {
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const { x, y, width, height } = trigger.getBoundingClientRect();
+              return { x, y, width, height };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          }
+          return null;
+        })()`, true) as { x: number; y: number; width: number; height: number } | null;
+        if (!triggerRect) throw new Error("Selection translation trigger did not appear.");
+        let inkPixels = 0;
+        for (let attempt = 0; attempt < 5 && inkPixels < 3; attempt += 1) {
+          const triggerImage = await window.webContents.capturePage({ x: Math.floor(triggerRect.x), y: Math.floor(triggerRect.y), width: Math.ceil(triggerRect.width), height: Math.ceil(triggerRect.height) });
+          const triggerPixels = triggerImage.toBitmap();
+          for (let pixel = 0; pixel < triggerPixels.length; pixel += 4) {
+            if (triggerPixels.subarray(pixel, pixel + 3).every((channel) => channel < 100)) inkPixels += 1;
+          }
+          if (inkPixels < 3) await new Promise((resolve) => setTimeout(resolve, 80));
+        }
+        const visibleGlyph = inkPixels >= 3;
+        const selectionTranslation = await window.webContents.executeJavaScript(`(async () => {
+          const waitFor = async (test) => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 40)); } return null; };
+          const trigger = await waitFor(() => document.querySelector('.selection-translate-trigger'));
+          if (!trigger) return { shown: false, scaledAsRequested: false, doesNotCoverSelection: false, translated: false };
+          const rect = trigger.getBoundingClientRect();
+          const selectedRect = document.getSelection()?.rangeCount ? document.getSelection().getRangeAt(0).getBoundingClientRect() : null;
+          const doesNotCoverSelection = Boolean(selectedRect && (rect.bottom <= selectedRect.top || rect.top >= selectedRect.bottom || rect.right <= selectedRect.left || rect.left >= selectedRect.right));
+          const icon = trigger.querySelector('.selection-translate-glyph');
+          const iconRect = icon?.getBoundingClientRect();
+          const scaledAsRequested = Math.abs(rect.width - 16) < 0.5 && Math.abs(rect.height - 16) < 0.5
+            && Boolean(icon instanceof SVGSVGElement && iconRect && icon.querySelectorAll('path').length === 3 && getComputedStyle(icon).fill === 'rgb(32, 33, 36)' && Math.abs(iconRect.width - 13.728) < 0.3 && Math.abs(iconRect.height - 13.728) < 0.3);
+          trigger.click();
+          trigger.click();
+          const result = await waitFor(() => {
+            const text = document.querySelector('.selection-translate-result')?.textContent?.trim();
+            return text === '处理结果' ? text : null;
+          });
+          const dialog = document.querySelector('.selection-translate-popover');
+          const header = dialog?.querySelector('header');
+          const dialogRect = dialog?.getBoundingClientRect();
+          const headerRect = header?.getBoundingClientRect();
+          const compact = Boolean(dialogRect && headerRect && dialogRect.width <= 432 && headerRect.height <= 58 && parseFloat(getComputedStyle(dialog.querySelector('.selection-translate-result')).fontSize) <= 13.5);
+          return { shown: true, scaledAsRequested, doesNotCoverSelection, translated: result === '处理结果', compact,
+            dragStart: headerRect ? { x: headerRect.left + 30, y: headerRect.top + headerRect.height / 2 } : null,
+            before: dialogRect ? { left: dialogRect.left, top: dialogRect.top } : null };
+        })()`, true) as { shown: boolean; scaledAsRequested: boolean; doesNotCoverSelection: boolean; translated: boolean; compact: boolean; dragStart: { x: number; y: number } | null; before: { left: number; top: number } | null };
+        if (!selectionTranslation.shown || !selectionTranslation.scaledAsRequested || !selectionTranslation.doesNotCoverSelection || !selectionTranslation.translated || !selectionTranslation.compact || !selectionTranslation.dragStart || !selectionTranslation.before || !visibleGlyph) throw new Error(`Selection translation failed before opening AI settings: ${JSON.stringify({ ...selectionTranslation, visibleGlyph, inkPixels })}`);
+        const { dragStart, before } = selectionTranslation;
+        const deltaX = before.left > 80 ? -48 : 48;
+        const deltaY = before.top > 80 ? -38 : 38;
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(dragStart.x), y: Math.round(dragStart.y) });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(dragStart.x), y: Math.round(dragStart.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(dragStart.x + deltaX), y: Math.round(dragStart.y + deltaY) });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(dragStart.x + deltaX), y: Math.round(dragStart.y + deltaY), button: "left", clickCount: 1 });
+        const popoverInteraction = await window.webContents.executeJavaScript(`(async () => {
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const rect = document.querySelector('.selection-translate-popover')?.getBoundingClientRect();
+          if (!rect) return { dragged: false, survivesScroll: false, closesOutside: false };
+          const dragged = Math.abs(rect.left - ${before.left}) > 20 && Math.abs(rect.top - ${before.top}) > 20;
+          window.dispatchEvent(new Event('scroll'));
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const survivesScroll = Boolean(document.querySelector('.selection-translate-popover'));
+          document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          return { dragged, survivesScroll, closesOutside: !document.querySelector('.selection-translate-popover') };
+        })()`, true) as { dragged: boolean; survivesScroll: boolean; closesOutside: boolean };
+        if (!popoverInteraction.dragged || !popoverInteraction.survivesScroll || !popoverInteraction.closesOutside) throw new Error(`Selection translation popover interaction failed: ${JSON.stringify(popoverInteraction)}`);
+        await window.webContents.executeJavaScript(`(() => {
+          const original = window.setTimeout;
+          window.__restoreTranslationSmokeTimeout = () => { window.setTimeout = original; delete window.__restoreTranslationSmokeTimeout; };
+          window.setTimeout = (callback, delay, ...args) => original(callback, delay === 60000 ? 1500 : delay, ...args);
+          document.querySelector('.cm-content')?.focus();
+        })()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await window.webContents.insertText("翻译超时测试");
+        const timeoutSelection = await window.webContents.executeJavaScript(`(() => {
+          const line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent?.includes('翻译超时测试'));
+          const text = line?.firstChild;
+          if (!(text instanceof Text)) return null;
+          const range = document.createRange();
+          range.setStart(text, 0);
+          range.setEnd(text, Math.min('翻译超时测试'.length, text.length));
+          const rect = range.getBoundingClientRect();
+          return { fromX: rect.left + 1, toX: rect.right - 1, y: rect.top + rect.height / 2 };
+        })()`, true) as { fromX: number; toX: number; y: number } | null;
+        if (!timeoutSelection) throw new Error("Selection translation timeout text was not rendered.");
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(timeoutSelection.fromX), y: Math.round(timeoutSelection.y) });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(timeoutSelection.fromX), y: Math.round(timeoutSelection.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(timeoutSelection.fromX), y: Math.round(timeoutSelection.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(timeoutSelection.toX), y: Math.round(timeoutSelection.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(timeoutSelection.toX), y: Math.round(timeoutSelection.y), button: "left", clickCount: 1, modifiers: ["shift"] });
+        const translationTimeout = await window.webContents.executeJavaScript(`(async () => {
+          for (let i = 0; i < 100 && !document.querySelector('.selection-translate-trigger'); i++) await new Promise(r => setTimeout(r, 40));
+          document.querySelector('.selection-translate-trigger')?.click();
+          for (let i = 0; i < 100; i++) {
+            const error = document.querySelector('.selection-translate-error')?.textContent ?? '';
+            const retry = document.querySelector('.selection-translate-submit');
+            if (error.includes('翻译等待超过 60 秒') && retry?.textContent === '重试翻译' && !retry.disabled) {
+              document.querySelector('.selection-translate-close')?.click();
+              for (let j = 0; j < 20 && document.querySelector('.selection-translate-popover'); j++) await new Promise(r => setTimeout(r, 25));
+              window.__restoreTranslationSmokeTimeout?.();
+              return { timedOut: true, closed: !document.querySelector('.selection-translate-popover') };
+            }
+            await new Promise(r => setTimeout(r, 50));
+          }
+          window.__restoreTranslationSmokeTimeout?.();
+          return { timedOut: false, error: document.querySelector('.selection-translate-error')?.textContent ?? '' };
+        })()`, true) as { timedOut: boolean; closed?: boolean; error?: string };
+        if (!translationTimeout.timedOut || !translationTimeout.closed) throw new Error(`Selection translation timeout feedback failed: ${JSON.stringify(translationTimeout)}`);
+        await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await window.webContents.insertText("需要润色的正文");
         const appliedResult = await window.webContents.executeJavaScript(`(async () => {
           const waitFor = async (test) => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 50)); } return null; };
-          document.querySelector('[aria-label="AI 写作助手"]')?.click();
-          const generate = await waitFor(() => document.querySelector(".ai-generate:not(:disabled)"));
+          document.querySelector('[aria-label="切换 AI 提供商"]')?.click();
+          const providerSelect = await waitFor(() => {
+            const select = document.querySelector('.ai-provider-panel [aria-label="AI 提供商"]');
+            return select instanceof HTMLSelectElement && select.options.length === 7 ? select : null;
+          });
+          if (!(providerSelect instanceof HTMLSelectElement) || document.querySelector('.ai-inspector')) return { failure: 'provider sidebar did not open alone' };
           const providers = [...document.querySelectorAll('[aria-label="AI 提供商"] option')].map((option) => option.textContent);
-          if (providers.length !== 7 || !providers.some((label) => label?.includes("Codex CLI")) || !providers.some((label) => label?.includes("Claude CLI")) || !providers.some((label) => label?.includes("DeepSeek API")) || !providers.some((label) => label?.includes("Gemini API")) || !providers.some((label) => label?.includes("Kimi API")) || !providers.some((label) => label?.includes("MiniMax API")) || !providers.some((label) => label?.includes("OpenAI 兼容 API"))) return false;
-          const providerSelect = document.querySelector('[aria-label="AI 提供商"]');
-          if (!(providerSelect instanceof HTMLSelectElement)) return false;
+          if (providers.length !== 7 || !providers.some((label) => label?.includes("Codex CLI")) || !providers.some((label) => label?.includes("Claude CLI")) || !providers.some((label) => label?.includes("DeepSeek API")) || !providers.some((label) => label?.includes("Gemini API")) || !providers.some((label) => label?.includes("Kimi API")) || !providers.some((label) => label?.includes("MiniMax API")) || !providers.some((label) => label?.includes("OpenAI 兼容 API"))) return { failure: 'provider list', providers };
+          if (getComputedStyle(providerSelect).opacity !== '1' || providerSelect.getBoundingClientRect().width < 150) return { failure: 'provider selector is not visible' };
+          providerSelect.value = "deepseek-api";
+          providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          if (!await waitFor(() => document.querySelector('.ai-provider-panel [aria-label="DeepSeek API Key"]'))) return { failure: 'fixed provider settings missing' };
           providerSelect.value = "openai-compatible";
           providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
           const customReady = await waitFor(() => document.querySelector(".ai-custom-config") && document.querySelector('button') && [...document.querySelectorAll("button")].some((button) => button.textContent === "一键获取模型能力") && document.querySelectorAll(".ai-custom-model").length === 2);
           providerSelect.value = "codex-cli";
           providerSelect.dispatchEvent(new Event("change", { bubbles: true }));
-          if (!customReady) return false;
-          if (![...document.querySelectorAll(".ai-actions button")].some((button) => button.textContent === "润色" && button.title.includes("改善表达和语气"))) return false;
+          if (!customReady) return { failure: 'custom provider settings missing', selected: providerSelect.value };
+          document.querySelector('[aria-label="AI 写作助手"]')?.click();
+          const generate = await waitFor(() => document.querySelector(".ai-generate:not(:disabled)"));
+          if (!generate || !document.querySelector('.ai-provider-panel') || document.querySelector('.ai-inspector [aria-label="AI 提供商"]')) return { failure: 'assistant/sidebar independence', generate: Boolean(generate), sidebar: Boolean(document.querySelector('.ai-provider-panel')), assistant: Boolean(document.querySelector('.ai-inspector')), selected: providerSelect.value, message: document.querySelector('.ai-empty')?.textContent };
+          document.querySelector('[aria-label="切换 AI 提供商"]')?.click();
+          const sidebarClosed = await waitFor(() => !document.querySelector('.ai-provider-panel') && document.querySelector('.ai-inspector'));
+          if (!sidebarClosed) return { failure: 'closing provider sidebar affected assistant', sidebar: Boolean(document.querySelector('.ai-provider-panel')), assistant: Boolean(document.querySelector('.ai-inspector')) };
+          if (![...document.querySelectorAll(".ai-actions button")].some((button) => button.textContent === "润色" && button.title.includes("改善表达和语气"))) return { failure: 'writing actions missing' };
           generate?.click();
           const preview = await waitFor(() => document.querySelector('[aria-label="AI 建议预览"]'));
           const previewText = preview instanceof HTMLTextAreaElement ? preview.value : preview?.textContent;
@@ -98,7 +244,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           while (Date.now() < deadline) { if (document.querySelector(".ai-result")?.textContent?.includes("选择文字或把光标")) return true; await new Promise((resolve) => setTimeout(resolve, 50)); }
           return false;
         })()`, true);
-        await finishSmoke("ai", Boolean(cancelled), { applied: appliedResult, undone, stale, cancelled });
+        await finishSmoke("ai", Boolean(cancelled), { selectionTranslation, visibleGlyph, inkPixels, popoverInteraction, translationTimeout, applied: appliedResult, undone, stale, cancelled });
       })().catch((error) => void finishSmoke("ai", false, { error: error instanceof Error ? error.message : String(error) }));
     });
   } else if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
@@ -257,16 +403,27 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         const selectionMade = selectionRendering.native && selectionRendering.customLayers === 0;
         const editorFormatMenu = await window.webContents.executeJavaScript(`(async () => {
           const content = document.querySelector(".cm-content");
-          if (!content) return { shown: false, compact: false, buttons: [] };
+          if (!content) return { shown: false, hasNestedGroups: false, aligned: false, shortcutsHidden: false, compact: false, closed: false, buttons: [] };
           const rect = content.getBoundingClientRect();
           content.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 24, clientY: rect.top + 24 }));
-          const menu = document.querySelector("body > .cm-live-table-format-menu");
+          const menu = document.querySelector("body > .editor-context-menu");
           const buttons = menu ? [...menu.querySelectorAll("button")].map((button) => button.textContent ?? "") : [];
-          const box = menu?.getBoundingClientRect();
-          const compact = Boolean(box && box.width > 0 && box.width < 150 && box.height < 24);
-          menu?.remove();
-          return { shown: Boolean(menu), compact, buttons };
-        })()`, true) as { shown: boolean; compact: boolean; buttons: string[] };
+          const hasNestedGroups = Boolean(menu?.querySelector(".editor-context-submenu .editor-context-menu-item") && buttons.some((label) => label.includes("插入")) && buttons.some((label) => label.includes("文本格式")));
+          const first = menu?.querySelector(".editor-context-menu-item");
+          const label = first?.querySelector(".editor-context-menu-label");
+          const aligned = first instanceof HTMLElement && label instanceof HTMLElement
+            && getComputedStyle(first).display === "grid"
+            && getComputedStyle(label).textAlign === "left"
+            && label.getBoundingClientRect().left > first.getBoundingClientRect().left;
+          const shortcutButtons = menu ? [...menu.querySelectorAll("button[title]")] : [];
+          const shortcutsHidden = !menu?.querySelector(".editor-context-menu-shortcut")
+            && shortcutButtons.some((button) => button.querySelector(".editor-context-menu-label")?.textContent === "加粗" && button.title === "Ctrl+B")
+            && shortcutButtons.some((button) => button.querySelector(".editor-context-menu-label")?.textContent === "剪切" && button.title === "Ctrl+X");
+          const compact = menu instanceof HTMLElement && menu.getBoundingClientRect().width <= 240
+            && first instanceof HTMLElement && getComputedStyle(first).gridTemplateColumns.split(" ").length === 2;
+          document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+          return { shown: Boolean(menu), hasNestedGroups, aligned, shortcutsHidden, compact, closed: !document.querySelector("body > .editor-context-menu"), buttons };
+        })()`, true) as { shown: boolean; hasNestedGroups: boolean; aligned: boolean; shortcutsHidden: boolean; compact: boolean; closed: boolean; buttons: string[] };
         const toolbarPersistent = await window.webContents.executeJavaScript(`(() => {
           const toolbar = document.querySelector(".live-preview-format-toolbar");
           if (!(toolbar instanceof HTMLElement)) return false;
@@ -586,8 +743,8 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#28745b\"/></svg>\n```\n");
         const svgContentWorkflow = await window.webContents.executeJavaScript(`(async () => {
-          const wait = async (check) => { for (let i = 0; i < 120; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
-          const rendered = await wait(() => document.querySelector('.cm-live-image img[alt="SVG 内容"]')?.getAttribute('src')?.startsWith('fantastic-asset://asset/') === true);
+          const wait = async (check, timeoutMs = 6_000) => { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return check(); };
+          const rendered = await wait(() => document.querySelector('.cm-live-image img[alt="SVG 内容"]')?.getAttribute('src')?.startsWith('fantastic-asset://asset/') === true, 60_000);
           document.querySelector('.cm-live-image button[aria-label="编辑源码"]')?.click();
           const sourceSelected = await wait(() => window.getSelection()?.toString().includes(String.fromCharCode(96, 96, 96) + 'svg') === true);
           return { rendered, sourceSelected, liveImages: document.querySelectorAll('.cm-live-image').length, previewSvg: Boolean(document.querySelector('.resolved-inline-svg')), placeholder: Boolean(document.querySelector('.inline-svg-placeholder')), status: document.querySelector('.status')?.textContent ?? '', diagnostics: [...document.querySelectorAll('.diagnostic-item')].map(item => item.textContent) };
@@ -688,7 +845,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
-          && selectionMade && editorFormatMenu.shown && editorFormatMenu.compact && editorFormatMenu.buttons.length === 5 && editorFormatMenu.buttons.includes("链接") && toolbarPersistent && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
+          && selectionMade && editorFormatMenu.shown && editorFormatMenu.hasNestedGroups && editorFormatMenu.aligned && editorFormatMenu.shortcutsHidden && editorFormatMenu.compact && editorFormatMenu.closed && editorFormatMenu.buttons.some((button) => button.endsWith("插入图片")) && editorFormatMenu.buttons.some((button) => button.endsWith("翻译")) && editorFormatMenu.buttons.some((button) => button.endsWith("检测语言")) && toolbarPersistent && italicVisible && italicStyle.fontStyle === "italic" && italicStyle.fontSynthesis.includes("style") && italicToggle.removed && italicToggle.reapplied
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
@@ -713,11 +870,12 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         })`, true) as boolean;
         const before = await window.webContents.executeJavaScript(`({
           hasTabs: Boolean(document.querySelector(\"[data-testid=document-tabs]\")),
-          hasDropHint: Boolean(document.querySelector(\"[data-testid=drop-hint]\")),
+          dropHintRemoved: !document.querySelector(\"[data-testid=drop-hint]\"),
+          tabStripFillsAvailableWidth: getComputedStyle(document.querySelector(\".tab-strip\")).flexGrow === \"1\",
           hasNewButton: Boolean(document.querySelector(\"[data-testid=new-document]\")),
           uniqueFileActions: [\"新建文档\", \"打开文件\", \"保存\", \"打开文件夹\"].every((label) => document.querySelectorAll('.activity-bar button[aria-label=\"' + label + '\"]').length === 1)
             && document.querySelectorAll('.explorer-title button, .new-tab').length === 0
-        })`, true) as { hasTabs: boolean; hasDropHint: boolean; hasNewButton: boolean; uniqueFileActions: boolean };
+        })`, true) as { hasTabs: boolean; dropHintRemoved: boolean; tabStripFillsAvailableWidth: boolean; hasNewButton: boolean; uniqueFileActions: boolean };
         if (!before.uniqueFileActions) throw new Error("File actions must exist exactly once in the activity bar.");
         await window.webContents.executeJavaScript(`(() => {
           const transfer = new DataTransfer();
@@ -727,7 +885,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await new Promise((resolve) => setTimeout(resolve, 100));
         const drag = await window.webContents.executeJavaScript(`({ hasDropOverlay: Boolean(document.querySelector(".drop-overlay")) })`, true) as { hasDropOverlay: boolean };
         await window.webContents.executeJavaScript(`document.querySelector(".app-shell")?.dispatchEvent(new DragEvent("dragleave", { bubbles: true, cancelable: true }))`, true);
-        await window.webContents.executeJavaScript(`document.querySelector(\"[data-testid=new-document]\")?.click()`, true);
+        await window.webContents.executeJavaScript(`(() => { const strip = document.querySelector('.tab-strip'); if (!(strip instanceof HTMLElement)) return; const rect = strip.getBoundingClientRect(); strip.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: rect.right - 4, clientY: rect.top + rect.height / 2 })); })()`, true);
         await window.webContents.executeJavaScript(`new Promise((resolve) => {
           const deadline = Date.now() + 5000;
           const check = () => {
@@ -747,13 +905,14 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           hasSidebar: Boolean(document.querySelector(\".explorer-panel\")),
           hasSidebarResizeHandle: Boolean(document.querySelector(".sidebar-resize-handle")),
           hasSplitHandle: Boolean(document.querySelector(".split-handle")),
-          hasInsertImageButton: Boolean(document.querySelector(".insert-image-button")),
+          hasInsertImageButton: Boolean(document.querySelector('[aria-label="插入图片"]')),
+          hasSmartPunctuationButton: Boolean(document.querySelector(".smart-punctuation-button")),
           hasSyncScrollButton: Boolean(document.querySelector("[data-testid=sync-scroll-toggle]")),
           saveEnabled: !(document.querySelector('button[aria-label="保存"]')?.hasAttribute("disabled") ?? true),
           hasUnsavedIndicator: Boolean(document.querySelector(".document-tab.active .dirty-dot, .document-tab.active i[aria-label=未保存]")),
           statusText: document.querySelector(".status-message")?.textContent ?? "",
           viewportFits: document.documentElement.scrollWidth === document.documentElement.clientWidth
-        })`, true) as { tabText: string; tabCount: number; editorText: string; brandText: string; hasSidebar: boolean; hasSidebarResizeHandle: boolean; hasSplitHandle: boolean; hasInsertImageButton: boolean; hasSyncScrollButton: boolean; saveEnabled: boolean; hasUnsavedIndicator: boolean; statusText: string; viewportFits: boolean };
+        })`, true) as { tabText: string; tabCount: number; editorText: string; brandText: string; hasSidebar: boolean; hasSidebarResizeHandle: boolean; hasSplitHandle: boolean; hasInsertImageButton: boolean; hasSmartPunctuationButton: boolean; hasSyncScrollButton: boolean; saveEnabled: boolean; hasUnsavedIndicator: boolean; statusText: string; viewportFits: boolean };
         const splitHeaderLayout = await window.webContents.executeJavaScript(`(() => {
           const stage = document.querySelector('.document-stage.view-split');
           if (!(stage instanceof HTMLElement)) return { contained: false, previewScrollable: false };
@@ -839,13 +998,15 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         })()`, true) as { created: boolean; reorderedLeft: boolean; reorderedRight: boolean; previous: boolean; next: boolean; closed: boolean };
         const fontControl = await window.webContents.executeJavaScript(`(() => {
           const presets = document.querySelector("[data-testid=preview-font-preset]");
-          if (!(presets instanceof HTMLSelectElement)) return { exists: false, applied: false, hasArial: false };
+          if (!(presets instanceof HTMLSelectElement)) return { exists: false, applied: false, hasArial: false, accurateLabel: false };
           const hasArial = Array.from(presets.options).some((option) => option.value === "Arial") && presets.options.length >= 7;
+          const label = presets.closest("label");
+          const accurateLabel = presets.getAttribute("aria-label") === "正文字体" && label?.querySelector("span")?.textContent?.trim() === "正文字体" && label.title.includes("导出");
           const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
           setter?.call(presets, "KaiTi");
           presets.dispatchEvent(new Event("change", { bubbles: true }));
-          return { exists: true, applied: true, hasArial };
-        })()`, true) as { exists: boolean; applied: boolean; hasArial: boolean };
+          return { exists: true, applied: true, hasArial, accurateLabel };
+        })()`, true) as { exists: boolean; applied: boolean; hasArial: boolean; accurateLabel: boolean };
         await new Promise((resolve) => setTimeout(resolve, 100));
         const fontApplied = await window.webContents.executeJavaScript(`document.querySelector(".markdown-preview")?.getAttribute("style")?.includes("KaiTi") ?? false`, true) as boolean;
         window.show();
@@ -1824,8 +1985,11 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
             await new Promise((resolve) => setTimeout(resolve, 500));
             scrollPreserved = !hasScrollableContent || (before > 0 && container.scrollTop > 0);
           }
+          if (defaultFont instanceof HTMLButtonElement) defaultFont.click();
+          const resetApplied = await waitFor(() => fontPreset instanceof HTMLSelectElement && fontPreset.value === "Microsoft YaHei UI" && container instanceof HTMLElement && getComputedStyle(container).fontFamily.includes("Microsoft YaHei UI") && window.localStorage.getItem("fantastic-editor-preview-font") === "Microsoft YaHei UI");
           document.querySelector('button[aria-label="分栏"]')?.click();
           const directPreview = await waitFor(() => Boolean(document.querySelector(".document-stage.view-split .preview-pane")));
+          const previewResetApplied = directPreview && await waitFor(() => { const preview = document.querySelector(".markdown-preview"); return preview instanceof HTMLElement && getComputedStyle(preview).fontFamily.includes("Microsoft YaHei UI"); });
           const previewMermaid = directPreview && await waitFor(() => Boolean(document.querySelector(".document-stage.view-split .mermaid-diagram svg")));
           const outlineButtonRemoved = ![...document.querySelectorAll(".header-nav-button")].some((button) => button.textContent?.includes("目录"));
           const openEditorButton = document.querySelector(".open-editor-select");
@@ -1837,7 +2001,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           document.querySelector('button[aria-label="写作模式"]')?.click();
           sourceButton.click();
           await waitFor(() => Boolean(document.querySelector(".source-editor-layer.active")));
-          return { fontControl: defaultFont instanceof HTMLButtonElement && fontPreset instanceof HTMLSelectElement && fontPreset.options.length >= 7, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButtonRemoved, searchButton };
+          return { fontControl: defaultFont instanceof HTMLButtonElement && fontPreset instanceof HTMLSelectElement && fontPreset.options.length >= 7 && fontPreset.getAttribute("aria-label") === "正文字体" && fontPreset.closest("label")?.title.includes("导出") === true && resetApplied && previewResetApplied, scrollPreserved, directPreview, previewMermaid, inlineOutline, outlineButtonRemoved, repairButtonRemoved, searchButton };
           } catch (error) {
             return { fontControl: false, scrollPreserved: false, directPreview: false, previewMermaid: false, inlineOutline: false, outlineButtonRemoved: false, repairButtonRemoved: false, searchButton: false, testError: error instanceof Error ? error.name + ": " + error.message + "\\n" + (error.stack ?? "") : String(error) };
           }
@@ -1862,7 +2026,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (syncEnabled !== syncBefore) await window.webContents.executeJavaScript(`document.querySelector("[data-testid=sync-scroll-toggle]")?.click()`, true);
         if (!after.hasSidebarResizeHandle || !accessibility.keyboardSidebarSeparator || !accessibility.sidebarToggle) throw new Error(`Resource explorer resize or visibility smoke failed: ${JSON.stringify({ hasSidebarResizeHandle: after.hasSidebarResizeHandle, keyboardSidebarSeparator: accessibility.keyboardSidebarSeparator, sidebarToggle: accessibility.sidebarToggle })}`);
-        const valid = uiReady && before.hasTabs && before.hasDropHint && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && after.hasInsertImageButton && after.hasSyncScrollButton && after.viewportFits && splitHeaderLayout.contained && splitHeaderLayout.previewScrollable && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontApplied && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.hasActions && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButtonRemoved && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
+        const valid = uiReady && before.hasTabs && before.dropHintRemoved && before.tabStripFillsAvailableWidth && before.hasNewButton && drag.hasDropOverlay && after.tabCount === 1 && after.tabText === "未命名" && after.editorText === "" && after.saveEnabled && after.hasUnsavedIndicator && after.brandText.includes("fantasticeditor") && after.hasSidebar && after.hasSplitHandle && !after.hasInsertImageButton && after.hasSmartPunctuationButton && after.hasSyncScrollButton && after.viewportFits && splitHeaderLayout.contained && splitHeaderLayout.previewScrollable && accessibility.keyboardSeparator && accessibility.selectedTab && accessibility.liveStatus && recentBoundary.listed && recentBoundary.opaque && tabShortcuts.created && tabShortcuts.reorderedLeft && tabShortcuts.reorderedRight && tabShortcuts.previous && tabShortcuts.next && tabShortcuts.closed && fontControl.exists && fontControl.applied && fontControl.hasArial && fontControl.accurateLabel && fontApplied && performanceMetric.exists && performanceMetric.text.includes("解析") && performanceMetric.accessible && wechatThemePreview.opened && wechatThemePreview.completed && wechatThemePreview.widthCount === 3 && wechatThemePreview.hasHeadingAuditCopy && wechatThemePreview.hasActions && wechatThemePreview.keyboardDialog && wechatThemePreview.focusRestored && /ON|OFF/.test(syncTextBefore) && syncBefore !== "missing" && syncAfter !== syncBefore && syncEnabled === "true" && viewWorkflow.fontControl && viewWorkflow.scrollPreserved && viewWorkflow.directPreview && viewWorkflow.inlineOutline && viewWorkflow.outlineButtonRemoved && viewWorkflow.repairButtonRemoved && viewWorkflow.searchButton && imageBridge.status === "failed" && imageBridge.error.includes("会话") && themeAfter !== themeBefore;
         console.log(JSON.stringify({ uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter }, screenshot: "fantastic-editor-ui-smoke.png", valid }));
       await finishSmoke("ui", valid === true, { uiReady, before, drag, after, splitHeaderLayout, accessibility, recentBoundary, tabShortcuts, fontControl, fontApplied, mermaidEditorText, mermaidDebug, mermaidRendered, performanceMetric, wechatThemePreview, syncScroll: { before: syncBefore, after: syncAfter, enabled: syncEnabled }, wysiwyg, viewWorkflow, imageBridge, theme: { before: themeBefore, after: themeAfter } });
       })().catch((error: unknown) => {

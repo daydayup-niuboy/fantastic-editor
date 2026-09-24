@@ -1,6 +1,7 @@
 import MarkdownIt, { type Token } from "markdown-it";
 import { katex } from "@mdit/plugin-katex";
 import { auditGeneratedHtmlMarkup } from "./generated-html-security.js";
+import { installMenuMarkdownExtensions } from "./menu-markdown.js";
 
 export const MAX_RICH_COPY_MARKDOWN_CODE_UNITS = 512 * 1024;
 export const MAX_RICH_COPY_HTML_CODE_UNITS = 1024 * 1024;
@@ -86,7 +87,7 @@ function escapeHtml(value: string): string {
 
 function createClipboardMarkdownEngine() {
   const options = { html: false, breaks: false, linkify: false, typographer: false };
-  const engine = new MarkdownIt(options).use(katex);
+  const engine = new MarkdownIt(options).use(katex).use(installMenuMarkdownExtensions);
   engine.renderer.rules.math_inline = (tokens: Token[], index: number) => `<span><code>${escapeHtml(`$${tokens[index]?.content ?? ""}$`)}</code></span>`;
   engine.renderer.rules.math_block = (tokens: Token[], index: number) => `<div><code>${escapeHtml(`$$\n${tokens[index]?.content ?? ""}$$`)}</code></div>\n`;
   engine.renderer.rules.image = (tokens: Token[], index: number) => {

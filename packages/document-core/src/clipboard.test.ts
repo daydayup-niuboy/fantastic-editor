@@ -24,6 +24,15 @@ describe("clipboard contract", () => {
     expect(auditGeneratedHtmlMarkup(payload.html ?? "")).toEqual([]);
   });
 
+  it("renders menu-inserted highlights and footnotes, and omits Markdown comments", () => {
+    const html = renderMarkdownFragmentHtml("==重点== <!-- 隐藏 --> [^a]\n\n[^a]: 注释");
+    expect(html).toContain("<mark>重点</mark>");
+    expect(html).toContain("<sup>[a]</sup>");
+    expect(html).toContain("注释");
+    expect(html).not.toContain("隐藏");
+    expect(auditGeneratedHtmlMarkup(html)).toEqual([]);
+  });
+
   it("keeps generated output free of unsafe resource URLs", () => {
     expect(auditGeneratedHtmlMarkup(renderMarkdownFragmentHtml("![图](file:///secret)"))).toEqual([]);
   });

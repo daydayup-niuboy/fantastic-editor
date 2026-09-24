@@ -56,6 +56,7 @@ interface TextStyle {
   italics?: boolean;
   strike?: boolean;
   code?: boolean;
+  highlight?: boolean;
 }
 
 const DOCX_PAGE_WIDTH_DXA = 11_906;
@@ -155,6 +156,7 @@ function textRun(value: string, style: TextStyle, fontFamily: string): TextRun {
     ...(style.italics ? { italics: true } : {}),
     ...(style.strike ? { strike: true } : {}),
     ...(style.code ? { shading: { fill: "EEF1ED" } } : {}),
+    ...(style.highlight ? { shading: { fill: "FFF2CC" } } : {}),
   });
 }
 
@@ -168,6 +170,9 @@ function renderInline(nodes: readonly DocumentNode[], state: RenderState, inheri
       case "strong": children.push(...renderInline(node.children ?? [], state, { ...inherited, bold: true })); break;
       case "emphasis": children.push(...renderInline(node.children ?? [], state, { ...inherited, italics: true })); break;
       case "strikethrough": children.push(...renderInline(node.children ?? [], state, { ...inherited, strike: true })); break;
+      case "highlight": children.push(...renderInline(node.children ?? [], state, { ...inherited, highlight: true })); break;
+      case "markdownComment": break;
+      case "footnoteReference": children.push(textRun(`[${stringAttribute(node, "label")}]`, inherited, state.fontFamily)); break;
       case "inlineCode": children.push(textRun(stringAttribute(node, "value"), { ...inherited, code: true }, state.fontFamily)); break;
       case "link": {
         const href = stringAttribute(node, "href");
@@ -357,6 +362,13 @@ function renderBlocks(nodes: readonly DocumentNode[], state: RenderState): Array
           children: renderInline(node.children ?? [], state),
           spacing: { after: 120, line: 360 },
           widowControl: true,
+        }));
+        break;
+      case "footnoteDefinition":
+        output.push(new Paragraph({
+          children: [textRun(`[${stringAttribute(node, "label")}] ${stringAttribute(node, "value")}`, {}, state.fontFamily)],
+          spacing: { before: 40, after: 100, line: 300 },
+          indent: { left: 360 },
         }));
         break;
       case "blockquote":

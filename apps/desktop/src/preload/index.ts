@@ -40,6 +40,7 @@ const api: FantasticEditorApi = {
   listRecentFiles: () => ipcRenderer.invoke(IPC_CHANNELS.listRecentFiles),
   openRecentFile: (request: OpenRecentFileRequest) => ipcRenderer.invoke(IPC_CHANNELS.openRecentFile, request),
   createUntitledFile: () => ipcRenderer.invoke(IPC_CHANNELS.createUntitledFile),
+  readClipboard: () => ipcRenderer.invoke(IPC_CHANNELS.readClipboard),
   openDroppedMarkdownFile: (file: unknown) => {
     try {
       const path = webUtils.getPathForFile(file as File);

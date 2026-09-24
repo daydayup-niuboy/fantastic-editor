@@ -17,6 +17,7 @@ import {
 } from "./model.js";
 import { createResourceReference } from "./resources.js";
 import { canonicalizeEditorText, createLineStarts, createSourceLocator } from "./text.js";
+import { installMenuMarkdownExtensions } from "./menu-markdown.js";
 
 type MarkdownToken = Token;
 
@@ -26,7 +27,7 @@ function createMarkdownEngine() {
     breaks: false,
     linkify: false,
     typographer: false,
-  }).use(tasklist).use(katex);
+  }).use(tasklist).use(katex).use(installMenuMarkdownExtensions);
 }
 
 const markdown = createMarkdownEngine();
@@ -474,6 +475,7 @@ function inlineType(tokenType: string): NodeType | undefined {
     em_open: "emphasis",
     strong_open: "strong",
     s_open: "strikethrough",
+    mark_open: "highlight",
     link_open: "link",
   }[tokenType] as NodeType | undefined;
 }
@@ -582,6 +584,21 @@ function parseInlineNodes(
       node = { id: nextId(), type: "hardBreak", source: { ...parentRange, precision: "block" }, generated: false, attributes: {} };
     } else if (child.type === "html_inline") {
       node = { id: nextId(), type: "rawHtmlInline", source: { ...parentRange, precision: "block" }, generated: false, attributes: { raw: child.content, safetyState: "blocked", safeRepresentation: null } };
+    } else if (child.type === "markdown_comment") {
+      const found = text.indexOf(child.content, cursor);
+      const source = found >= cursor && found + child.content.length <= parentRange.to
+        ? locate(found, found + child.content.length)
+        : { ...parentRange, precision: "block" as const };
+      if (source.precision === "exact") cursor = source.to;
+      node = { id: nextId(), type: "markdownComment", source, generated: false, attributes: { value: child.content } };
+    } else if (child.type === "footnote_reference") {
+      const raw = `[^${child.content}]`;
+      const found = text.indexOf(raw, cursor);
+      const source = found >= cursor && found + raw.length <= parentRange.to
+        ? locate(found, found + raw.length)
+        : { ...parentRange, precision: "block" as const };
+      if (source.precision === "exact") cursor = source.to;
+      node = { id: nextId(), type: "footnoteReference", source, generated: false, attributes: { label: child.content } };
     }
     if (node) append(node);
   }
@@ -603,6 +620,12 @@ function buildBlockTree(text: string, nextId: () => string): DocumentNode[] {
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     const parentRange = stack.at(-1)?.source;
+    if (token.type === "footnote_definition") {
+      const range = tokenRange(token, text, lineStarts, locate, parentRange);
+      const meta = token.meta as { label?: string; value?: string } | undefined;
+      append({ id: nextId(), type: "footnoteDefinition", source: range, generated: false, attributes: { label: meta?.label ?? "", value: meta?.value ?? "" } });
+      continue;
+    }
     if (token.type === "inline") {
       const range = tokenRange(token, text, lineStarts, locate, parentRange);
       const nodes = parseInlineNodes(token, range, text, locate, nextId);
@@ -655,7 +678,7 @@ function buildBlockTree(text: string, nextId: () => string): DocumentNode[] {
 }
 
 const BLOCK_INLINE_CONTAINERS = new Set<NodeType>(["paragraph", "heading", "tableCell"]);
-const FORMATTING_INLINE_CONTAINERS = new Set<NodeType>(["emphasis", "strong", "strikethrough", "link"]);
+const FORMATTING_INLINE_CONTAINERS = new Set<NodeType>(["emphasis", "strong", "strikethrough", "highlight", "link"]);
 
 function hasExactTextOverlap(nodes: DocumentNode[], inlineNode: DocumentNode): boolean {
   return nodes.some((node) =>

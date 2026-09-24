@@ -1,5 +1,6 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { AiInvocationRequest, AiInvocationResult, OpenAiCompatibleConfigSaveRequest, OpenAiCompatibleConfigSummary, OpenAiCompatibleModelSlot } from "@fantastic-editor/shared";
+import { readBoundedResponseText } from "./bounded-response.js";
 
 const KEY_MIN = 8;
 const KEY_MAX = 1_000;
@@ -160,7 +161,7 @@ export class OpenAiCompatibleApi {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      const response = await this.fetcher(endpoint(baseUrl, "models"), { method: "GET", signal: controller.signal, headers: { Authorization: `Bearer ${apiKey}` } });
+      const response = await this.fetcher(endpoint(baseUrl, "models"), { method: "GET", redirect: "error", signal: controller.signal, headers: { Authorization: `Bearer ${apiKey}` } });
       return response.ok || response.status === 429;
     } catch { return false; }
     finally { clearTimeout(timer); }
@@ -176,12 +177,13 @@ export class OpenAiCompatibleApi {
     try {
       const response = await this.fetcher(endpoint(baseUrl, "models"), {
         method: "GET",
+        redirect: "error",
         signal: controller.signal,
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!response.ok) throw new Error(apiError(response.status));
-      const text = await response.text();
-      if (Buffer.byteLength(text) > MODEL_LIST_LIMIT) throw new Error("模型列表过大，无法读取。");
+      const text = await readBoundedResponseText(response, MODEL_LIST_LIMIT);
+      if (text === null) throw new Error("模型列表过大，无法读取。");
       return parseModelList(JSON.parse(text) as unknown);
     } catch (error) {
       if (controller.signal.aborted) throw new Error("获取模型列表超时，请检查订阅地址和网络。");
@@ -193,31 +195,37 @@ export class OpenAiCompatibleApi {
   cancel(): void { this.#controller?.abort(); }
 
   async invoke(request: AiInvocationRequest, prompt: string): Promise<AiInvocationResult> {
-    const config = await this.#read();
-    const apiKey = config ? await this.#key(config) : null;
-    const model = config && request.modelSlot !== undefined ? config.modelSlots[request.modelSlot]?.modelId : undefined;
-    if (!config || !apiKey || !model) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置订阅地址、API Key 和至少一个模型。" };
     const controller = new AbortController();
     this.#controller = controller;
-    const timer = setTimeout(() => controller.abort(), 180_000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 180_000);
+    const interrupted = (): AiInvocationResult => timedOut
+      ? { status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" }
+      : { status: "cancelled" };
     try {
+      const config = await this.#read();
+      const apiKey = config ? await this.#key(config) : null;
+      const model = config && request.modelSlot !== undefined ? config.modelSlots[request.modelSlot]?.modelId : undefined;
+      if (controller.signal.aborted) return interrupted();
+      if (!config || !apiKey || !model) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置订阅地址、API Key 和至少一个模型。" };
       const response = await this.fetcher(endpoint(config.baseUrl, "chat/completions"), {
         method: "POST",
+        redirect: "error",
         signal: controller.signal,
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: false }),
       });
+      if (controller.signal.aborted) return interrupted();
       if (!response.ok) return { status: "failed", code: "API_FAILED", error: apiError(response.status) };
-      const text = await response.text();
-      if (Buffer.byteLength(text) > 320 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
+      const text = await readBoundedResponseText(response, 320 * 1024);
+      if (controller.signal.aborted) return interrupted();
+      if (text === null) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       const data = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
       const result = assistantMessageText(data.choices?.[0]?.message?.content);
       if (result && Buffer.byteLength(result) > 256 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       return result ? { status: "completed", result } : { status: "failed", code: "API_FAILED", error: "服务未返回有效建议。" };
     } catch {
-      return controller.signal.aborted
-        ? { status: "cancelled" }
-        : { status: "failed", code: "API_FAILED", error: "无法连接自定义 OpenAI 兼容 API。" };
+      return controller.signal.aborted ? interrupted() : { status: "failed", code: "API_FAILED", error: "无法连接自定义 OpenAI 兼容 API。" };
     } finally {
       clearTimeout(timer);
       if (this.#controller === controller) this.#controller = null;

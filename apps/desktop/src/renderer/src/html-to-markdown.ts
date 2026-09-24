@@ -112,6 +112,9 @@ function convertNode(node: Node, state: ConvertState, depth: number, context?: s
   if (!(node instanceof Element)) return "";
   const tag = node.tagName.toLowerCase();
   if (node.hasAttribute("data-fantastic-theme-decoration")) return "";
+  if (tag === "font" || /(?:^|;)\s*font(?:-family|-size)?\s*:/i.test(attr(node, "style"))) {
+    state.warnings.add("已统一粘贴内容的正文字体与字号；标题层级保持不变。");
+  }
   if (FORBIDDEN.has(tag)) {
     state.warnings.add(`已移除不安全 HTML：${tag}`);
     return "";
@@ -149,13 +152,16 @@ function convertNode(node: Node, state: ConvertState, depth: number, context?: s
 
 function fallbackHtmlToMarkdown(html: string): HtmlToMarkdownResult {
   const warnings = ["当前运行环境无法构造 DOM，已将外部 HTML 降级为纯文本。"];
+  if (/<font\b|\bstyle\s*=\s*["'][^"']*\bfont(?:-family|-size)?\s*:/i.test(html)) {
+    warnings.push("已统一粘贴内容的正文字体与字号；标题层级保持不变。");
+  }
   const text = html.replace(/<span\b[^>]*data-fantastic-theme-decoration\s*=\s*["'][^"']*["'][^>]*>[\s\S]*?<\/span>/gi, "").replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&");
   return { markdown: normalizeExternalMarkdown(text), warnings, truncated: false };
 }
 
 export function htmlToMarkdown(html: string): HtmlToMarkdownResult {
   if (html.length > MAX_EXTERNAL_HTML_INPUT_CODE_UNITS) {
-    return { markdown: "", warnings: ["外部 HTML 超过输入限制，已拒绝粘贴。"], truncated: true };
+    return { markdown: "", warnings: ["外部 HTML 超过输入限制，无法转换。"], truncated: true };
   }
   if (typeof DOMParser === "undefined") return fallbackHtmlToMarkdown(html);
   const document = new DOMParser().parseFromString(`<div>${html}</div>`, "text/html");

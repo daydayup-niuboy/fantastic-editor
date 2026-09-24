@@ -18,7 +18,7 @@ const RAW_OUTPUT_LIMIT = RESULT_LIMIT + 64 * 1024;
 const TIMEOUT_MS = 180_000;
 type SpawnSpec = { executable: string; argsPrefix?: string[] };
 type ApiProvider = { configured(): Promise<boolean>; invoke(request: AiInvocationRequest, prompt: string): Promise<AiInvocationResult>; cancel(): void };
-type AiCliServiceOptions = { spawnSpec?: SpawnSpec; timeoutMs?: number; deepSeek?: DeepSeekApi; gemini?: GeminiApi; kimi?: KimiApi; miniMax?: MiniMaxApi; openAiCompatible?: OpenAiCompatibleApi };
+type AiCliServiceOptions = { spawnSpec?: SpawnSpec; spawnProcess?: typeof spawn; timeoutMs?: number; deepSeek?: DeepSeekApi; gemini?: GeminiApi; kimi?: KimiApi; miniMax?: MiniMaxApi; openAiCompatible?: OpenAiCompatibleApi };
 const ACTIONS: Record<AiActionId, string> = {
   polish: "润色文字，使表达清楚、自然、准确，保持原意和 Markdown 结构",
   deai: "重写文字，去掉 AI 腔，让读者或检测工具难以判断由 AI 写成。保留意义、事实和 Markdown 结构，只交付最终正文。删除夸大重要性、假深度动名词、广告套话、AI 高频词、滥用系动词、否定式排比、机械三段式、被动语态、长破折号、表情和聊天机器人套话。注入变化节奏、具体观点、允许不确定、必要时用第一人称，并保留自然口语。分三遍自检后再输出，不要引言、评论或修改摘要",
@@ -147,6 +147,7 @@ export function validateAiCancelRequest(value: unknown): value is { requestId: s
 export class AiCliService {
   #active: { requestId: string; cancel: () => void } | null = null;
   readonly #spawnSpec: SpawnSpec | undefined;
+  readonly #spawnProcess: typeof spawn;
   readonly #timeoutMs: number;
   readonly #deepSeek: DeepSeekApi | undefined;
   readonly #gemini: GeminiApi | undefined;
@@ -156,6 +157,7 @@ export class AiCliService {
 
   constructor(options: AiCliServiceOptions = {}) {
     this.#spawnSpec = options.spawnSpec;
+    this.#spawnProcess = options.spawnProcess ?? spawn;
     this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.#deepSeek = options.deepSeek;
     this.#gemini = options.gemini;
@@ -220,39 +222,70 @@ export class AiCliService {
     }
     if (this.#active) return { status: "failed", code: "BUSY", error: "已有 AI 请求正在处理中。" };
     const api = this.#apiProvider(request.providerId);
+    let cancelled = false;
+    let activeChild: ReturnType<typeof spawn> | null = null;
+    let cancelCliTimeout: (() => void) | null = null;
+    const active = { requestId: request.requestId, cancel: () => { cancelled = true; if (api) api.cancel(); else { cancelCliTimeout?.(); activeChild?.kill(); } } };
+    this.#active = active;
     if (api) {
-      this.#active = { requestId: request.requestId, cancel: () => api.cancel() };
-      const result = await api.invoke(request as AiInvocationRequest, prompt);
-      this.#active = null;
-      emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
-      return result;
+      try {
+        const result = await api.invoke(request as AiInvocationRequest, prompt);
+        emit(result.status === "completed" ? { requestId: request.requestId, sequence: 1, type: "completed", result: result.result } : result.status === "cancelled" ? { requestId: request.requestId, sequence: 1, type: "cancelled" } : { requestId: request.requestId, sequence: 1, type: "failed", code: result.code, message: result.error });
+        return result;
+      } finally {
+        if (this.#active === active) this.#active = null;
+      }
     }
-    const executable = this.#spawnSpec?.executable ?? await executableFromPath(request.providerId);
     const provider = PROVIDERS[request.providerId];
-    if (!executable) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: `未找到 ${provider.displayName}，请先安装并登录。` };
-    const directory = await mkdtemp(join(tmpdir(), "fantastic-editor-ai-"));
-    let sequence = 0;
-    return await new Promise<AiInvocationResult>((resolve) => {
-      const providerArgs = request.providerId === "codex-cli"
-        ? ["exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only", "-C", directory, "-"]
+    let directory: string | undefined;
+    try {
+      const executable = this.#spawnSpec?.executable ?? await executableFromPath(request.providerId);
+      if (cancelled) {
+        emit({ requestId: request.requestId, sequence: 1, type: "cancelled" });
+        return { status: "cancelled" };
+      }
+      if (!executable) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: `未找到 ${provider.displayName}，请先安装并登录。` };
+      const tempDirectory = await mkdtemp(join(tmpdir(), "fantastic-editor-ai-"));
+      directory = tempDirectory;
+      if (cancelled) {
+        emit({ requestId: request.requestId, sequence: 1, type: "cancelled" });
+        return { status: "cancelled" };
+      }
+      let sequence = 0;
+      return await new Promise<AiInvocationResult>((resolve) => {
+        const providerArgs = request.providerId === "codex-cli"
+        ? ["exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only", "-C", tempDirectory, "-"]
         : ["-p", "--input-format", "text", "--output-format", "json", "--no-session-persistence", "--safe-mode", "--tools", "", "--strict-mcp-config", "--mcp-config", "{}"];
-      const child = spawn(executable, [...(this.#spawnSpec?.argsPrefix ?? []), ...providerArgs], {
-        cwd: directory, shell: false, windowsHide: true, env: minimalEnvironment(), stdio: ["pipe", "pipe", "pipe"],
-      });
-      this.#active = { requestId: request.requestId, cancel: () => { cancelled = true; child.kill(); } };
-      let stdout = "", result = "", stdoutBytes = 0, stderrBytes = 0, cancelled = false, settled = false;
+      const childProcess = this.#spawnProcess(executable, [...(this.#spawnSpec?.argsPrefix ?? []), ...providerArgs], {
+          cwd: tempDirectory, shell: false, windowsHide: true, env: minimalEnvironment(), stdio: ["pipe", "pipe", "pipe"],
+        });
+        activeChild = childProcess;
+      let stdout = "", result = "", stdoutBytes = 0, stderrBytes = 0, settled = false, spawnFailed = false;
+      let forcedResult: { value: AiInvocationResult; event: AiInvocationEvent } | null = null;
+      let timer: ReturnType<typeof setTimeout>;
       let lifecycle: "initial" | "thread" | "turn" | "result" | "complete" = "initial";
       let protocolError = false;
-      const finish = async (value: AiInvocationResult, event?: AiInvocationEvent) => {
+      const finish = (value: AiInvocationResult, event?: AiInvocationEvent) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         if (event) emit(event);
-        this.#active = null;
-        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
         resolve(value);
       };
+      const terminate = (value: AiInvocationResult, event: AiInvocationEvent) => {
+        if (settled || forcedResult) return;
+        forcedResult = { value, event };
+        clearTimeout(timer);
+        childProcess.kill();
+      };
+      const finishForcedResult = () => {
+        const forced = forcedResult;
+        if (!forced) return false;
+        finish(forced.value, forced.event);
+        return true;
+      };
       const consumeLine = (line: string) => {
+        if (settled || forcedResult) return;
         if (!line.trim()) return;
         try {
           const event = JSON.parse(line) as { type?: string; item?: { type?: string; text?: string } };
@@ -262,24 +295,31 @@ export class AiCliService {
             if (lifecycle !== "turn" && lifecycle !== "result") protocolError = true;
             lifecycle = "result";
             result = event.item.text;
-            if (Buffer.byteLength(result) > RESULT_LIMIT) { child.kill(); void finish({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" }); }
+            if (Buffer.byteLength(result) > RESULT_LIMIT) terminate({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" });
           }
           else if (event.type === "turn.completed") { if (lifecycle !== "result") protocolError = true; else lifecycle = "complete"; }
         } catch { protocolError = true; }
       };
-      child.stdout.on("data", (chunk) => {
+      childProcess.stdout.on("data", (chunk) => {
+        if (settled || forcedResult) return;
         stdoutBytes += Buffer.byteLength(chunk);
-        if (stdoutBytes > RAW_OUTPUT_LIMIT) { child.kill(); void finish({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" }); return; }
+        if (stdoutBytes > RAW_OUTPUT_LIMIT) { terminate({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" }); return; }
         stdout += String(chunk);
         if (request.providerId === "codex-cli") {
           const lines = stdout.split(/\r?\n/); stdout = lines.pop() ?? "";
           for (const line of lines) consumeLine(line);
         }
       });
-      child.stderr.on("data", (chunk) => { stderrBytes = Math.min(64 * 1024 + 1, stderrBytes + Buffer.byteLength(chunk)); });
-      child.once("error", () => void finish({ status: "failed", code: "START_FAILED", error: `${provider.displayName} 无法启动。` }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "START_FAILED", message: `${provider.displayName} 无法启动。` }));
-      child.once("close", (code) => {
-        if (request.providerId === "codex-cli") consumeLine(stdout);
+      childProcess.stderr.on("data", (chunk) => { stderrBytes = Math.min(64 * 1024 + 1, stderrBytes + Buffer.byteLength(chunk)); });
+      childProcess.once("error", () => { if (childProcess.pid === undefined) spawnFailed = true; });
+      childProcess.once("close", (code) => {
+        if (forcedResult) { finish(forcedResult.value, forcedResult.event); return; }
+        if (cancelled) { finish({ status: "cancelled" }, { requestId: request.requestId, sequence: ++sequence, type: "cancelled" }); return; }
+        if (spawnFailed) { finish({ status: "failed", code: "START_FAILED", error: `${provider.displayName} 无法启动。` }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "START_FAILED", message: `${provider.displayName} 无法启动。` }); return; }
+        if (request.providerId === "codex-cli") {
+          consumeLine(stdout);
+          if (finishForcedResult()) return;
+        }
         else {
           try {
             const output = JSON.parse(stdout) as { type?: string; subtype?: string; is_error?: boolean; result?: string };
@@ -287,18 +327,26 @@ export class AiCliService {
               result = output.result;
               lifecycle = "complete";
             } else if (typeof output.result === "string" && Buffer.byteLength(output.result) > RESULT_LIMIT) {
-              void finish({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" });
+              finish({ status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "RESULT_TOO_LARGE", message: "AI 返回内容过长。" });
               return;
             } else protocolError = true;
           } catch { protocolError = true; }
         }
-        if (cancelled) void finish({ status: "cancelled" }, { requestId: request.requestId, sequence: ++sequence, type: "cancelled" });
-        else if (code === 0 && lifecycle === "complete" && !protocolError && result.trim()) void finish({ status: "completed", result: result.trim() }, { requestId: request.requestId, sequence: ++sequence, type: "completed", result: result.trim() });
-        else void finish({ status: "failed", code: "CLI_FAILED", error: stderrBytes > 64 * 1024 ? `${provider.displayName} 错误信息过长。` : `${provider.displayName} 未返回有效建议，请确认已登录且当前额度可用。` }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "CLI_FAILED", message: `${provider.displayName} 未返回有效建议。` });
+        if (code === 0 && lifecycle === "complete" && !protocolError && result.trim()) finish({ status: "completed", result: result.trim() }, { requestId: request.requestId, sequence: ++sequence, type: "completed", result: result.trim() });
+        else finish({ status: "failed", code: "CLI_FAILED", error: stderrBytes > 64 * 1024 ? `${provider.displayName} 错误信息过长。` : `${provider.displayName} 未返回有效建议，请确认已登录且当前额度可用。` }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "CLI_FAILED", message: `${provider.displayName} 未返回有效建议。` });
       });
-      const timer = setTimeout(() => { child.kill(); void finish({ status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "TIMEOUT", message: "AI 请求超时。" }); }, this.#timeoutMs);
-      child.stdin.end(prompt);
-    });
+      timer = setTimeout(() => terminate({ status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" }, { requestId: request.requestId, sequence: ++sequence, type: "failed", code: "TIMEOUT", message: "AI 请求超时。" }), this.#timeoutMs);
+      cancelCliTimeout = () => clearTimeout(timer);
+        childProcess.stdin.end(prompt);
+      });
+    } catch {
+      const message = `${provider.displayName} 无法启动。`;
+      emit({ requestId: request.requestId, sequence: 1, type: "failed", code: "START_FAILED", message });
+      return { status: "failed", code: "START_FAILED", error: message };
+    } finally {
+      if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      if (this.#active === active) this.#active = null;
+    }
   }
 
   cancel(requestId: string): boolean {

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { CreateWechatDraftResult, PublishWechatArticleResult, TestWechatApiConnectionResult } from "@fantastic-editor/shared";
 import type { WechatDraftPayload } from "./output-service.js";
+import { readBoundedResponseText } from "./bounded-response.js";
 
 const API_ROOT = "https://api.weixin.qq.com/cgi-bin";
 const PUBLIC_IP_URL = "https://api.ipify.org?format=json";
@@ -93,7 +94,8 @@ function articleUrlFromStatus(value: JsonRecord): string | null {
 }
 
 async function readJson(response: Response): Promise<JsonRecord> {
-  const text = await response.text();
+  const text = await readBoundedResponseText(response, 1024 * 1024);
+  if (text === null) throw new Error("微信接口响应超过 1 MiB 上限。");
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);

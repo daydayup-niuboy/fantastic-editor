@@ -1,9 +1,17 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
+import type { SourceRange } from "@fantastic-editor/document-core";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
 
-interface ImageProjection { from: number; to: number; src: string; alt: string; kind?: "image" | "svg-content" }
+interface ImageProjection { from: number; to: number; src: string; alt: string; referenceKey?: string; documentId?: string; kind?: "image" | "svg-content" }
 export interface ImageSnapshot { source: string; images: ImageProjection[] }
+export interface LiveImageLoadFailure {
+  documentId: string;
+  referenceKey: string;
+  from: number;
+  to: number;
+  expectedSource: string;
+}
 const ASSET_URL = /^fantastic-asset:\/\/asset\/[a-f\d]{8}-[a-f\d]{4}-[1-5][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
 export type LiveImageControl = "up" | "down" | "left" | "right" | "reset" | "zoom-in" | "zoom-out";
 export interface LiveImageTransform { offsetX: number; offsetY: number; zoom: number }
@@ -37,7 +45,7 @@ export function liveImageTransformAfterControl(current: LiveImageTransform, cont
 
 
 // Read only the existing trusted preview projection, never the editable DOM.
-export function imageSnapshotFromHtml(source: string, html: string): ImageSnapshot {
+export function imageSnapshotFromHtml(source: string, html: string, documentId?: string): ImageSnapshot {
   const template = document.createElement("template");
   template.innerHTML = html;
   const images = [...template.content.querySelectorAll('[data-source-kind="image"], [data-source-kind="svg-content"]')].map((element) => ({
@@ -45,9 +53,29 @@ export function imageSnapshotFromHtml(source: string, html: string): ImageSnapsh
     to: Number(element.getAttribute("data-source-to")),
     src: element.getAttribute("src") ?? "",
     alt: element.getAttribute("alt") ?? element.getAttribute("data-alt") ?? "图片",
+    ...(element.getAttribute("data-reference-key") ? { referenceKey: element.getAttribute("data-reference-key")! } : {}),
+    ...(documentId ? { documentId } : {}),
     kind: element.getAttribute("data-source-kind") === "svg-content" ? "svg-content" as const : "image" as const,
   }));
   return { source, images };
+}
+
+export function liveImageLoadFailureDetail(state: EditorState, image: ImageProjection, expectedSource: string): LiveImageLoadFailure | null {
+  if (!image.documentId || !image.referenceKey || !/^[a-f\d]{64}$/i.test(image.referenceKey)) return null;
+  if (!Number.isInteger(image.from) || !Number.isInteger(image.to) || image.from < 0 || image.to <= image.from || state.sliceDoc(image.from, image.to) !== expectedSource) return null;
+  return { documentId: image.documentId, referenceKey: image.referenceKey, from: image.from, to: image.to, expectedSource };
+}
+
+export function liveImageLoadFailureRange(text: string, detail: LiveImageLoadFailure): SourceRange | null {
+  if (!Number.isInteger(detail.from) || !Number.isInteger(detail.to) || detail.from < 0 || detail.to <= detail.from || text.slice(detail.from, detail.to) !== detail.expectedSource) return null;
+  const positionAt = (offset: number) => {
+    const prefix = text.slice(0, offset);
+    const lastBreak = Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("\r"));
+    return { line: prefix.split(/\r\n|\r|\n/).length, column: offset - lastBreak };
+  };
+  const start = positionAt(detail.from);
+  const end = positionAt(detail.to);
+  return { from: detail.from, to: detail.to, startLine: start.line, startColumn: start.column, endLine: end.line, endColumn: end.column, precision: "exact" };
 }
 
 export const setImageSnapshot = StateEffect.define<ImageSnapshot | null>();
@@ -65,30 +93,44 @@ function addPadButton(parent: HTMLElement, className: string, title: string, pat
 }
 
 let activePinnedPreview: HTMLElement | null = null;
+let activePinnedPointerListener: ((event: PointerEvent) => void) | null = null;
+const pinnedPreviewHoverHandlers = new WeakMap<HTMLElement, () => void>();
 function clearPinned(root: HTMLElement): void {
   root.classList.remove("is-active");
   const controls = root.querySelector<HTMLElement>(".cm-live-image-controls");
   if (controls) { controls.style.left = ""; controls.style.top = ""; controls.style.right = ""; }
 }
+function deactivatePinnedPreview(root: HTMLElement): void {
+  if (activePinnedPreview !== root) return;
+  clearPinned(root);
+  if (activePinnedPointerListener) document.removeEventListener("pointerdown", activePinnedPointerListener, true);
+  activePinnedPointerListener = null;
+  activePinnedPreview = null;
+}
 // 指向图片即“钉住”弹出并显示控件；只有在图片以外区域按下鼠标才恢复。
 // 退出钉住（或切换到另一张图）时，用户拖动到的功能块位置一并复位为默认。
 export function attachPinnedHoverPreview(root: HTMLElement, onActivate?: () => void): void {
-  function onDocumentPointer(event: PointerEvent): void {
-    if (root.contains(event.target as Node | null)) return;
-    deactivate();
-  }
-  function deactivate(): void {
-    clearPinned(root);
-    document.removeEventListener("pointerdown", onDocumentPointer, true);
-    if (activePinnedPreview === root) activePinnedPreview = null;
-  }
-  root.addEventListener("mouseenter", () => {
-    if (activePinnedPreview && activePinnedPreview !== root) clearPinned(activePinnedPreview);
+  const onMouseEnter = () => {
+    if (activePinnedPreview && activePinnedPreview !== root) deactivatePinnedPreview(activePinnedPreview);
     activePinnedPreview = root;
     root.classList.add("is-active");
-    document.addEventListener("pointerdown", onDocumentPointer, true);
+    if (!activePinnedPointerListener) {
+      activePinnedPointerListener = (event) => {
+        if (!root.contains(event.target as Node | null)) deactivatePinnedPreview(root);
+      };
+      document.addEventListener("pointerdown", activePinnedPointerListener, true);
+    }
     onActivate?.();
-  });
+  };
+  root.addEventListener("mouseenter", onMouseEnter);
+  pinnedPreviewHoverHandlers.set(root, onMouseEnter);
+}
+
+export function detachPinnedHoverPreview(root: HTMLElement): void {
+  const onMouseEnter = pinnedPreviewHoverHandlers.get(root);
+  if (onMouseEnter) root.removeEventListener("mouseenter", onMouseEnter);
+  pinnedPreviewHoverHandlers.delete(root);
+  deactivatePinnedPreview(root);
 }
 
 export function createLiveTransformControls(onControl: (control: LiveImageControl) => void, extras?: { onEdit?: () => void; onSave?: () => void; onDelete?: () => void }): HTMLSpanElement {
@@ -159,6 +201,8 @@ class ImageWidget extends WidgetType {
       img.onerror = () => {
         img.hidden = true;
         status.textContent = "图片加载失败，请查看文档诊断或重新解析。";
+        const detail = liveImageLoadFailureDetail(view.state, this.image, this.expectedSource);
+        if (detail) window.dispatchEvent(new CustomEvent<LiveImageLoadFailure>("fantastic-editor:live-image-load-error", { detail }));
         view.requestMeasure();
       };
       root.append(img);
@@ -210,6 +254,7 @@ class ImageWidget extends WidgetType {
     attachPinnedHoverPreview(root);
     return root;
   }
+  destroy(dom: HTMLElement): void { detachPinnedHoverPreview(dom); }
   ignoreEvent(): boolean { return true; }
 }
 

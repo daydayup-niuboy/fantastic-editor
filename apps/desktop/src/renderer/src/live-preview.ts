@@ -1,6 +1,28 @@
 import { syntaxTree } from "@codemirror/language";
 import { Annotation, Transaction, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
+import type { DelimiterType, MarkdownConfig } from "@lezer/markdown";
+
+const highlightDelimiter: DelimiterType = { resolve: "Highlight", mark: "HighlightMark" };
+export const livePreviewMarkdownHighlight: MarkdownConfig = {
+  defineNodes: [
+    { name: "Highlight", style: { "Highlight/...": tags.special(tags.processingInstruction) } },
+    { name: "HighlightMark", style: tags.processingInstruction },
+  ],
+  parseInline: [{
+    name: "Highlight",
+    before: "Emphasis",
+    parse(context, next, position) {
+      if (next !== 61 || context.char(position - 1) === 61 || context.char(position + 1) !== 61 || context.char(position + 2) === 61) return -1;
+      const before = context.slice(position - 1, position);
+      const after = context.slice(position + 2, position + 3);
+      const canOpen = !/\s/.test(after);
+      const canClose = !/\s/.test(before);
+      return context.addDelimiter(highlightDelimiter, position, position + 2, canOpen, canClose);
+    },
+  }],
+};
 
 export type LivePreviewTokenKind =
   | "hide"
@@ -14,6 +36,7 @@ export type LivePreviewTokenKind =
   | "strong"
   | "emphasis"
   | "strike"
+  | "highlight"
   | "link"
   | "list-marker"
   | "task-marker"
@@ -42,7 +65,7 @@ function pushInlineToken(
   tokens: LivePreviewToken[],
   state: EditorState,
   node: { from: number; to: number; node: { getChildren(name: string): readonly { from: number; to: number }[] } },
-  kind: "strong" | "emphasis" | "strike",
+  kind: "strong" | "emphasis" | "strike" | "highlight",
   markName = "EmphasisMark",
 ): void {
   const marks = node.node.getChildren(markName);
@@ -101,6 +124,10 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
         pushInlineToken(tokens, state, node, "strike", "StrikethroughMark");
         return;
       }
+      if (name === "Highlight") {
+        pushInlineToken(tokens, state, node, "highlight", "HighlightMark");
+        return;
+      }
       if (name === "Link") {
         const marks = node.node.getChildren("LinkMark");
         if (marks.length >= 2) {
@@ -115,7 +142,16 @@ export function collectLivePreviewTokens(state: EditorState, from = 0, to = stat
         return;
       }
       if (name === "Paragraph") {
-        tokens.push({ from: state.doc.lineAt(node.from).from, to: state.doc.lineAt(node.from).from, kind: "paragraph-line" });
+        const first = Math.max(node.from, from);
+        const last = Math.min(node.to - 1, to);
+        if (first <= last) {
+          const firstLine = state.doc.lineAt(first).number;
+          const lastLine = state.doc.lineAt(last).number;
+          for (let number = firstLine; number <= lastLine; number++) {
+            const lineFrom = state.doc.line(number).from;
+            tokens.push({ from: lineFrom, to: lineFrom, kind: "paragraph-line" });
+          }
+        }
       }
       if (name === "ListItem") {
         const mark = node.node.getChildren("ListMark")[0];

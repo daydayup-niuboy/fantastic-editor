@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction, type SyntheticEvent } from "react";
 import { OFFICIAL_WECHAT_THEME_IDS, WECHAT_CUSTOM_THEME_ID_RE, WECHAT_THEME_OPTIONS, resolveOfficialWechatTheme, type AiActionId, type AiProviderId, type AiProviderStatus, type OpenAiCompatibleConfigSummary, type OpenAiCompatibleModelSlot, type AiTextAnchor, type DocumentHistoryItem, type OpenFileResult, type OpenFolderResult, type OutputCommandResult, type PersistRecoveryRequest, type PreviewDerivedUpdate, type PreviewSession, type RecentFileEntry, type ResolvedWechatTheme, type WechatApiConfigSummary, type WechatReplacementItem, type WechatThemeDefinition, type WechatThemeId, type WechatThemeListItem, type WechatThemeOverlayInput, type WorkspaceFileEntry } from "@fantastic-editor/shared";
 import { Icon } from "./Icon";
+import { FixedAiProviderConfig } from "./FixedAiProviderConfig";
 import { MarkdownEditor, type MarkdownEditorHandle } from "./MarkdownEditor";
 import { SynchronizedPreview, type SynchronizedPreviewHandle } from "./SynchronizedPreview";
 import { applyResolutionToPreviewHtml } from "./preview-assets";
 import { applyPreviewDerivedUpdate, createPreviewSession, formatDiagnosticItems, type FormattedDiagnostic } from "./preview-session";
+import { liveImageLoadFailureRange, type LiveImageLoadFailure } from "./live-preview-images";
 import { ParseWorkerClient } from "./workers/parse-worker-client";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { EditorRuler } from "./EditorRuler";
@@ -23,6 +25,7 @@ import { nextWebMarkdownRepairSource, repairWebMarkdown, unwrapMarkdownDocumentF
 import { applySmartPunctuation, writingStatistics } from "./writing-tools";
 import { syncAiComparisonScroll } from "./ai-comparison-scroll";
 import { suggestionDiffSegments } from "./ai-suggestion-diff";
+import { exceedsAiInputLimit, translationInstruction, type TranslationLanguageId } from "./selection-translation";
 import packageMetadata from "../../../../../package.json";
 
 interface ActiveDocument {
@@ -78,6 +81,10 @@ const AI_ACTIONS: Array<{ id: AiActionId; label: string; help: string }> = [
   { id: "summarize", label: "摘要", help: "提炼当前选区或段落；应用后会用摘要替换原内容。" },
   { id: "custom", label: "自定义", help: "按你填写的要求处理当前选区或段落；指令仅发送本次，不会保存。" },
 ];
+function flashConfigMessage(setter: Dispatch<SetStateAction<string>>, message: string): void {
+  setter(message);
+  window.setTimeout(() => setter((current) => current === message ? "" : current), 5_000);
+}
 function newAiRequestId(): string {
   return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (digit) =>
     (Number(digit) ^ crypto.getRandomValues(new Uint8Array(1))[0]! & 15 >> Number(digit) / 4).toString(16));
@@ -161,7 +168,7 @@ export function App() {
   const [previewFontSize, setPreviewFontSize] = useState(() => normalizePreviewFontSize(window.localStorage.getItem("fantastic-editor-preview-font-size") ?? DEFAULT_PREVIEW_FONT_SIZE));
   const [outlineDocument, setOutlineDocument] = useState<PreviewSession["parsedDocument"] | null>(null);
   const [expandedOutlineSessionId, setExpandedOutlineSessionId] = useState<string | null>(null);
-  const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "outline">("explorer");
+  const [sidebarPanel, setSidebarPanel] = useState<"explorer" | "outline" | "ai-providers">("explorer");
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -196,24 +203,6 @@ export function App() {
   const [aiCustomInstruction, setAiCustomInstruction] = useState("");
   const aiOriginalScrollRef = useRef<HTMLTextAreaElement | null>(null);
   const aiSuggestionScrollRef = useRef<HTMLElement | null>(null);
-  const [deepSeekApiKey, setDeepSeekApiKey] = useState("");
-  const [deepSeekConfigBusy, setDeepSeekConfigBusy] = useState(false);
-const AI_CONFIG_MESSAGE_FLASH_MS = 5000;
-function flashConfigMessage(setter: (updater: (current: string) => string) => void, message: string): void {
-  setter(() => message);
-  window.setTimeout(() => setter((current) => (current === message ? "" : current)), AI_CONFIG_MESSAGE_FLASH_MS);
-}
-
-  const [deepSeekConfigMessage, setDeepSeekConfigMessage] = useState("");
-  const [geminiApiKey, setGeminiApiKey] = useState("");
-  const [geminiConfigBusy, setGeminiConfigBusy] = useState(false);
-  const [geminiConfigMessage, setGeminiConfigMessage] = useState("");
-  const [kimiApiKey, setKimiApiKey] = useState("");
-  const [kimiConfigBusy, setKimiConfigBusy] = useState(false);
-  const [kimiConfigMessage, setKimiConfigMessage] = useState("");
-  const [miniMaxApiKey, setMiniMaxApiKey] = useState("");
-  const [miniMaxConfigBusy, setMiniMaxConfigBusy] = useState(false);
-  const [miniMaxConfigMessage, setMiniMaxConfigMessage] = useState("");
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customProviderName, setCustomProviderName] = useState("");
   const [customLocalName, setCustomLocalName] = useState("");
@@ -229,6 +218,9 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
   const [aiComparisonRatio, setAiComparisonRatio] = useState(50);
   const [aiChromeCollapsed, setAiChromeCollapsed] = useState(false);
   const [aiRequest, setAiRequest] = useState<{ requestId: string; anchor: AiTextAnchor; scope: "selection" | "block"; status: "working" | "ready" | "stale" | "applied" | "failed"; result?: string; error?: string } | null>(null);
+  const [selectionTranslationBusy, setSelectionTranslationBusy] = useState(false);
+  const selectionTranslationRequestRef = useRef<string | null>(null);
+  const selectionTranslationCompletionRef = useRef<Promise<void> | null>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const commandInputRef = useRef<HTMLInputElement | null>(null);
@@ -391,7 +383,12 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
     if (active) updateTabs((current) => current.map((tab) => tab.sessionId === active.sessionId ? { ...tab, draft: value } : tab));
   }, [active?.sessionId, updateTabs]);
   const dirty = active ? active.requiresSave || draft !== active.savedText : false;
-  const writingStats = useMemo(() => writingStatistics(draft), [draft]);
+  const [statsDraft, setStatsDraft] = useState(draft);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setStatsDraft(draft), 300);
+    return () => window.clearTimeout(timer);
+  }, [draft]);
+  const writingStats = useMemo(() => writingStatistics(statsDraft), [statsDraft]);
   const queueRecoverySnapshot = useCallback((request: PersistRecoveryRequest) => {
     pendingRecoveryRef.current = request;
     if (recoveryWriteInFlightRef.current) return;
@@ -1671,6 +1668,27 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
     if (referenceKey) imageRefreshAttemptsRef.current.delete(referenceKey);
   }, []);
 
+  useEffect(() => {
+    const handleLiveImageLoadError = (event: Event) => {
+      const detail = (event as CustomEvent<LiveImageLoadFailure>).detail;
+      if (!detail || detail.documentId !== activeDocumentIdRef.current) return;
+      const text = draftRef.current;
+      const source = liveImageLoadFailureRange(text, detail);
+      if (!source) return;
+      const key = `live-image-load-${detail.documentId}-${detail.referenceKey}`;
+      setDiagnostics((current) => current.some((item) => item.key === key) ? current : [...current, {
+        key,
+        text: "编辑区无法加载已解析的图片资源。请重新解析；若仍失败，请检查图片文件是否可读且为有效图片。",
+        severity: "error",
+        source,
+      }]);
+      setPreviewRetryAvailable(true);
+      setStatus("图片加载失败，已加入文档诊断；可以重新解析。");
+    };
+    window.addEventListener("fantastic-editor:live-image-load-error", handleLiveImageLoadError);
+    return () => window.removeEventListener("fantastic-editor:live-image-load-error", handleLiveImageLoadError);
+  }, []);
+
   const startAiComparisonResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const stage = event.currentTarget.parentElement;
     if (!stage) return;
@@ -1842,66 +1860,31 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
     ? (customModelSlots[aiModelSlot]?.modelId ? `-${customModelSlots[aiModelSlot]!.modelId}` : "")
     : (aiProviderId === "deepseek-api" || aiProviderId === "gemini-api" || aiProviderId === "kimi-api" || aiProviderId === "minimax-api")
       && aiProvider?.status === "available" && aiProvider.version ? `-${aiProvider.version}` : "";
+  const loadAiProviders = useCallback(async () => {
+    const providers = await window.fantasticEditor.detectAiProviders();
+    setAiProviders(providers);
+    return providers;
+  }, []);
   const openAi = useCallback(() => {
     if (!active) return;
     setWechatThemePreviewOpen(false);
     setAiOpen(true);
-    if (aiProviders.length === 0) void window.fantasticEditor.detectAiProviders().then(setAiProviders);
-  }, [active, aiProviders.length]);
-  const refreshAiProviders = useCallback(() => void window.fantasticEditor.detectAiProviders().then(setAiProviders), []);
+    if (aiProviders.length === 0) void loadAiProviders();
+  }, [active, aiProviders.length, loadAiProviders]);
+  const openAiProviders = () => {
+    setSidebarPanel("ai-providers");
+    setSidebarVisible(true);
+    if (aiProviders.length === 0) void loadAiProviders();
+  };
+  const prepareContextAi = useCallback((instruction: string) => {
+    if (aiRequest?.status === "working") void window.fantasticEditor.cancelAi({ requestId: aiRequest.requestId });
+    setAiAction("custom");
+    setAiCustomInstruction(instruction);
+    setAiRequest(null);
+    openAi();
+  }, [aiRequest, openAi]);
+  const refreshAiProviders = useCallback(() => { void loadAiProviders(); }, [loadAiProviders]);
   useEffect(() => { if (wechatThemePreviewOpen && aiProviders.length === 0) refreshAiProviders(); }, [aiProviders.length, refreshAiProviders, wechatThemePreviewOpen]);
-  const saveDeepSeekKey = useCallback(async () => {
-    setDeepSeekConfigBusy(true); setDeepSeekConfigMessage("");
-    const result = await window.fantasticEditor.saveDeepSeekConfig({ apiKey: deepSeekApiKey });
-    setDeepSeekConfigBusy(false);
-    if (result.status === "failed") { setDeepSeekConfigMessage(result.error); return; }
-    setDeepSeekApiKey(""); setDeepSeekConfigMessage("已加密保存。正在测试连接…");
-    const tested = await window.fantasticEditor.testDeepSeekConnection();
-    if (tested.status === "connected") flashConfigMessage(setDeepSeekConfigMessage, "连接成功，可以使用 DeepSeek。"); else setDeepSeekConfigMessage(tested.error);
-    refreshAiProviders();
-  }, [deepSeekApiKey, refreshAiProviders]);
-  const clearDeepSeekKey = useCallback(async () => {
-    setDeepSeekConfigBusy(true); await window.fantasticEditor.clearDeepSeekConfig(); setDeepSeekConfigBusy(false); setDeepSeekApiKey(""); setDeepSeekConfigMessage("API Key 已删除。"); refreshAiProviders();
-  }, [refreshAiProviders]);
-  const saveGeminiKey = useCallback(async () => {
-    setGeminiConfigBusy(true); setGeminiConfigMessage("");
-    const result = await window.fantasticEditor.saveGeminiConfig({ apiKey: geminiApiKey });
-    setGeminiConfigBusy(false);
-    if (result.status === "failed") { setGeminiConfigMessage(result.error); return; }
-    setGeminiApiKey(""); setGeminiConfigMessage("已加密保存。正在测试连接…");
-    const tested = await window.fantasticEditor.testGeminiConnection();
-    if (tested.status === "connected") flashConfigMessage(setGeminiConfigMessage, "连接成功，可以使用 Gemini。"); else setGeminiConfigMessage(tested.error);
-    refreshAiProviders();
-  }, [geminiApiKey, refreshAiProviders]);
-  const clearGeminiKey = useCallback(async () => {
-    setGeminiConfigBusy(true); await window.fantasticEditor.clearGeminiConfig(); setGeminiConfigBusy(false); setGeminiApiKey(""); setGeminiConfigMessage("API Key 已删除。"); refreshAiProviders();
-  }, [refreshAiProviders]);
-  const saveKimiKey = useCallback(async () => {
-    setKimiConfigBusy(true); setKimiConfigMessage("");
-    const result = await window.fantasticEditor.saveKimiConfig({ apiKey: kimiApiKey });
-    setKimiConfigBusy(false);
-    if (result.status === "failed") { setKimiConfigMessage(result.error); return; }
-    setKimiApiKey(""); setKimiConfigMessage("已加密保存。正在测试连接…");
-    const tested = await window.fantasticEditor.testKimiConnection();
-    if (tested.status === "connected") flashConfigMessage(setKimiConfigMessage, "连接成功，可以使用 Kimi。"); else setKimiConfigMessage(tested.error);
-    refreshAiProviders();
-  }, [kimiApiKey, refreshAiProviders]);
-  const clearKimiKey = useCallback(async () => {
-    setKimiConfigBusy(true); await window.fantasticEditor.clearKimiConfig(); setKimiConfigBusy(false); setKimiApiKey(""); setKimiConfigMessage("API Key 已删除。"); refreshAiProviders();
-  }, [refreshAiProviders]);
-  const saveMiniMaxKey = useCallback(async () => {
-    setMiniMaxConfigBusy(true); setMiniMaxConfigMessage("");
-    const result = await window.fantasticEditor.saveMiniMaxConfig({ apiKey: miniMaxApiKey });
-    setMiniMaxConfigBusy(false);
-    if (result.status === "failed") { setMiniMaxConfigMessage(result.error); return; }
-    setMiniMaxApiKey(""); setMiniMaxConfigMessage("已加密保存。正在测试连接…");
-    const tested = await window.fantasticEditor.testMiniMaxConnection();
-    if (tested.status === "connected") flashConfigMessage(setMiniMaxConfigMessage, "连接成功，可以使用 MiniMax。"); else setMiniMaxConfigMessage(tested.error);
-    refreshAiProviders();
-  }, [miniMaxApiKey, refreshAiProviders]);
-  const clearMiniMaxKey = useCallback(async () => {
-    setMiniMaxConfigBusy(true); await window.fantasticEditor.clearMiniMaxConfig(); setMiniMaxConfigBusy(false); setMiniMaxApiKey(""); setMiniMaxConfigMessage("API Key 已删除。"); refreshAiProviders();
-  }, [refreshAiProviders]);
   const applyCustomConfig = useCallback((config: OpenAiCompatibleConfigSummary) => {
     setCustomBaseUrl(config.baseUrl);
     setCustomProviderName(config.providerName);
@@ -1978,6 +1961,61 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
     setAiOpen(false);
     setAiRequest(null);
   }, [aiRequest]);
+  const cancelSelectionTranslation = useCallback(async () => {
+    const requestId = selectionTranslationRequestRef.current;
+    const completion = selectionTranslationCompletionRef.current;
+    if (requestId) {
+      selectionTranslationRequestRef.current = null;
+      await window.fantasticEditor.cancelAi({ requestId }).catch(() => false);
+    }
+    await completion;
+  }, []);
+  const invokeSelectionTranslation = useCallback(async (anchor: AiTextAnchor, targetLanguage: TranslationLanguageId): Promise<string> => {
+    if (!active || activeDocumentIdRef.current !== anchor.documentId) throw new Error("文档已切换，请重新选择文字后翻译。");
+    if (aiRequest?.status === "working" || selectionTranslationRequestRef.current || selectionTranslationCompletionRef.current) throw new Error("已有 AI 任务正在运行，请稍后再试。");
+    if (exceedsAiInputLimit(anchor.expectedText)) throw new Error("AI 单次处理内容不能超过 64 KiB。");
+    if (draftRef.current.slice(anchor.from, anchor.to) !== anchor.expectedText) throw new Error("选中的文字已变化，请重新选择后翻译。");
+    const providerId = aiProviderId;
+    const modelSlot = aiModelSlot;
+    const requestId = newAiRequestId();
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
+    selectionTranslationCompletionRef.current = completion;
+    selectionTranslationRequestRef.current = requestId;
+    setSelectionTranslationBusy(true);
+    try {
+      const providers = aiProviders.length > 0 ? aiProviders : await loadAiProviders();
+      if (selectionTranslationRequestRef.current !== requestId) throw new Error("翻译已取消。");
+      const provider = providers.find((item) => item.providerId === providerId);
+      if (!provider || provider.status !== "available") throw new Error(`${provider?.displayName ?? "AI 设置中的模型"} 当前不可用，请先在 AI 设置中检查配置。`);
+      if (providerId === "openai-compatible" && !customModelSlots[modelSlot]) throw new Error("请先在 AI 设置中选择并保存一个可用模型。");
+      if (window.localStorage.getItem(aiDisclosureStorageKey(providerId)) !== "true") {
+        const accepted = window.confirm(`划词翻译会把所选文字发送给 ${provider.displayName}。是否继续？`);
+        if (!accepted) throw new Error("已取消翻译。");
+        window.localStorage.setItem(aiDisclosureStorageKey(providerId), "true");
+      }
+      if (selectionTranslationRequestRef.current !== requestId) throw new Error("翻译已取消。");
+      const result = await window.fantasticEditor.invokeAi({
+        requestId,
+        providerId,
+        scope: "selection",
+        actionId: "custom",
+        anchor,
+        content: anchor.expectedText,
+        customInstruction: translationInstruction(targetLanguage),
+        ...(providerId === "openai-compatible" ? { modelSlot } : {}),
+      });
+      if (selectionTranslationRequestRef.current !== requestId) throw new Error("翻译已取消。");
+      if (activeDocumentIdRef.current !== anchor.documentId || draftRef.current.slice(anchor.from, anchor.to) !== anchor.expectedText) throw new Error("原文已变化，未显示过期译文；请重新选择后翻译。");
+      if (result.status === "completed") return result.result;
+      throw new Error(result.status === "failed" ? result.error : "翻译已取消。");
+    } finally {
+      if (selectionTranslationRequestRef.current === requestId) selectionTranslationRequestRef.current = null;
+      setSelectionTranslationBusy(false);
+      if (selectionTranslationCompletionRef.current === completion) selectionTranslationCompletionRef.current = null;
+      resolveCompletion();
+    }
+  }, [active, aiModelSlot, aiProviderId, aiProviders, aiRequest?.status, customModelSlots, loadAiProviders]);
   useEffect(() => {
     if (aiRequest && active?.documentId !== aiRequest.anchor.documentId && aiRequest.status !== "applied") {
       if (aiRequest.status === "working") void window.fantasticEditor.cancelAi({ requestId: aiRequest.requestId });
@@ -1985,10 +2023,10 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
     }
   }, [active?.documentId, aiRequest?.anchor.documentId]);
   const invokeAi = useCallback(async () => {
-    if (!active || aiRequest?.status === "working") return;
+    if (!active || aiRequest?.status === "working" || selectionTranslationRequestRef.current || selectionTranslationCompletionRef.current) return;
     const anchor = await markdownEditorRef.current?.captureTextAnchor(active.documentId);
     if (!anchor) { setStatus("请先把光标放入一段正文，或选择需要处理的文字。"); return; }
-    if (anchor.expectedText.length > 64 * 1024) { setStatus("AI 单次处理内容不能超过 64 KiB。"); return; }
+    if (exceedsAiInputLimit(anchor.expectedText)) { setStatus("AI 单次处理内容不能超过 64 KiB。"); return; }
     const disclosureKey = aiDisclosureStorageKey(aiProviderId);
     if (window.localStorage.getItem(disclosureKey) !== "true") {
       const accepted = window.confirm(`AI 助手会把当前选中的文字（无选区时为当前段落）发送给 ${aiProvider?.displayName ?? "所选 AI 服务"}。是否继续？`);
@@ -2152,6 +2190,7 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
           <button type="button" aria-label="打开文件夹" title="打开文件夹" onClick={() => void openFolder()}><Icon name="folderOpen" /></button>
           <button type="button" className={sidebarVisible && sidebarPanel === "outline" ? "active" : ""} aria-label="切换文档大纲" aria-pressed={sidebarVisible && sidebarPanel === "outline"} title="显示或隐藏文档大纲" onClick={() => { if (sidebarVisible && sidebarPanel === "outline") setSidebarVisible(false); else { setSidebarPanel("outline"); setSidebarVisible(true); } }}><Icon name="list" /></button>
           <button type="button" aria-label="搜索" title="查找/替换 (Ctrl+F / Ctrl+H)" disabled={!active} onClick={() => openSearchPanel(false)}><Icon name="search" /></button>
+          <button type="button" className={sidebarVisible && sidebarPanel === "ai-providers" ? "active ai-provider-entry" : "ai-provider-entry"} aria-label="切换 AI 提供商" aria-pressed={sidebarVisible && sidebarPanel === "ai-providers"} title="AI 提供商与模型设置" onClick={() => { if (sidebarVisible && sidebarPanel === "ai-providers") setSidebarVisible(false); else openAiProviders(); }}><span aria-hidden="true">模</span></button>
           <button type="button" className={aiOpen ? "active ai-entry" : "ai-entry"} aria-label="AI 写作助手" aria-pressed={aiOpen} title="AI 写作助手" disabled={!active} onClick={() => aiOpen ? closeAi() : openAi()}><span aria-hidden="true">AI</span></button>
           <button type="button" className="wechat-copy-entry" aria-label="复制到公众号" title="复制到公众号（使用当前公众号主题）" disabled={!active || outputBusy} onClick={() => { if (!outputReady) { setStatus("正文正在更新，请稍候再复制到公众号。"); return; } void exportDocument("wechat-clipboard"); }}><span aria-hidden="true">微</span></button>
           <button ref={wechatThemeButtonRef} type="button" className={`wechat-layout-entry${wechatThemePreviewOpen || wechatApiConfigOpen ? " active" : ""}`} aria-label="公众号" aria-pressed={wechatThemePreviewOpen || wechatApiConfigOpen} title={active ? "公众号排版、草稿同步与接口设置 (Ctrl+Shift+P)" : "公众号接口与封面设置"} disabled={wechatThemeSaveOpen} onClick={() => { closeAi(); if (!active) { setWechatApiConfigOpen((open) => !open); return; } if (wechatThemePreviewOpen) { setWechatThemePreviewOpen(false); return; } setStatus("处理中，请稍后。"); setWechatThemePreviewOpen(true); }}><Icon name="wechat" /></button>
@@ -2216,11 +2255,55 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
             <DocumentOutline entries={extractDocumentOutline(outlineDocument)} stale={Boolean(active && !outlineDocument)} onReveal={revealOutlineEntry} />
           </aside>
         )}
+        {sidebarVisible && sidebarPanel === "ai-providers" && (
+          <aside className="explorer-panel ai-provider-panel" aria-label="AI 提供商设置" style={{ flexBasis: `${sidebarWidth}px` }}>
+            <div className="explorer-title"><span>AI 提供商</span><button type="button" aria-label="重新检测 AI 提供商" title="重新检测" onClick={refreshAiProviders}>↻</button></div>
+            <div className="ai-provider-panel-content">
+              <div className="ai-select-row">
+                <label className={`ai-select-block${aiRequest?.status === "working" || selectionTranslationBusy ? " is-disabled" : ""}`}><span>当前提供商</span><select aria-label="AI 提供商" value={aiProviderId} disabled={aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setAiProviderId(event.target.value as AiProviderId)}>{aiProviders.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.displayName}{provider.status === "unavailable" ? "（不可用）" : ""}</option>)}</select></label>
+                {aiProviderId === "openai-compatible" && customConfigured && <label className={`ai-select-block${aiRequest?.status === "working" || selectionTranslationBusy ? " is-disabled" : ""}`}><span>当前模型</span><select aria-label="自定义模型预设" value={customModelSlots[aiModelSlot]?.modelId ? aiModelSlot : 0} disabled={aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setAiModelSlot(Number(event.target.value) as 0 | 1)}>{customModelSlots.map((slot, index) => slot && <option key={`${index}:${slot.modelId}`} value={index}>{slot.localName || slot.modelId}</option>)}</select></label>}
+              </div>
+              <small className="ai-provider-status" role="status">{aiProvider?.status === "available" ? `${aiProvider.displayName} 已就绪${aiProvider.version ? ` · ${aiProvider.version}` : ""}` : aiProvider?.guidance ?? "正在检测可用的 AI 提供商…"}</small>
+            {aiProviderId === "openai-compatible" && <>
+              <details className="ai-custom-config" open={customConfigOpen} onToggle={(event) => setCustomConfigOpen(event.currentTarget.open)}>
+                <summary>连接与模型设置</summary>
+                <div className="ai-custom-fields">
+                  <label><span>订阅地址</span><input type="url" inputMode="url" autoComplete="off" placeholder="https://…/v1" value={customBaseUrl} disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setCustomBaseUrl(event.target.value)} /></label>
+                  <label><span>API Key</span><input type="password" autoComplete="off" placeholder={customConfigured ? "已加密保存，留空保持不变" : "粘贴 API Key"} value={customApiKey} disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setCustomApiKey(event.target.value)} /></label>
+                  <label><span>服务名称（自定义）</span><input maxLength={80} placeholder="例如：我的订阅服务" value={customProviderName} disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setCustomProviderName(event.target.value)} /></label>
+                  <label><span>软件内名称（自定义）</span><input maxLength={80} placeholder="例如：我的写作模型" value={customLocalName} disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setCustomLocalName(event.target.value)} /></label>
+                </div>
+                <div className="ai-custom-models" aria-label="两个模型预设">
+                  {([0, 1] as const).map((index) => {
+                    const slot = customModelSlots[index];
+                    return <div className="ai-custom-model" key={`model-slot-${index}`}>
+                      <label><span>模型 {index + 1}</span><select value={slot?.modelId ?? ""} disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => { const modelId = event.target.value; setCustomModelSlots((current) => { const next = [...current] as [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null]; next[index] = modelId ? { modelId, localName: current[index]?.localName || modelId } : null; return next; }); }}><option value="">未选择</option>{customModelOptions.map((modelId) => <option key={modelId} value={modelId}>{modelId}</option>)}</select></label>
+                      <label><span>软件内名称</span><input maxLength={80} placeholder={slot?.modelId || "先获取模型"} value={slot?.localName ?? ""} disabled={!slot || customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onChange={(event) => setCustomModelSlots((current) => { const next = [...current] as [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null]; if (next[index]) next[index] = { ...next[index]!, localName: event.target.value }; return next; })} /></label>
+                    </div>;
+                  })}
+                </div>
+                <div className="ai-custom-actions">
+                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy || !customBaseUrl.trim()} onClick={() => void testCustomConnection()}>{customConfigBusy ? "处理中…" : "测试连通性"}</button>
+                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy || !customBaseUrl.trim()} onClick={() => void fetchCustomModels()}>{customConfigBusy ? "处理中…" : "一键获取模型能力"}</button>
+                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy || !customBaseUrl.trim()} onClick={() => void saveCustomConfig()}>保存配置</button>
+                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || selectionTranslationBusy} onClick={() => void clearCustomConfig()}>清除配置</button>
+                </div>
+                <small>标准 OpenAI 兼容格式：读取 GET /models，并用官方模型 ID 调用 POST /chat/completions。自定义名称只用于本软件显示。</small>
+              </details>
+              {customConfigMessage && <small role="status">{customConfigMessage}</small>}
+            </>}
+            {(["deepseek-api", "gemini-api", "kimi-api", "minimax-api"] as const).map((providerId) => {
+              const providerStatus = aiProviders.find((item) => item.providerId === providerId);
+              return <div key={providerId} style={{ display: aiProviderId === providerId ? "contents" : "none" }}><FixedAiProviderConfig providerId={providerId} configured={providerStatus?.status === "available"} disabled={aiProviderId !== providerId || aiRequest?.status === "working" || selectionTranslationBusy} onProvidersChanged={refreshAiProviders} /></div>;
+            })}
+            </div>
+          </aside>
+        )}
 
-        {sidebarVisible && <div className="sidebar-resize-handle" role="separator" aria-label="调整资源管理器宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖动调整宽度；方向键微调" onPointerDown={startSidebarResize} onKeyDown={resizeSidebarWithKey}><button type="button" className="panel-collapse-button" aria-label="收起资源管理器" title="收起资源管理器" onPointerDown={(event) => event.stopPropagation()} onClick={() => { setSidebarVisible(false); setStatus("已收起资源管理器。"); }}>‹</button><span /></div>}
+        {sidebarVisible && <div className="sidebar-resize-handle" role="separator" aria-label="调整侧边栏宽度" aria-orientation="vertical" aria-valuemin={MIN_SIDEBAR_WIDTH} aria-valuemax={MAX_SIDEBAR_WIDTH} aria-valuenow={sidebarWidth} tabIndex={0} title="拖动调整宽度；方向键微调" onPointerDown={startSidebarResize} onKeyDown={resizeSidebarWithKey}><button type="button" className="panel-collapse-button" aria-label="收起侧边栏" title="收起侧边栏" onPointerDown={(event) => event.stopPropagation()} onClick={() => { setSidebarVisible(false); setStatus("已收起侧边栏。"); }}>‹</button><span /></div>}
 
         <section className="main-area" ref={mainAreaRef}>
-          <nav className="document-tabs" data-testid="document-tabs" aria-label="打开的文档" onDoubleClick={(event) => { if ((event.target as HTMLElement).closest(".document-tab, .drop-hint")) return; void newFile(); }}>
+          <nav className="document-tabs" data-testid="document-tabs" aria-label="打开的文档" onDoubleClick={(event) => { if ((event.target as HTMLElement).closest(".document-tab")) return; void newFile(); }}>
             <div className="tab-strip" role="tablist" aria-label="文档标签">
               {tabs.map((tab, tabIndex) => {
                 const tabDirty = tab.requiresSave || tab.draft !== tab.savedText;
@@ -2247,7 +2330,6 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
                 );
               })}
             </div>
-            <span className="drop-hint" data-testid="drop-hint">拖入 Markdown 打开 · 图片拖到编辑区插入 · 双击空白新建</span>
           </nav>
 
           {active ? (
@@ -2294,12 +2376,11 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
                         }}
                       >{wechatThemeInWysiwyg ? aiEditorThemeDefinition ? "AI 排版 · 开" : "公众号主题 · 开" : "公众号主题 · 关"}</button>
                       <>
-                        <button type="button" className="wysiwyg-font-default" title="恢复默认字体：微软雅黑" aria-label="恢复默认字体" onClick={() => { setPreviewFontDraft(DEFAULT_PREVIEW_FONT); applyPreviewFontDraft(DEFAULT_PREVIEW_FONT); }}>↺</button>
-                        <label className="preview-font-preset" title="选择常用字体；选择“自定义”可安装本机字体文件"><span>字体</span><select data-testid="wysiwyg-font-preset" aria-label="所见即所得字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
+                        <button type="button" className="wysiwyg-font-default" title="统一写作、预览和导出的正文字体为微软雅黑；不修改 Markdown 内容" aria-label="统一正文字体为微软雅黑" onClick={() => applyPreviewFontDraft(DEFAULT_PREVIEW_FONT)}>统一微软雅黑</button>
+                        <label className="preview-font-preset" title="正文字体同时用于写作、实时预览和导出；“自定义”可安装本机字体文件"><span>正文字体</span><select data-testid="wysiwyg-font-preset" aria-label="正文字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
                       </>
                     </>}
-                    <button type="button" className="insert-image-button" disabled={!active} title="转换普通正文中的直引号和三个英文句点；不处理代码与链接" onClick={smartenPunctuation}>智能标点</button>
-                    <button type="button" className="insert-image-button" disabled={imageImportBusy} title="在当前位置插入图片" aria-label="插入图片" onClick={() => void importImages()}><Icon name="imagePlus" size={15} />插入图片</button>
+                    <button type="button" className="smart-punctuation-button" disabled={!active} title="转换普通正文中的直引号和三个英文句点；不处理代码与链接" onClick={smartenPunctuation}>智能标点</button>
                   </div>
                 </div>
                 {markdownDocumentFence.detected && <div className="markdown-detection-banner" role="status" data-testid="markdown-detection-banner"><span><Icon name="markdown" size={16} /><strong>识别到 Markdown 语法</strong><small>内容似乎被整篇代码框包住了，可自动恢复正常排版。</small></span><button type="button" onClick={convertDetectedMarkdown}>立即转换</button></div>}
@@ -2311,12 +2392,18 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
                       {...(previewHtmlReady ? { imagePreviewHtml: previewHtml } : {})}
                       key={active.sessionId}
                       ref={markdownEditorRef}
+                      documentId={active.documentId}
                       value={draft}
                       onViewportAnchorChange={(anchor) => { if (editorMode === "source") synchronizedPreviewRef.current?.updateViewportAnchor(anchor); }}
                       onSelectionChange={(selection) => {
                         if (editorMode === "source") synchronizedPreviewRef.current?.updateSelection(selection);
                       }}
+                      onTranslateSelection={invokeSelectionTranslation}
+                      onCancelTranslation={cancelSelectionTranslation}
+                      translationProviderLabel={aiProvider?.displayName ?? aiProviderId}
                       onImageDrop={(files, anchorId) => void importImages(files, anchorId)}
+                      onInsertImages={(anchorId) => void importImages(undefined, anchorId)}
+                      onAiAssist={prepareContextAi}
                       onDropRejected={(message) => { setDragActive(false); setStatus(message); }}
                       onStatus={setStatus}
                       onChange={applyDraftChange}
@@ -2338,7 +2425,7 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
                 <div className="pane-header">
                   <span><Icon name="eye" size={15} />实时预览</span>
                   <div className="pane-actions">
-                    <label className="preview-font-preset" title="选择预览字体；选择“自定义”可安装本机字体文件"><span>字体</span><select data-testid="preview-font-preset" aria-label="预览字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
+                    <label className="preview-font-preset" title="正文字体同时用于写作、实时预览和导出；“自定义”可安装本机字体文件"><span>正文字体</span><select data-testid="preview-font-preset" aria-label="正文字体" value={previewFontName} onChange={(event) => void selectPreviewFont(event.target.value)}>{previewFontOptions}</select></label>
                     <label className="preview-reading-control" title="仅影响实时预览和所见即所得阅读区，不改变导出结果"><span>宽度</span><select aria-label="阅读宽度" value={readingWidth} onChange={(event) => { const next = normalizeReadingWidth(event.target.value); setReadingWidth(next); setReadingWidthPx(readingWidthPxFromPreset(next)); }}>{READING_WIDTH_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
                     <div className="preview-font-size-control" role="group" aria-label="预览字号"><button type="button" title="减小预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value - 1))}>−</button><span>{previewFontSize}px</span><button type="button" title="增大预览字号" onClick={() => setPreviewFontSize((value) => normalizePreviewFontSize(value + 1))}>＋</button></div>
                     <button
@@ -2430,52 +2517,11 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
           <div className="ai-inspector-shell" style={{ width: aiInspectorWidth, flexBasis: aiInspectorWidth }}>
           <div className="ai-inspector-resize-handle" role="separator" aria-label="调整 AI 写作助手宽度" aria-orientation="vertical" aria-valuemin={MIN_WECHAT_INSPECTOR_WIDTH} aria-valuemax={MAX_WECHAT_INSPECTOR_WIDTH} aria-valuenow={aiInspectorWidth} tabIndex={0} title="拖动调整宽度；方向键微调" onPointerDown={startAiInspectorResize} onKeyDown={resizeAiInspectorWithKey}><button type="button" className="panel-collapse-button" aria-label="收起 AI 写作助手" title="收起 AI 写作助手" onPointerDown={(event) => event.stopPropagation()} onClick={closeAi}>›</button><span /></div>
           <aside className={`ai-inspector${aiChromeCollapsed && aiProvider?.status === "available" ? " is-chrome-collapsed" : ""}`} aria-label="AI 写作助手">
-            <header><div><strong>AI 写作助手{aiModelTitleSuffix}</strong><small>{aiProvider?.status === "available" ? aiProvider.version : "请选择并配置 AI 提供商"}</small></div><div className="ai-header-actions"><button type="button" className="ai-chrome-toggle" aria-pressed={aiChromeCollapsed} aria-label={aiChromeCollapsed ? "展开提供商和操作" : "收起提供商和操作"} title={aiChromeCollapsed ? "展开提供商和操作" : "收起提供商和操作，扩大对照区"} onClick={() => setAiChromeCollapsed((value) => !value)}>{aiChromeCollapsed ? "▾" : "▴"}</button><button type="button" aria-label="关闭 AI 写作助手" onClick={closeAi}>×</button></div></header>
-            <div className="ai-select-row">
-              <label className={`ai-select-block${aiRequest?.status === "working" ? " is-disabled" : ""}`}><span>AI 提供商</span><select aria-label="AI 提供商" value={aiProviderId} disabled={aiRequest?.status === "working"} onChange={(event) => setAiProviderId(event.target.value as AiProviderId)}>{aiProviders.map((provider) => <option key={provider.providerId} value={provider.providerId}>{provider.displayName}{provider.status === "unavailable" ? "（不可用）" : ""}</option>)}</select></label>
-              {aiProviderId === "openai-compatible" && customConfigured && <label className={`ai-select-block${aiRequest?.status === "working" ? " is-disabled" : ""}`}><span>模型</span><select aria-label="自定义模型预设" value={customModelSlots[aiModelSlot]?.modelId ? aiModelSlot : 0} disabled={aiRequest?.status === "working"} onChange={(event) => setAiModelSlot(Number(event.target.value) as 0 | 1)}>{customModelSlots.map((slot, index) => slot && <option key={`${index}:${slot.modelId}`} value={index}>{slot.localName || slot.modelId}</option>)}</select></label>}
-              {aiProviderId === "openai-compatible" && customConfigured && <button type="button" className="ai-settings-block" aria-label={customConfigOpen ? "收起设置" : "打开设置"} title={customConfigOpen ? "收起设置" : "打开设置"} onClick={() => setCustomConfigOpen((open) => !open)}><Icon name="settings" size={14} /></button>}
-            </div>
-            {aiProviderId === "openai-compatible" && <>
-              <details className="ai-custom-config" open={customConfigOpen} onToggle={(event) => setCustomConfigOpen(event.currentTarget.open)}>
-                <summary>连接与模型设置</summary>
-                <div className="ai-custom-fields">
-                  <label><span>订阅地址</span><input type="url" inputMode="url" autoComplete="off" placeholder="https://…/v1" value={customBaseUrl} disabled={customConfigBusy || aiRequest?.status === "working"} onChange={(event) => setCustomBaseUrl(event.target.value)} /></label>
-                  <label><span>API Key</span><input type="password" autoComplete="off" placeholder={customConfigured ? "已加密保存，留空保持不变" : "粘贴 API Key"} value={customApiKey} disabled={customConfigBusy || aiRequest?.status === "working"} onChange={(event) => setCustomApiKey(event.target.value)} /></label>
-                  <label><span>服务名称（自定义）</span><input maxLength={80} placeholder="例如：我的订阅服务" value={customProviderName} disabled={customConfigBusy || aiRequest?.status === "working"} onChange={(event) => setCustomProviderName(event.target.value)} /></label>
-                  <label><span>软件内名称（自定义）</span><input maxLength={80} placeholder="例如：我的写作模型" value={customLocalName} disabled={customConfigBusy || aiRequest?.status === "working"} onChange={(event) => setCustomLocalName(event.target.value)} /></label>
-                </div>
-                <div className="ai-custom-models" aria-label="两个模型预设">
-                  {([0, 1] as const).map((index) => {
-                    const slot = customModelSlots[index];
-                    return <div className="ai-custom-model" key={`model-slot-${index}`}>
-                      <label><span>模型 {index + 1}</span><select value={slot?.modelId ?? ""} disabled={customConfigBusy || aiRequest?.status === "working"} onChange={(event) => { const modelId = event.target.value; setCustomModelSlots((current) => { const next = [...current] as [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null]; next[index] = modelId ? { modelId, localName: current[index]?.localName || modelId } : null; return next; }); }}><option value="">未选择</option>{customModelOptions.map((modelId) => <option key={modelId} value={modelId}>{modelId}</option>)}</select></label>
-                      <label><span>软件内名称</span><input maxLength={80} placeholder={slot?.modelId || "先获取模型"} value={slot?.localName ?? ""} disabled={!slot || customConfigBusy || aiRequest?.status === "working"} onChange={(event) => setCustomModelSlots((current) => { const next = [...current] as [OpenAiCompatibleModelSlot | null, OpenAiCompatibleModelSlot | null]; if (next[index]) next[index] = { ...next[index]!, localName: event.target.value }; return next; })} /></label>
-                    </div>;
-                  })}
-                </div>
-                <div className="ai-custom-actions">
-                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || !customBaseUrl.trim()} onClick={() => void testCustomConnection()}>{customConfigBusy ? "处理中…" : "测试连通性"}</button>
-                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || !customBaseUrl.trim()} onClick={() => void fetchCustomModels()}>{customConfigBusy ? "处理中…" : "一键获取模型能力"}</button>
-                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working" || !customBaseUrl.trim()} onClick={() => void saveCustomConfig()}>保存配置</button>
-                  <button type="button" disabled={customConfigBusy || aiRequest?.status === "working"} onClick={() => void clearCustomConfig()}>清除配置</button>
-                </div>
-                <small>标准 OpenAI 兼容格式：读取 GET /models，并用官方模型 ID 调用 POST /chat/completions。自定义名称只用于本软件显示。</small>
-              </details>
-              {customConfigMessage && <small role="status">{customConfigMessage}</small>}
-            </>}
-            {aiProviderId === "deepseek-api" && aiProvider?.status === "unavailable" ? <div className="ai-empty ai-api-config"><strong>配置 DeepSeek API</strong><span>密钥使用 Windows 加密保存，只由主进程发送到 DeepSeek 官方接口；测试连接会产生一次联网请求。</span><input type="password" aria-label="DeepSeek API Key" autoComplete="off" placeholder="sk-…" value={deepSeekApiKey} disabled={deepSeekConfigBusy} onChange={(event) => setDeepSeekApiKey(event.target.value)} /><div><button type="button" disabled={deepSeekConfigBusy || !deepSeekApiKey.trim()} onClick={() => void saveDeepSeekKey()}>{deepSeekConfigBusy ? "处理中…" : "保存并测试"}</button><button type="button" disabled={deepSeekConfigBusy} onClick={() => void clearDeepSeekKey()}>删除密钥</button></div>{deepSeekConfigMessage && <small role="status">{deepSeekConfigMessage}</small>}</div> : aiProviderId === "gemini-api" && aiProvider?.status === "unavailable" ? <div className="ai-empty ai-api-config"><strong>配置 Gemini API</strong><span>密钥使用 Windows 加密保存，只由主进程发送到 Google 官方 Gemini 接口；测试连接会产生一次联网请求。</span><input type="password" aria-label="Gemini API Key" autoComplete="off" placeholder="AIza…" value={geminiApiKey} disabled={geminiConfigBusy} onChange={(event) => setGeminiApiKey(event.target.value)} /><div><button type="button" disabled={geminiConfigBusy || !geminiApiKey.trim()} onClick={() => void saveGeminiKey()}>{geminiConfigBusy ? "处理中…" : "保存并测试"}</button><button type="button" disabled={geminiConfigBusy} onClick={() => void clearGeminiKey()}>删除密钥</button></div>{geminiConfigMessage && <small role="status">{geminiConfigMessage}</small>}</div> : aiProviderId === "kimi-api" && aiProvider?.status === "unavailable" ? <div className="ai-empty ai-api-config"><strong>配置 Kimi API</strong><span>密钥使用 Windows 加密保存，只由主进程发送到 Moonshot 官方接口（api.moonshot.cn），固定使用 kimi-k3；测试连接会产生一次联网请求。</span><input type="password" aria-label="Kimi API Key" autoComplete="off" placeholder="sk-…" value={kimiApiKey} disabled={kimiConfigBusy} onChange={(event) => setKimiApiKey(event.target.value)} /><div><button type="button" disabled={kimiConfigBusy || !kimiApiKey.trim()} onClick={() => void saveKimiKey()}>{kimiConfigBusy ? "处理中…" : "保存并测试"}</button><button type="button" disabled={kimiConfigBusy} onClick={() => void clearKimiKey()}>删除密钥</button></div>{kimiConfigMessage && <small role="status">{kimiConfigMessage}</small>}</div> : aiProviderId === "minimax-api" && aiProvider?.status === "unavailable" ? <div className="ai-empty ai-api-config"><strong>配置 MiniMax API</strong><span>密钥使用 Windows 加密保存，只由主进程发送到 MiniMax 官方接口（api.minimax.cn），固定使用 MiniMax-M3；测试连接会产生一次联网请求。</span><input type="password" aria-label="MiniMax API Key" autoComplete="off" placeholder="粘贴接口密钥" value={miniMaxApiKey} disabled={miniMaxConfigBusy} onChange={(event) => setMiniMaxApiKey(event.target.value)} /><div><button type="button" disabled={miniMaxConfigBusy || !miniMaxApiKey.trim()} onClick={() => void saveMiniMaxKey()}>{miniMaxConfigBusy ? "处理中…" : "保存并测试"}</button><button type="button" disabled={miniMaxConfigBusy} onClick={() => void clearMiniMaxKey()}>删除密钥</button></div>{miniMaxConfigMessage && <small role="status">{miniMaxConfigMessage}</small>}</div> : aiProvider?.status === "unavailable" && aiProviderId !== "openai-compatible" ? <div className="ai-empty"><strong>{aiProvider.displayName} 不可用</strong><span>{aiProvider.guidance}</span><button type="button" onClick={refreshAiProviders}>重新检测</button></div> : <>
-              {aiProviderId === "deepseek-api" && <div className="ai-api-toolbar"><span>DeepSeek API Key 已加密保存</span><button type="button" disabled={deepSeekConfigBusy || aiRequest?.status === "working"} onClick={() => void window.fantasticEditor.testDeepSeekConnection().then((result) => setDeepSeekConfigMessage(result.status === "connected" ? "连接成功。" : result.error))}>测试连接</button><button type="button" disabled={deepSeekConfigBusy || aiRequest?.status === "working"} onClick={() => void clearDeepSeekKey()}>删除密钥</button></div>}
-              {deepSeekConfigMessage && aiProviderId === "deepseek-api" && <small role="status">{deepSeekConfigMessage}</small>}
-              {aiProviderId === "gemini-api" && <div className="ai-api-toolbar"><span>Gemini API Key 已加密保存</span><button type="button" disabled={geminiConfigBusy || aiRequest?.status === "working"} onClick={() => void window.fantasticEditor.testGeminiConnection().then((result) => setGeminiConfigMessage(result.status === "connected" ? "连接成功。" : result.error))}>测试连接</button><button type="button" disabled={geminiConfigBusy || aiRequest?.status === "working"} onClick={() => void clearGeminiKey()}>删除密钥</button></div>}
-              {geminiConfigMessage && aiProviderId === "gemini-api" && <small role="status">{geminiConfigMessage}</small>}
-              {aiProviderId === "kimi-api" && <div className="ai-api-toolbar"><span>Kimi API Key 已加密保存</span><button type="button" disabled={kimiConfigBusy || aiRequest?.status === "working"} onClick={() => void window.fantasticEditor.testKimiConnection().then((result) => { if (result.status === "connected") flashConfigMessage(setKimiConfigMessage, "连接成功。"); else setKimiConfigMessage(result.error); })}>测试连接</button><button type="button" disabled={kimiConfigBusy || aiRequest?.status === "working"} onClick={() => void clearKimiKey()}>删除密钥</button></div>}
-              {kimiConfigMessage && aiProviderId === "kimi-api" && <small role="status">{kimiConfigMessage}</small>}
-              {aiProviderId === "minimax-api" && <div className="ai-api-toolbar"><span>MiniMax API Key 已加密保存</span><button type="button" disabled={miniMaxConfigBusy || aiRequest?.status === "working"} onClick={() => void window.fantasticEditor.testMiniMaxConnection().then((result) => { if (result.status === "connected") flashConfigMessage(setMiniMaxConfigMessage, "连接成功。"); else setMiniMaxConfigMessage(result.error); })}>测试连接</button><button type="button" disabled={miniMaxConfigBusy || aiRequest?.status === "working"} onClick={() => void clearMiniMaxKey()}>删除密钥</button></div>}
-              {miniMaxConfigMessage && aiProviderId === "minimax-api" && <small role="status">{miniMaxConfigMessage}</small>}
+            <header><div><strong>AI 写作助手{aiModelTitleSuffix}</strong>{aiProvider?.status === "available" && <small>{aiProvider.version}</small>}</div><div className="ai-header-actions"><button type="button" className="ai-chrome-toggle" aria-pressed={aiChromeCollapsed} aria-label={aiChromeCollapsed ? "展开写作操作" : "收起写作操作"} title={aiChromeCollapsed ? "展开写作操作" : "收起写作操作，扩大对照区"} onClick={() => setAiChromeCollapsed((value) => !value)}>{aiChromeCollapsed ? "▾" : "▴"}</button><button type="button" aria-label="关闭 AI 写作助手" onClick={closeAi}>×</button></div></header>
+            {!aiProvider || aiProvider.status !== "available" || (aiProviderId === "openai-compatible" && !customModelSlots[aiModelSlot]) ? <div className="ai-empty"><strong>请先配置 AI 提供商</strong><span>{aiProvider?.status === "unavailable" ? aiProvider.guidance : aiProviderId === "openai-compatible" ? "请在侧边栏选择或配置模型预设。" : "正在检测可用的 AI 提供商…"}</span><button type="button" onClick={openAiProviders}>打开侧边栏设置</button></div> : <>
               <div className="ai-actions" role="group" aria-label="AI 操作">{AI_ACTIONS.map((action) => <button key={action.id} type="button" title={action.help} className={aiAction === action.id ? "active" : ""} aria-pressed={aiAction === action.id} disabled={aiRequest?.status === "working"} onClick={() => setAiAction(action.id)}>{action.label}</button>)}</div>
                 {aiAction === "custom" && <label className="ai-custom-field"><span>告诉 AI 要怎样处理</span><textarea className="ai-custom-instruction" aria-label="AI 自定义指令" maxLength={1000} placeholder="例如：改成适合公众号开头的语气；整理成三点列表；翻译成英文。" value={aiCustomInstruction} disabled={aiRequest?.status === "working"} onChange={(event) => setAiCustomInstruction(event.target.value)} /><small>{aiCustomInstruction.length}/1000 · 仅处理当前选区；没有选区时处理光标所在段落</small></label>}
-              <button type="button" className="ai-generate" disabled={!aiProvider || aiProvider.status !== "available" || aiRequest?.status === "working" || (aiAction === "custom" && !aiCustomInstruction.trim()) || (aiProviderId === "openai-compatible" && !customModelSlots[aiModelSlot])} onClick={() => void invokeAi()}>{aiRequest?.status === "working" ? "正在生成…" : aiRequest ? "重新生成" : "生成建议"}</button>
+              <button type="button" className="ai-generate" disabled={!aiProvider || aiProvider.status !== "available" || aiRequest?.status === "working" || selectionTranslationBusy || (aiAction === "custom" && !aiCustomInstruction.trim()) || (aiProviderId === "openai-compatible" && !customModelSlots[aiModelSlot])} onClick={() => void invokeAi()}>{aiRequest?.status === "working" ? "正在生成…" : aiRequest ? "重新生成" : "生成建议"}</button>
               <div className="ai-result" aria-live="polite">
                 {!aiRequest && <><p className="ai-disclosure">仅发送当前选区；没有选区时发送光标所在段落。结果需确认后才会写入文档。</p><p>选择文字或把光标放在目标段落中，然后生成建议。</p></>}
                 {aiRequest?.status === "working" && <p>{aiProvider?.displayName ?? "AI"} 正在处理当前{aiRequest.scope === "selection" ? "选区" : "段落"}…</p>}
@@ -2491,6 +2537,7 @@ function flashConfigMessage(setter: (updater: (current: string) => string) => vo
               {aiRequest?.status === "ready" && <div className="ai-review-actions"><button type="button" className="primary" onClick={() => void applyAiSuggestion()}>应用到正文</button><button type="button" onClick={() => setAiRequest(null)}>放弃</button><button type="button" onClick={() => void navigator.clipboard.writeText(aiRequest.result ?? "")}>复制</button></div>}
               {aiRequest?.status === "applied" && <p className="ai-applied">已应用，可按 Ctrl+Z 撤销。</p>}
             </>}
+
           </aside>
           </div>
         )}

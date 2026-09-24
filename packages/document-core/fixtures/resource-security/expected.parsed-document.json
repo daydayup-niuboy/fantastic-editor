@@ -1,7 +1,7 @@
 {
   "schema": "fantastic-editor-parsed-document",
-  "udmVersion": "0.5",
-  "parserProfile": "fantastic-editor-p0-markdown-0.1",
+  "udmVersion": "0.6",
+  "parserProfile": "fantastic-editor-p0-markdown-0.2",
   "documentId": "fixture-resource-security",
   "sourceHash": "2ae8e8abc17093ad96e559ab1a3ff34cc028775e1c8666258b9462e5c42879b0",
   "sourceLength": 295,

@@ -3,6 +3,7 @@ export const IPC_CHANNELS = {
   listRecentFiles: "file:list-recent",
   openRecentFile: "file:open-recent",
   createUntitledFile: "file:create-untitled",
+  readClipboard: "clipboard:read-text-html",
   openDroppedMarkdownFile: "file:open-dropped-markdown",
   listExternalOpenRequests: "file:list-external-open-requests",
   openExternalFile: "file:open-external",

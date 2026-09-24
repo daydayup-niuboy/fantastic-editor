@@ -16,7 +16,7 @@ import {
   type IpcMainInvokeEvent,
   type MessageBoxOptions,
 } from "electron";
-import { parseDocument } from "@fantastic-editor/document-core";
+import { MAX_PASTE_PLAIN_CODE_UNITS, parseDocument } from "@fantastic-editor/document-core";
 import {
   IPC_CHANNELS,
   type ApproveOmissions,
@@ -442,6 +442,17 @@ async function openWithConversionConfirmation(
     : opened;
 }
 function registerIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.readClipboard, (event) => {
+    requireTrustedRenderer(event);
+    let plainText = "";
+    let htmlText = "";
+    try { plainText = clipboard.readText(); } catch { /* HTML-only clipboard can still be converted. */ }
+    try { htmlText = clipboard.readHTML(); } catch { /* Some Windows clipboard owners provide text but invalid HTML. */ }
+    return {
+      plainText: plainText.slice(0, MAX_PASTE_PLAIN_CODE_UNITS + 1),
+      htmlText: htmlText.slice(0, 512 * 1024 + 1),
+    };
+  });
   ipcMain.handle(IPC_CHANNELS.detectAiProvider, async (event) => {
     requireTrustedRenderer(event);
     return aiCliService.detect();

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AiInvocationRequest } from "@fantastic-editor/shared";
+import { EventEmitter } from "node:events";
+import { access } from "node:fs/promises";
 import { resolve } from "node:path";
+import { PassThrough } from "node:stream";
+import { spawn } from "node:child_process";
 import { AiCliService, buildAiPrompt, validateAiCancelRequest, validateAiRequest } from "./ai-cli-service";
 
 const request: AiInvocationRequest = {
@@ -74,6 +78,7 @@ describe("AI CLI boundary", () => {
   it("rejects output beyond the byte limit", async () => {
     await expect(fakeService("oversized").invoke(request, () => undefined)).resolves.toMatchObject({ status: "failed", code: "RESULT_TOO_LARGE" });
     await expect(fakeService("raw-oversized").invoke(request, () => undefined)).resolves.toMatchObject({ status: "failed", code: "RESULT_TOO_LARGE" });
+    await expect(fakeService("oversized-buffered").invoke(request, () => undefined)).resolves.toMatchObject({ status: "failed", code: "RESULT_TOO_LARGE" });
   });
 
   it("detects CLI providers and keeps unconfigured API providers unavailable", async () => {
@@ -114,5 +119,37 @@ describe("AI CLI boundary", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(service.cancel(request.requestId)).toBe(true);
     await expect(pending).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("keeps the active slot and temp directory until the killed child closes", async () => {
+    const child = new EventEmitter() as unknown as ReturnType<typeof spawn>;
+    Object.assign(child, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: vi.fn(() => true),
+    });
+    let resolveCwd!: (value: string) => void;
+    const childCwd = new Promise<string>((resolve) => { resolveCwd = resolve; });
+    const service = new AiCliService({
+      spawnSpec: { executable: "fake-cli" },
+      timeoutMs: 20,
+      spawnProcess: ((_, __, options) => {
+        resolveCwd(String(options?.cwd));
+        return child;
+      }) as typeof spawn,
+    });
+    const pending = service.invoke(request, () => undefined);
+    const directory = await childCwd;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    await expect(access(directory)).resolves.toBeUndefined();
+    await expect(service.invoke({ ...request, requestId: "123e4567-e89b-42d3-a456-426614174001" }, () => undefined))
+      .resolves.toMatchObject({ status: "failed", code: "BUSY" });
+
+    child.emit("close", null, "SIGTERM");
+    await expect(pending).resolves.toMatchObject({ status: "failed", code: "TIMEOUT" });
+    await expect(access(directory)).rejects.toThrow();
   });
 });

@@ -2,17 +2,27 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { Strikethrough } from "@lezer/markdown";
 import { describe, expect, it } from "vitest";
-import { collectLivePreviewTokens } from "./live-preview";
+import { collectLivePreviewTokens, livePreviewMarkdownHighlight } from "./live-preview";
 
 function createState(doc: string, anchor = doc.length): EditorState {
   return EditorState.create({
     doc,
     selection: { anchor },
-    extensions: [markdown({ extensions: [Strikethrough] })],
+    extensions: [markdown({ extensions: [Strikethrough, livePreviewMarkdownHighlight] })],
   });
 }
 
 describe("CodeMirror live preview decorations", () => {
+  it("applies paragraph styling to every hard-broken line", () => {
+    const doc = "1、提供样品。  \n2、确认型号。  \n3、发送资料。";
+    const state = createState(doc);
+    const tokens = collectLivePreviewTokens(state).filter((token) => token.kind === "paragraph-line");
+    expect(tokens.map((token) => token.from)).toEqual([1, 2, 3].map((number) => state.doc.line(number).from));
+    expect(collectLivePreviewTokens(state, state.doc.line(2).from, state.doc.line(2).to)
+      .filter((token) => token.kind === "paragraph-line").map((token) => token.from))
+      .toEqual([state.doc.line(2).from]);
+  });
+
   it("styles fenced code without interpreting HTML or inline Markdown", () => {
     const tokens = collectLivePreviewTokens(createState('```html\n<path />\n**literal**\n```\n正文'));
     expect(tokens.filter(token => token.kind === "code-line")).toHaveLength(4);
@@ -57,6 +67,16 @@ describe("CodeMirror live preview decorations", () => {
 
     const inactiveTokens = collectLivePreviewTokens(createState(doc, 0));
     expect(inactiveTokens.some((token) => token.kind === "list-marker")).toBe(true);
+  });
+
+  it("projects menu-inserted ==highlight== markup and hides its delimiters when inactive", () => {
+    const doc = "==重点==\n\n尾";
+    const inactive = collectLivePreviewTokens(createState(doc, doc.length));
+    expect(inactive).toContainEqual({ from: 2, to: 4, kind: "highlight" });
+    expect(inactive).toContainEqual({ from: 0, to: 2, kind: "hide" });
+    expect(inactive).toContainEqual({ from: 4, to: 6, kind: "hide" });
+    expect(collectLivePreviewTokens(createState(doc, 3)).some(token => token.kind === "hide")).toBe(false);
+    expect(collectLivePreviewTokens(createState("===不匹配==")).some(token => token.kind === "highlight")).toBe(false);
   });
 
   it("projects an inactive thematic break and reveals its source while editing", () => {

@@ -15,6 +15,20 @@ describe("external HTML converter guardrails", () => {
     expect(result.markdown).toContain("章节标题");
   });
 
+  it("removes mixed Word body font sizes instead of persisting them", () => {
+    const result = htmlToMarkdown([
+      '<h2><span style="font-family:Calibri;font-size:20pt">章节标题</span></h2>',
+      '<p class="MsoNormal"><span style="font-family:Calibri;font-size:10pt">较小正文</span></p>',
+      '<p class="MsoNormal"><font face="宋体" size="5">较大正文</font></p>',
+    ].join(""));
+
+    expect(result.markdown).toContain("章节标题");
+    expect(result.markdown).toContain("较小正文");
+    expect(result.markdown).toContain("较大正文");
+    expect(result.markdown).not.toMatch(/font|size|style/i);
+    expect(result.warnings).toContain("已统一粘贴内容的正文字体与字号；标题层级保持不变。");
+  });
+
   it("never returns executable markup in the non-DOM fallback", () => {
     const result = htmlToMarkdown("<script>alert(1)</script><p>正文</p>");
     expect(result.markdown).not.toContain("<script>");

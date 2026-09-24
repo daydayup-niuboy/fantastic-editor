@@ -2,7 +2,7 @@ import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { renderMermaidPreview } from "./mermaid-preview";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
-import { attachPinnedHoverPreview, createLiveTransformControls, DEFAULT_LIVE_IMAGE_TRANSFORM, liveImageTransformAfterControl, type LiveImageTransform } from "./live-preview-images";
+import { attachPinnedHoverPreview, createLiveTransformControls, DEFAULT_LIVE_IMAGE_TRANSFORM, detachPinnedHoverPreview, liveImageTransformAfterControl, type LiveImageTransform } from "./live-preview-images";
 
 interface MermaidDiagram { from: number; to: number; source: string }
 export interface MermaidSnapshot {
@@ -89,6 +89,7 @@ class MermaidWidget extends WidgetType {
       });
     return root;
   }
+  destroy(dom: HTMLElement): void { detachPinnedHoverPreview(dom); }
   ignoreEvent(): boolean { return true; }
 }
 

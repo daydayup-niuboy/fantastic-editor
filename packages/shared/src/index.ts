@@ -658,6 +658,7 @@ export interface FantasticEditorApi {
   listRecentFiles(): Promise<RecentFilesResult>;
   openRecentFile(request: OpenRecentFileRequest): Promise<OpenFileResult>;
   createUntitledFile(): Promise<OpenFileResult>;
+  readClipboard(): Promise<{ plainText: string; htmlText: string }>;
   openDroppedMarkdownFile(file: unknown): Promise<OpenFileResult>;
   listExternalOpenRequests(): Promise<ExternalMarkdownOpenRequest[]>;
   openExternalFile(request: { requestId: string }): Promise<OpenFileResult>;

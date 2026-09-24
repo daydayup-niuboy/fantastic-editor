@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -73,5 +74,31 @@ describe("OpenAI-compatible API boundary", () => {
     const failed = await api(async () => new Response("secret-response", { status: 401 }));
     await failed.save(saveRequest);
     await expect(failed.test(saveRequest.baseUrl)).resolves.toBe(false);
+  });
+
+  it("does not follow provider redirects for connectivity, model listing, or completion", async () => {
+    let redirectedRequests = 0;
+    const server = createServer((incoming, outgoing) => {
+      if (incoming.url === "/unexpected") {
+        redirectedRequests += 1;
+        outgoing.writeHead(200, { "Content-Type": "application/json" }).end("{}");
+        return;
+      }
+      outgoing.writeHead(307, { Location: "/unexpected" }).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing local test port");
+      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const service = await api(fetch);
+      expect(await service.save({ ...saveRequest, baseUrl })).toBe(true);
+      await expect(service.test(baseUrl)).resolves.toBe(false);
+      await expect(service.listModels(baseUrl)).rejects.toThrow();
+      await expect(service.invoke(request, "正文")).resolves.toMatchObject({ status: "failed", code: "API_FAILED" });
+      expect(redirectedRequests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });

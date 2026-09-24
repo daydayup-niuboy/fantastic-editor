@@ -36,6 +36,25 @@ describe("resource classification", () => {
 });
 
 describe("ParsedDocument", () => {
+  it("parses menu-inserted highlights, comments, and footnotes without exposing comments in preview", async () => {
+    const source = "强调 ==重点== <!-- 内部注释 --> [^1]\n\n[^1]: 脚注说明";
+    const parsed = await parseDocument({ documentId: "menu-markdown", editorText: source });
+    const html = renderPreviewHtml(source);
+    const nodes = JSON.stringify(parsed.children);
+
+    expect(parsed.udmVersion).toBe("0.6");
+    expect(parsed.parserProfile).toBe("fantastic-editor-p0-markdown-0.2");
+    expect(nodes).toContain('"type":"highlight"');
+    expect(nodes).toContain('"type":"markdownComment"');
+    expect(nodes).toContain('"type":"footnoteReference"');
+    expect(nodes).toContain('"type":"footnoteDefinition"');
+    expect(html).toContain("<mark>重点</mark>");
+    expect(html).toContain("<sup>[1]</sup>");
+    expect(html).toContain("脚注说明");
+    expect(html).not.toContain("内部注释");
+    expect(renderPreviewHtml("===不匹配==")).not.toContain("<mark>");
+  });
+
   it("parses a completely blank Markdown document", async () => {
     const parsed = await parseDocument({ documentId: "blank-document", editorText: "" });
 

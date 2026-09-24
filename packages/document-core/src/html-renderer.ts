@@ -67,6 +67,10 @@ function renderNode(node: DocumentNode, options: HtmlRenderOptions): string {
     case "emphasis": return `<em>${content()}</em>`;
     case "strong": return `<strong>${content()}</strong>`;
     case "strikethrough": return `<del>${content()}</del>`;
+    case "highlight": return `<mark>${content()}</mark>`;
+    case "markdownComment": return "";
+    case "footnoteReference": return `<sup>[${escapeHtml(stringAttribute(node, "label"))}]</sup>`;
+    case "footnoteDefinition": return `<p><small>[${escapeHtml(stringAttribute(node, "label"))}] ${escapeHtml(stringAttribute(node, "value"))}</small></p>`;
     case "inlineCode": return `<code>${escapeHtml(stringAttribute(node, "value"))}</code>`;
     case "link": {
       const href = stringAttribute(node, "normalizedHref") || stringAttribute(node, "originalHref");

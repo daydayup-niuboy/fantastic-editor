@@ -70,6 +70,19 @@ function restoreEscapedMarkdown(value: string): string {
   return looksLikeMarkdown(restored) ? restored : value;
 }
 
+function truncatedHtmlFallback(plainText: string, warnings: string[]): ResolvedClipboardPaste {
+  if (!plainText) {
+    warnings.push("富文本内容已截断或超过转换限制，且没有完整纯文本可用；已拒绝粘贴。");
+    return { markdown: "", source: "empty", warnings, rejected: true };
+  }
+  warnings.push("富文本内容已截断或超过转换限制；已回退到完整纯文本。");
+  const markdown = restoreEscapedMarkdown(plainText);
+  if (looksLikeMarkdown(markdown)) {
+    return { markdown: sanitizeClipboardMarkdown(markdown), source: "markdown", warnings, rejected: false };
+  }
+  return { markdown: sanitizeClipboardMarkdown(plainText), source: "plain", warnings, rejected: false };
+}
+
 function comparableText(value: string): string {
   return normalizeExternalMarkdown(value)
     .replace(/\\([\\`*_[\]{}<>#+.!|~-])/g, "$1")
@@ -124,6 +137,7 @@ export function resolveClipboardPaste(input: {
   if (semanticHtml) {
     convertedHtml = htmlToMarkdown(htmlInput);
     warnings.push(...convertedHtml.warnings);
+    if (convertedHtml.truncated) return truncatedHtmlFallback(externalPlain, warnings);
     if (convertedHtml.markdown.trim()) {
       const reconciled = reconcileConvertedHtml(convertedHtml.markdown, externalPlain);
       if (!reconciled.incomplete) {
@@ -138,7 +152,8 @@ export function resolveClipboardPaste(input: {
   }
   if (htmlInput.trim() && !markerPresent) {
     const converted = convertedHtml ?? htmlToMarkdown(htmlInput);
-    warnings.push(...converted.warnings);
+    if (!convertedHtml) warnings.push(...converted.warnings);
+    if (converted.truncated) return truncatedHtmlFallback(externalPlain, warnings);
     const reconciled = reconcileConvertedHtml(converted.markdown, externalPlain);
     if (externalPlain && repeatsPlainText(reconciled.markdown, externalPlain)) {
       warnings.push("检测到网页富文本包含重复正文，已改用单份纯文本内容。");

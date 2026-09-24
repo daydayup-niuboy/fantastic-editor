@@ -30,7 +30,7 @@ function parsedResponse(request: ParseWorkerRequest): ParseWorkerResponse {
     taskSequence: request.taskSequence,
     parsedDocument: {
       schema: "fantastic-editor-parsed-document",
-      udmVersion: "0.5",
+      udmVersion: "0.6",
       parserProfile: request.parserProfile,
       documentId: request.documentId,
       sourceHash: request.sourceHash,

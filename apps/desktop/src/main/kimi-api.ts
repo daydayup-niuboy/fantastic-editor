@@ -1,5 +1,6 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { AiInvocationRequest, AiInvocationResult } from "@fantastic-editor/shared";
+import { readBoundedResponseText } from "./bounded-response.js";
 
 const ENDPOINT = "https://api.moonshot.cn/v1";
 const MODEL = "kimi-k3";
@@ -35,24 +36,29 @@ export class KimiApi {
   async clear(): Promise<void> { await rm(this.path, { force: true }); }
   async test(): Promise<boolean> {
     const key = await this.#key(); if (!key) return false;
-    try { const response = await this.fetcher(`${ENDPOINT}/models`, { headers: { Authorization: `Bearer ${key}` } }); return response.ok; } catch { return false; }
+    try { const response = await this.fetcher(`${ENDPOINT}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) }); return response.ok; } catch { return false; }
   }
   cancel(): void { this.#controller?.abort(); }
   async invoke(_request: AiInvocationRequest, prompt: string): Promise<AiInvocationResult> {
-    const key = await this.#key();
-    if (!key) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Kimi API Key。" };
     const controller = new AbortController(); this.#controller = controller;
-    const timer = setTimeout(() => controller.abort(), 180_000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 180_000);
+    const interrupted = (): AiInvocationResult => timedOut ? { status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" } : { status: "cancelled" };
     try {
+      const key = await this.#key();
+      if (controller.signal.aborted) return interrupted();
+      if (!key) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Kimi API Key。" };
       const response = await this.fetcher(`${ENDPOINT}/chat/completions`, { method: "POST", signal: controller.signal, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: MODEL, messages: [{ role: "user", content: prompt }], stream: false }) });
+      if (controller.signal.aborted) return interrupted();
       if (!response.ok) return { status: "failed", code: "API_FAILED", error: apiError(response.status) };
-      const text = await response.text();
-      if (Buffer.byteLength(text) > 320 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
+      const text = await readBoundedResponseText(response, 320 * 1024);
+      if (controller.signal.aborted) return interrupted();
+      if (text === null) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       const data = JSON.parse(text) as { choices?: Array<{ message?: { content?: unknown } }> };
       const result = assistantMessageText(data.choices?.[0]?.message?.content);
       if (result && Buffer.byteLength(result) > 256 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       return result ? { status: "completed", result } : { status: "failed", code: "API_FAILED", error: "Kimi 未返回有效建议，内容可能被安全策略拦截。" };
-    } catch (error) { return controller.signal.aborted ? { status: "cancelled" } : { status: "failed", code: "API_FAILED", error: "无法连接 Kimi API。" }; }
+    } catch { return controller.signal.aborted ? interrupted() : { status: "failed", code: "API_FAILED", error: "无法连接 Kimi API。" }; }
     finally { clearTimeout(timer); if (this.#controller === controller) this.#controller = null; }
   }
   async #key(): Promise<string | null> {

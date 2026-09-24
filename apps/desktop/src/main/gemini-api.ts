@@ -1,5 +1,6 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { AiInvocationRequest, AiInvocationResult } from "@fantastic-editor/shared";
+import { readBoundedResponseText } from "./bounded-response.js";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
 const MODEL = "gemini-3.8-flash";
@@ -31,30 +32,36 @@ export class GeminiApi {
   async clear(): Promise<void> { await rm(this.path, { force: true }); }
   async test(): Promise<boolean> {
     const key = await this.#key(); if (!key) return false;
-    try { const response = await this.fetcher(`${ENDPOINT}/models/${MODEL}`, { headers: { "x-goog-api-key": key } }); return response.ok; } catch { return false; }
+    try { const response = await this.fetcher(`${ENDPOINT}/models/${MODEL}`, { headers: { "x-goog-api-key": key }, signal: AbortSignal.timeout(20_000) }); return response.ok; } catch { return false; }
   }
   cancel(): void { this.#controller?.abort(); }
   async invoke(_request: AiInvocationRequest, prompt: string): Promise<AiInvocationResult> {
-    const key = await this.#key();
-    if (!key) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Gemini API Key。" };
     const controller = new AbortController(); this.#controller = controller;
-    const timer = setTimeout(() => controller.abort(), 180_000);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 180_000);
+    const interrupted = (): AiInvocationResult => timedOut ? { status: "failed", code: "TIMEOUT", error: "AI 请求超时，已停止。" } : { status: "cancelled" };
     try {
+      const key = await this.#key();
+      if (controller.signal.aborted) return interrupted();
+      if (!key) return { status: "failed", code: "PROVIDER_UNAVAILABLE", error: "请先配置 Gemini API Key。" };
       const request = () => this.fetcher(`${ENDPOINT}/models/${MODEL}:generateContent`, { method: "POST", signal: controller.signal, headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }) });
       let response = await request();
+      if (controller.signal.aborted) return interrupted();
       for (let attempt = 0; !response.ok && retryable(response.status) && attempt < MAX_RETRIES; attempt++) {
         await this.wait(retryDelay(attempt));
-        if (controller.signal.aborted) return { status: "cancelled" };
+        if (controller.signal.aborted) return interrupted();
         response = await request();
+        if (controller.signal.aborted) return interrupted();
       }
       if (!response.ok) return { status: "failed", code: "API_FAILED", error: apiError(response.status) };
-      const text = await response.text();
-      if (Buffer.byteLength(text) > 320 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
+      const text = await readBoundedResponseText(response, 320 * 1024);
+      if (controller.signal.aborted) return interrupted();
+      if (text === null) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       const data = JSON.parse(text) as { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> };
       const result = data.candidates?.[0]?.content?.parts?.flatMap((part) => typeof part.text === "string" ? [part.text] : []).join("") ?? "";
       if (Buffer.byteLength(result) > 256 * 1024) return { status: "failed", code: "RESULT_TOO_LARGE", error: "AI 返回内容超过 256 KiB 上限。" };
       return result.trim() ? { status: "completed", result: result.trim() } : { status: "failed", code: "API_FAILED", error: "Gemini 未返回有效建议，内容可能被安全策略拦截。" };
-    } catch { return controller.signal.aborted ? { status: "cancelled" } : { status: "failed", code: "API_FAILED", error: "无法连接 Gemini API。" }; }
+    } catch { return controller.signal.aborted ? interrupted() : { status: "failed", code: "API_FAILED", error: "无法连接 Gemini API。" }; }
     finally { clearTimeout(timer); if (this.#controller === controller) this.#controller = null; }
   }
   async #key(): Promise<string | null> {

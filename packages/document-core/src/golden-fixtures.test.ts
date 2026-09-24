@@ -6,7 +6,7 @@ import { parseDocument } from "./parser.js";
 
 const fixturesRoot = resolve(import.meta.dirname, "../fixtures");
 
-describe("UDM 0.5 golden fixtures", async () => {
+describe("UDM 0.6 golden fixtures", async () => {
   const entries = (await readdir(fixturesRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory());
   for (const entry of entries) {
     it(`matches ${entry.name}`, async () => {
