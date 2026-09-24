@@ -601,31 +601,32 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
               if (editorView.state.selection.ranges.length !== 1) return false;
               const intent: PasteIntent = literalPasteUntilRef.current >= Date.now() ? "literal" : "normal";
               literalPasteUntilRef.current = 0;
+              const plainText = event.clipboardData?.getData("text/plain") ?? "";
+              const htmlText = event.clipboardData?.getData("text/html") ?? "";
               const resolved = resolveClipboardPaste({
-                plainText: event.clipboardData?.getData("text/plain") ?? "",
-                htmlText: event.clipboardData?.getData("text/html") ?? "",
+                plainText,
+                htmlText,
                 intent,
               });
-              if (resolved.rejected) {
-                event.preventDefault();
-                onStatusRef.current?.(resolved.warnings.join(" "));
-                return true;
-              }
               if (!resolved.markdown) {
-                if (event.clipboardData?.files.length) return false;
                 event.preventDefault();
                 const source = editorView.state.doc.toString();
-                const { from, to } = selection;
+                const { from, to, anchor, head } = selection;
                 void window.fantasticEditor.readClipboard().then((clipboard) => {
-                  if (viewRef.current !== editorView || !editorView.hasFocus) return;
+                  // Outlook may render clipboard data after the window briefly loses OS focus.
+                  if (viewRef.current !== editorView || editorView.contentDOM.ownerDocument.activeElement !== editorView.contentDOM) return;
                   const current = editorView.state.selection.main;
-                  if (editorView.state.doc.toString() !== source || current.from !== from || current.to !== to) {
+                  if (editorView.state.doc.toString() !== source || current.anchor !== anchor || current.head !== head) {
                     onStatusRef.current?.("正文或光标已变化；请在当前位置重新粘贴。");
                     return;
                   }
-                  const fallback = resolveClipboardPaste({ ...clipboard, intent });
+                  const fallback = resolveClipboardPaste({
+                    plainText: clipboard.plainText || plainText,
+                    htmlText: clipboard.htmlText || htmlText,
+                    intent,
+                  });
                   if (fallback.rejected || !fallback.markdown) {
-                    onStatusRef.current?.(fallback.warnings.join(" ") || "剪贴板中没有可粘贴的文字；请在 Outlook 中重新复制后重试。");
+                    onStatusRef.current?.(fallback.warnings.join(" ") || resolved.warnings.join(" ") || "剪贴板中没有可粘贴的文字；请在 Outlook 中重新复制后重试。");
                     return;
                   }
                   editorView.dispatch({

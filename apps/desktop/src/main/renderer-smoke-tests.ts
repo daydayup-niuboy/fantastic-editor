@@ -247,6 +247,59 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await finishSmoke("ai", Boolean(cancelled), { selectionTranslation, visibleGlyph, inkPixels, popoverInteraction, translationTimeout, applied: appliedResult, undone, stale, cancelled });
       })().catch((error) => void finishSmoke("ai", false, { error: error instanceof Error ? error.message : String(error) }));
     });
+  } else if (process.env.FANTASTIC_EDITOR_PASTE_SMOKE_TEST === "1") {
+    window.webContents.once("did-finish-load", () => {
+      void (async () => {
+        const ready = await window.webContents.executeJavaScript(`(async () => {
+          document.querySelector('[data-testid="new-document"]')?.click();
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline) {
+            const editor = document.querySelector('.cm-content');
+            if (editor) { editor.focus(); return true; }
+            await new Promise((resolve) => setTimeout(resolve, 40));
+          }
+          return false;
+        })()`, true);
+        if (!ready) throw new Error("Paste smoke editor did not become ready.");
+        const enter = () => {
+          window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
+          window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Enter" });
+        };
+        const paste = (kind: "file" | "large-html", expectedCount: number, expectEmpty = false) => window.webContents.executeJavaScript(`(async () => {
+          const editor = document.querySelector('.cm-content');
+          if (!(editor instanceof HTMLElement)) return { inserted: false, caretLine: -1, lines: -1 };
+          const focusedBefore = document.activeElement === editor;
+          const transfer = new DataTransfer();
+          if (${JSON.stringify(kind)} === 'file') transfer.items.add(new File(['fixture'], 'message.eml', { type: 'message/rfc822' }));
+          else transfer.setData('text/html', '<p>' + 'x'.repeat(512 * 1024) + '</p>');
+          const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer });
+          editor.dispatchEvent(pasteEvent);
+          const deadline = Date.now() + 5000;
+          while (Date.now() < deadline && ${expectEmpty
+            ? "!(document.querySelector('.status-message')?.textContent ?? '').includes('剪贴板中没有可粘贴的文字')"
+            : `(editor.textContent?.match(/Outlook 剪贴板回退测试/g)?.length ?? 0) < ${expectedCount}`}) {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+          }
+          const lines = [...editor.querySelectorAll('.cm-line')];
+          const node = document.getSelection()?.anchorNode;
+          const line = (node instanceof Element ? node : node?.parentElement)?.closest('.cm-line');
+          return { count: editor.textContent?.match(/Outlook 剪贴板回退测试/g)?.length ?? 0, caretLine: lines.indexOf(line), lines: lines.length, focusedBefore, focusedAfter: document.activeElement === editor, prevented: pasteEvent.defaultPrevented, status: document.querySelector('.status-message')?.textContent?.slice(0, 120) ?? '' };
+        })()`, true) as Promise<{ count: number; caretLine: number; lines: number; prevented: boolean; status: string }>;
+        enter();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const filePaste = await paste("file", 1);
+        enter();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const largeHtmlPaste = await paste("large-html", 2);
+        enter();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const emptyPaste = await paste("file", 2, true);
+        await finishSmoke("paste", filePaste.count === 1 && filePaste.caretLine === 1 && filePaste.prevented
+          && largeHtmlPaste.count === 2 && largeHtmlPaste.caretLine === 2 && largeHtmlPaste.prevented
+          && emptyPaste.count === 2 && emptyPaste.caretLine === 3 && emptyPaste.prevented && emptyPaste.status.includes("剪贴板中没有可粘贴的文字"),
+        { filePaste, largeHtmlPaste, emptyPaste });
+      })().catch((error) => void finishSmoke("paste", false, { error: error instanceof Error ? error.message : String(error) }));
+    });
   } else if (process.env.FANTASTIC_EDITOR_LIVE_PREVIEW_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", () => {
       void (async () => {

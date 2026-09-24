@@ -258,7 +258,7 @@ async function finishSmoke(scenario: string, valid: boolean, diagnostics?: unkno
     }
   }
   process.exitCode = valid ? 0 : 1;
-  if (scenario === "ui" || scenario === "live-preview" || scenario === "ai") {
+  if (scenario === "ui" || scenario === "live-preview" || scenario === "ai" || scenario === "paste") {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.destroy();
     }
@@ -442,8 +442,13 @@ async function openWithConversionConfirmation(
     : opened;
 }
 function registerIpc(): void {
+  let pasteSmokeClipboardReads = 0;
   ipcMain.handle(IPC_CHANNELS.readClipboard, (event) => {
     requireTrustedRenderer(event);
+    if (process.env.FANTASTIC_EDITOR_PASTE_SMOKE_TEST === "1") {
+      pasteSmokeClipboardReads += 1;
+      return { plainText: pasteSmokeClipboardReads <= 2 ? "Outlook 剪贴板回退测试" : "", htmlText: "" };
+    }
     let plainText = "";
     let htmlText = "";
     try { plainText = clipboard.readText(); } catch { /* HTML-only clipboard can still be converted. */ }
