@@ -23,7 +23,7 @@ export function tableCellTextSelection(state: EditorState, input: HTMLInputEleme
   return { from, to, text, cellFrom, encodedCell };
 }
 
-export function formatTableCellMarkdown(value: string, from: number, to: number, kind: TableCellFormat): { value: string; from: number; to: number } {
+export function formatTableCellMarkdown(value: string, from: number, to: number, kind: TableCellFormat, linkUrl = "https://"): { value: string; from: number; to: number } {
   const start = Math.max(0, Math.min(from, to, value.length));
   const end = Math.max(start, Math.min(Math.max(from, to), value.length));
   const selected = value.slice(start, end);
@@ -42,9 +42,9 @@ export function formatTableCellMarkdown(value: string, from: number, to: number,
       };
     }
     const label = selected || "链接文字";
-    const replacement = `[${label.replace(/]/g, "\\]")}](https://)`;
-    const urlStart = start + replacement.lastIndexOf("https://");
-    return { value: value.slice(0, start) + replacement + value.slice(end), from: urlStart, to: urlStart + 8 };
+    const replacement = `[${label.replace(/]/g, "\\]")}](${linkUrl})`;
+    const urlStart = start + replacement.lastIndexOf(linkUrl);
+    return { value: value.slice(0, start) + replacement + value.slice(end), from: urlStart, to: urlStart + linkUrl.length };
   }
   const [left, right, placeholder] = kind === "bold" ? ["**", "**", "粗体文字"]
     : kind === "italic" ? ["*", "*", "斜体文字"]
@@ -53,13 +53,15 @@ export function formatTableCellMarkdown(value: string, from: number, to: number,
   const text = selected || placeholder;
   if (selected.startsWith(left) && selected.endsWith(right) && selected.length > left.length + right.length) {
     const inner = selected.slice(left.length, -right.length);
-    const ambiguousFullSingleMarker = left.length === 1 && (inner.startsWith(left) || inner.endsWith(right));
-    if (!ambiguousFullSingleMarker) return { value: value.slice(0, start) + inner + value.slice(end), from: start, to: start + inner.length };
+    const activeItalic = kind === "italic" && (selected.match(/^\*+/)?.[0].length ?? 0) % 2 === 1
+      && (selected.match(/\*+$/)?.[0].length ?? 0) % 2 === 1;
+    if (kind !== "italic" || activeItalic) return { value: value.slice(0, start) + inner + value.slice(end), from: start, to: start + inner.length };
   }
   const leftStart = start - left.length;
   const exactMarkers = selected && leftStart >= 0 && value.slice(leftStart, start) === left && value.slice(end, end + right.length) === right;
-  const ambiguousSingleMarker = left.length === 1 && (value[leftStart - 1] === left || value[end + right.length] === right);
-  if (exactMarkers && !ambiguousSingleMarker) {
+  const activeAdjacentItalic = kind === "italic" && (value.slice(0, start).match(/\*+$/)?.[0].length ?? 0) % 2 === 1
+    && (value.slice(end).match(/^\*+/)?.[0].length ?? 0) % 2 === 1;
+  if (exactMarkers && (kind !== "italic" || activeAdjacentItalic)) {
     return {
       value: value.slice(0, leftStart) + selected + value.slice(end + right.length),
       from: leftStart,

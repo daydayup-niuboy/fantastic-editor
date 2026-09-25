@@ -688,20 +688,38 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
         const tableCellFormatting = await window.webContents.executeJavaScript(`(async () => {
           for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-table tr').length !== 2; i++) await new Promise(r => setTimeout(r, 50));
-          [...document.querySelectorAll('.cm-live-table td button')].at(-1)?.click();
-          const input = document.querySelector('.cm-live-table td input');
-          if (!input) return { globalMenu: false, rendered: false };
-          input.setSelectionRange(0, input.value.length);
-          input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-          const menu = document.querySelector('.editor-context-menu');
-          const labels = [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].map(button => button.textContent?.trim() ?? '');
-          const globalMenu = Boolean(menu && ['文本格式', '复制', '粘贴', '翻译'].every(label => labels.some(item => item.includes(label))) && !document.querySelector('.cm-live-table-format-menu'));
-          [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].find(button => button.textContent?.trim() === 'B加粗')?.click();
-          for (let i = 0; i < 80 && document.querySelector('.cm-live-table td strong')?.textContent !== 'D'; i++) await new Promise(r => setTimeout(r, 50));
-          return { globalMenu, rendered: document.querySelector('.cm-live-table td strong')?.textContent === 'D' };
-        })()`, true) as { globalMenu: boolean; rendered: boolean };
-        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
-        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
+          const wait = async (check) => { for (let i = 0; i < 80; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 30)); } return false; };
+          const cell = () => [...document.querySelectorAll('.cm-live-table td button')].at(-1);
+          let globalMenu = false;
+          let sourceFlashed = false;
+          const choose = async (label) => {
+            cell()?.click();
+            const input = document.querySelector('.cm-live-table td input');
+            if (!(input instanceof HTMLInputElement)) return false;
+            input.select();
+            input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+            const menu = document.querySelector('.editor-context-menu');
+            const labels = [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].map(button => button.textContent?.trim() ?? '');
+            globalMenu ||= Boolean(menu && ['文本格式', '复制', '粘贴', '翻译'].every(item => labels.some(value => value.includes(item))) && !document.querySelector('.cm-live-table-format-menu'));
+            const action = [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].find(button => button.textContent?.trim() === label);
+            const observer = new MutationObserver(() => { if (!document.querySelector('.cm-live-table')) sourceFlashed = true; });
+            observer.observe(document.querySelector('.cm-content'), { childList: true, subtree: true });
+            action?.click();
+            const closed = await wait(() => !document.querySelector('.cm-live-table td input'));
+            await new Promise(resolve => setTimeout(resolve, 50));
+            observer.disconnect();
+            return Boolean(action) && closed;
+          };
+          const boldOn = await choose('B加粗') && await wait(() => cell()?.querySelector('strong')?.textContent === 'D');
+          const boldOff = await choose('B加粗') && await wait(() => cell()?.textContent === 'D' && !cell()?.querySelector('strong'));
+          const italicOn = await choose('I倾斜') && await wait(() => cell()?.querySelector('em')?.textContent === 'D');
+          const italicOff = await choose('I倾斜') && await wait(() => cell()?.textContent === 'D' && !cell()?.querySelector('em'));
+          const strikeOn = await choose('S删除线') && await wait(() => cell()?.querySelector('del, s')?.textContent === 'D');
+          const strikeOff = await choose('S删除线') && await wait(() => cell()?.textContent === 'D' && !cell()?.querySelector('del, s'));
+          const linkOn = await choose('↗新增外部链接') && await wait(() => cell()?.querySelector('a')?.textContent === 'D');
+          const linkOff = await choose('↗新增外部链接') && await wait(() => cell()?.textContent === 'D' && !cell()?.querySelector('a'));
+          return { globalMenu, sourceFlashed, boldOn, boldOff, italicOn, italicOff, strikeOn, strikeOff, linkOn, linkOff };
+        })()`, true) as { globalMenu: boolean; sourceFlashed: boolean; boldOn: boolean; boldOff: boolean; italicOn: boolean; italicOff: boolean; strikeOn: boolean; strikeOff: boolean; linkOn: boolean; linkOff: boolean };
         const tableNestedLink = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (check) => { for (let i = 0; i < 100; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 30)); } return false; };
           await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
@@ -912,7 +930,56 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("# 一级\n\n## 二级");
         const markdownDiagnosticCleared = await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80; i++) { if (![...document.querySelectorAll('.diagnostic-item')].some(item => item.textContent?.includes('HEADING_LEVEL_SKIPPED'))) return true; await new Promise(r => setTimeout(r, 50)); } return false; })()`, true) as boolean;
-        const valid = tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.mermaidControls && formulaWorkflow.mermaidMoved && formulaWorkflow.mermaidReset && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.rendered && tableCellFormatting.globalMenu && tableCellFormatting.rendered && tableNestedLink.unlinked && tableNestedLink.globalMenu && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.skippedProtected && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+        await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        window.webContents.insertText("# 光标测试\n\n测试说明\n\n\x60\x60\x60powershell\n$py = 'python.exe'\n& $py -c @\"\nfrom huggingface_hub import snapshot_download\nsnapshot_download(\n    repo_id='example/model',\n)\n\"@\n\x60\x60\x60");
+        const codeCursorZoom = await window.webContents.executeJavaScript(`(async () => {
+          const control = document.querySelector('.status-zoom input');
+          if (!(control instanceof HTMLInputElement)) return null;
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(control, 30);
+          control.dispatchEvent(new Event('input', { bubbles: true }));
+          control.dispatchEvent(new Event('change', { bubbles: true }));
+          await new Promise(resolve => setTimeout(resolve, 100));
+          const editor = document.querySelector('.cm-editor');
+          return { value: Number(control.value), fontSize: parseFloat(getComputedStyle(editor).fontSize), zoom: getComputedStyle(editor).zoom };
+        })()`, true) as { value: number; fontSize: number; zoom: string } | null;
+        const codeCursorPoint = await window.webContents.executeJavaScript(`(async () => {
+          const scroller = document.querySelector('.cm-scroller');
+          let line;
+          for (let offset = 0; offset < (scroller?.scrollHeight ?? 0); offset += 200) {
+            scroller.scrollTop = offset;
+            await new Promise(resolve => setTimeout(resolve, 20));
+            line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent?.startsWith('snapshot_download('));
+            if (line) break;
+          }
+          line?.scrollIntoView({ block: 'center' });
+          const rect = line?.getBoundingClientRect();
+          return rect ? { x: rect.left + 45, y: rect.top + rect.height / 2 } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!codeCursorPoint) throw new Error("Fenced code cursor line is missing.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(codeCursorPoint.x), y: Math.round(codeCursorPoint.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(codeCursorPoint.x), y: Math.round(codeCursorPoint.y), button: "left", clickCount: 1 });
+        const cursorLine = () => window.webContents.executeJavaScript(`document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent ?? ''`, true) as Promise<string>;
+        const codeCursorBefore = await cursorLine();
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Up" });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Up" });
+        const codeCursorAfterUp = await cursorLine();
+        const codeCursorClickPoint = await window.webContents.executeJavaScript(`(() => {
+          const line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent?.includes('from huggingface_hub'));
+          const rect = line?.getBoundingClientRect();
+          return rect ? { x: rect.left + 45, y: rect.top + rect.height / 2 } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!codeCursorClickPoint) throw new Error("Fenced code target line is missing.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(codeCursorClickPoint.x), y: Math.round(codeCursorClickPoint.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(codeCursorClickPoint.x), y: Math.round(codeCursorClickPoint.y), button: "left", clickCount: 1 });
+        const codeCursorAfterClick = await cursorLine();
+        const codeCursor = { zoom: codeCursorZoom, before: codeCursorBefore, afterUp: codeCursorAfterUp, afterClick: codeCursorAfterClick };
+        const cursorValid = codeCursorZoom?.value === 30 && codeCursorZoom.fontSize > 20 && codeCursorZoom.zoom === "1"
+          && codeCursorBefore === "snapshot_download("
+          && codeCursorAfterUp === "from huggingface_hub import snapshot_download"
+          && codeCursorAfterClick === "from huggingface_hub import snapshot_download";
+        const valid = cursorValid && tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.mermaidControls && formulaWorkflow.mermaidMoved && formulaWorkflow.mermaidReset && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.rendered && tableCellFormatting.globalMenu && !tableCellFormatting.sourceFlashed && tableCellFormatting.boldOn && tableCellFormatting.boldOff && tableCellFormatting.italicOn && tableCellFormatting.italicOff && tableCellFormatting.strikeOn && tableCellFormatting.strikeOff && tableCellFormatting.linkOn && tableCellFormatting.linkOff && tableNestedLink.unlinked && tableNestedLink.globalMenu && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.skippedProtected && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
@@ -920,7 +987,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, codeCursor, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });

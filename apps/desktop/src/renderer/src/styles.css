@@ -322,14 +322,14 @@ body.is-resizing-sidebar, body.is-resizing-sidebar * { cursor: col-resize !impor
 body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-select: none !important; }
 
 .editor-host, .editor-host .cm-editor { height: 100%; min-height: 0; }
-.editor-host .cm-editor { color: var(--text); background: var(--editor-bg); font-size: 13px; zoom: var(--editor-canvas-zoom, 1); }
+.editor-host .cm-editor { color: var(--text); background: var(--editor-bg); font-size: calc(13px * var(--editor-canvas-zoom, 1)); }
 .editor-host .cm-scroller { overflow: auto; font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; line-height: 1.75; }
 .editor-host .cm-content { max-width: var(--prose-w); margin-inline: auto; padding: var(--space-8) var(--space-6) 110px; caret-color: var(--accent); }
 .editor-host .cm-gutters { color: var(--faint); background: var(--editor-bg); border-right: 1px solid var(--border); }
 .editor-host .cm-lineNumbers .cm-gutterElement { min-width: 39px; padding: 0 10px 0 6px; }
 .editor-host .cm-activeLine, .editor-host .cm-activeLineGutter { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .editor-host .cm-selectionBackground, .editor-host .cm-content ::selection { background: color-mix(in srgb, var(--accent) 25%, transparent) !important; }
-.editor-host .cm-editor.cm-live-preview { font-synthesis: weight style; font-size: var(--live-font-size, 14px); }
+.editor-host .cm-editor.cm-live-preview { font-synthesis: weight style; font-size: calc(14px * var(--editor-canvas-zoom, 1)); }
 .editor-host .cm-live-preview .cm-scroller { font-family: var(--live-font-family, "Microsoft YaHei", sans-serif); line-height: 1.82; }
 .editor-host .cm-live-preview .cm-content { width: 100%; max-width: none; margin: 0; padding: 38px clamp(30px, 5.5vw, 82px) 110px; }
 .editor-host.typewriter-mode .cm-content { padding-bottom: max(50vh, 110px); }
@@ -360,7 +360,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .cm-live-image:hover, .cm-live-image:focus-within { z-index: 24; }
 .cm-live-image:hover img, .cm-live-image:focus-within img { transform: translate(var(--live-image-offset-x, 0px), var(--live-image-offset-y, 0px)) scale(var(--live-image-zoom, 1)); }
 .cm-live-image img[hidden] { display: none; }
-.cm-live-preview .cm-line.cm-live-code-line { font-family: Consolas, "Cascadia Mono", monospace !important; font-size: 14px !important; line-height: 1.55 !important; background: rgba(127,127,127,.09); padding-top: 0 !important; padding-bottom: 0 !important; border-left: 3px solid var(--border); }
+.cm-live-preview .cm-line.cm-live-code-line { font-family: Consolas, "Cascadia Mono", monospace !important; font-size: calc(14px * var(--editor-canvas-zoom, 1)) !important; line-height: 1.55 !important; background: rgba(127,127,127,.09); padding-top: 0 !important; padding-bottom: 0 !important; border-left: 3px solid var(--border); }
 .cm-live-formula { cursor: pointer; }
 .cm-live-formula-block { max-width: 100%; overflow-x: auto; padding: 8px 0; }
 .cm-live-formula:focus-visible { outline: 2px solid currentColor; }

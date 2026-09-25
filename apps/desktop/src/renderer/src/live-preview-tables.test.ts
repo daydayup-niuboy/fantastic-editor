@@ -73,6 +73,11 @@ describe("Live Preview tables", () => {
     const nestedLink = "[~~*乙*~~](https://www.baidu.com)";
     expect(formatTableCellMarkdown(nestedLink, 0, nestedLink.length, "link")).toEqual({ value: "~~*乙*~~", from: 0, to: 7 });
     expect(formatTableCellMarkdown("**粗体**", 2, 4, "italic").value).toBe("***粗体***");
+    expect(formatTableCellMarkdown("**粗体**", 0, 6, "italic").value).toBe("***粗体***");
+    expect(formatTableCellMarkdown("***粗斜体***", 0, 9, "italic").value).toBe("**粗斜体**");
+    expect(formatTableCellMarkdown("***粗斜体***", 3, 6, "italic").value).toBe("**粗斜体**");
+    expect(formatTableCellMarkdown("***粗斜体***", 0, 9, "bold").value).toBe("*粗斜体*");
+    expect(formatTableCellMarkdown("文字", 0, 2, "link", "#标题").value).toBe("[文字](#标题)");
   });
 });
 

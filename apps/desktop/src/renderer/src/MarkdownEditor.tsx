@@ -15,10 +15,10 @@ import { buildEditorClipboardPayload as buildClipboardPayload } from "./clipboar
 import { createImageMarkdown, mapImageInsertionAnchor, type ImageInsertionAnchor } from "./image-insertion";
 import { resolveClipboardPaste, type PasteIntent } from "./clipboard-paste";
 import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync";
-import { applyWysiwygTextChange, createMarkdownBlockInsertion, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
+import { applyWysiwygTextChange, createMarkdownBlockInsertion, escapeMarkdownTableCell, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
 import { livePreviewExtension, livePreviewMarkdownHighlight } from "./live-preview";
 import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
-import { tableCellTextSelection, tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
+import { formatTableCellMarkdown, replaceTableSnapshotCell, tableCellTextSelection, tableSnapshotFromHtml, livePreviewTables, setTableSnapshot, type TableCellFormat } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { livePreviewStructuredCode, setStructuredCodeSnapshot, structuredCodeSnapshotFromHtml } from "./live-preview-structured-code";
 import { livePreviewMermaid, mermaidSnapshotFromHtml, setMermaidSnapshot } from "./live-preview-mermaid";
@@ -889,11 +889,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       contextMenuCleanupRef.current?.();
       const target = event.target as Element | null;
       const tableInput = target?.closest<HTMLInputElement>(".cm-live-table-cell-editor input");
+      let tableSelection: { value: string; start: number; end: number; cellFrom: number; encodedCell: string; rowIndex: number; columnIndex: number } | null = null;
       if (tableInput && host.contains(tableInput)) {
         event.preventDefault();
         event.stopPropagation();
         const selected = tableCellTextSelection(view.state, tableInput, true);
         if (!selected) return;
+        const cell = tableInput.closest<HTMLElement>("th[data-table-row], td[data-table-row]");
+        if (!cell) return;
+        tableSelection = { value: tableInput.value, start: tableInput.selectionStart!, end: tableInput.selectionEnd!, cellFrom: selected.cellFrom, encodedCell: selected.encodedCell, rowIndex: Number(cell.dataset.tableRow), columnIndex: Number(cell.dataset.tableColumn) };
         tableInput.blur();
         if (selected.cellFrom + selected.encodedCell.length > view.state.doc.length
           || view.state.sliceDoc(selected.cellFrom, selected.cellFrom + selected.encodedCell.length) !== selected.encodedCell) return;
@@ -921,6 +925,28 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       const closeOnPointer = (pointerEvent: PointerEvent) => { if (!menu.contains(pointerEvent.target as Node)) closeMenu(); };
       const closeOnEscape = (keyboardEvent: KeyboardEvent) => { if (keyboardEvent.key === "Escape") closeMenu(); };
       const currentSelection = () => view.state.selection.main;
+      const formatTableSelection = (kind: TableCellFormat, linkUrl?: string) => {
+        if (!tableSelection) return false;
+        const { value, start, end, cellFrom, encodedCell, rowIndex, columnIndex } = tableSelection;
+        if (view.state.sliceDoc(cellFrom, cellFrom + encodedCell.length) !== encodedCell) return false;
+        const result = formatTableCellMarkdown(value, start, end, kind, linkUrl);
+        const snapshot = view.state.field(livePreviewTables).snapshot;
+        const tableIndex = snapshot?.tables.findIndex(table => table.rows[rowIndex]?.[columnIndex]?.from === cellFrom) ?? -1;
+        const next = snapshot && tableIndex >= 0 ? replaceTableSnapshotCell(snapshot, tableIndex, rowIndex, columnIndex, result.value) : null;
+        if (!next) return false;
+        const from = cellFrom + escapeMarkdownTableCell(result.value.slice(0, result.from)).length;
+        const to = cellFrom + escapeMarkdownTableCell(result.value.slice(0, result.to)).length;
+        view.dispatch({
+          changes: { from: cellFrom, to: cellFrom + encodedCell.length, insert: escapeMarkdownTableCell(result.value) },
+          effects: setTableSnapshot.of(next),
+          selection: { anchor: from, head: to },
+          userEvent: "input.format",
+        });
+        view.focus();
+        return true;
+      };
+      const toggleMark = (mark: MarkdownSelectionMark) => tableSelection ? formatTableSelection(mark) : toggleSelectionMark(mark);
+      const toggleLink = (url: string) => tableSelection ? formatTableSelection("link", url) : insertLink(url);
       const toggleInline = (left: string, right = left) => {
         const range = currentSelection();
         const selected = view.state.sliceDoc(range.from, range.to);
@@ -1018,15 +1044,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       type MenuEntry = { label: string; shortcut?: string; run?: () => void; children?: MenuEntry[]; separator?: true };
       const numberedList = (task = false) => toggleLinePrefix(task ? "- [ ] " : (index) => `${index + 1}. `, task ? /^(?: {0,3}[-+*])\s+\[[ xX]\]\s+/ : /^(?: {0,3}\d+[.)])\s+/);
       const entries: MenuEntry[] = [
-        { label: "新增链接", run: () => { insertLink("#标题"); view.focus(); } },
-        { label: "新增外部链接", run: () => { insertLink("https://"); view.focus(); } },
+        { label: "新增链接", run: () => { toggleLink("#标题"); view.focus(); } },
+        { label: "新增外部链接", run: () => { toggleLink("https://"); view.focus(); } },
         { separator: true, label: "" },
         { label: "文本格式", children: [
-          { label: "加粗", shortcut: "Ctrl+B", run: () => toggleSelectionMark("bold") },
-          { label: "倾斜", shortcut: "Ctrl+I", run: () => toggleSelectionMark("italic") },
-          { label: "删除线", run: () => toggleSelectionMark("strike") },
+          { label: "加粗", shortcut: "Ctrl+B", run: () => toggleMark("bold") },
+          { label: "倾斜", shortcut: "Ctrl+I", run: () => toggleMark("italic") },
+          { label: "删除线", run: () => toggleMark("strike") },
           { label: "高亮", run: () => toggleInline("==") },
-          { label: "代码", run: () => toggleSelectionMark("code") },
+          { label: "代码", run: () => toggleMark("code") },
           { label: "数学", run: () => toggleInline("$") },
           { label: "注释", run: () => toggleInline("<!-- ", " -->") },
           { label: "清除格式", run: () => {
