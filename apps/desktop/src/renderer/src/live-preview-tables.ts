@@ -3,58 +3,24 @@ import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemir
 import { escapeMarkdownTableCell, markdownTableDetails, markdownTableInsertedCellOffset, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
 
-export function showSelectionFormatMenu(event: MouseEvent, apply: (kind: TableCellFormat) => void, anchorRect?: { left: number; right: number; top: number; bottom: number } | null): void {
-  event.preventDefault();
-  event.stopPropagation();
-  document.querySelectorAll(".cm-live-table-context-menu").forEach((item) => item.remove());
-  const menu = document.createElement("div");
-  menu.className = "cm-live-table-context-menu cm-live-table-format-menu";
-  menu.setAttribute("role", "menu");
-  menu.style.left = "0px";
-  menu.style.top = "0px";
-  menu.style.visibility = "hidden";
-  const close = () => {
-    menu.remove();
-    document.removeEventListener("pointerdown", closeOnPointer);
-    document.removeEventListener("keydown", closeOnEscape);
-  };
-  const closeOnPointer = (pointerEvent: PointerEvent) => { if (!menu.contains(pointerEvent.target as Node)) close(); };
-  const closeOnEscape = (keyboardEvent: KeyboardEvent) => { if (keyboardEvent.key === "Escape") close(); };
-  for (const [label, kind] of [["B", "bold"], ["I", "italic"], ["S", "strike"], ["`", "code"], ["链接", "link"]] as const) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.textContent = label;
-    item.setAttribute("role", "menuitem");
-    item.onmousedown = (pointerEvent) => { pointerEvent.preventDefault(); pointerEvent.stopPropagation(); };
-    item.onclick = () => { close(); apply(kind); };
-    menu.append(item);
-  }
-  document.body.append(menu);
-  const width = menu.offsetWidth;
-  const height = menu.offsetHeight;
-  if (anchorRect) {
-    const centeredLeft = (anchorRect.left + anchorRect.right) / 2 - width / 2;
-    menu.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, centeredLeft))}px`;
-    const aboveTop = anchorRect.top - height - 6;
-    menu.style.top = `${aboveTop < 8 ? Math.min(window.innerHeight - height - 8, anchorRect.bottom + 6) : aboveTop}px`;
-  } else {
-    menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8))}px`;
-    menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8))}px`;
-  }
-  menu.style.visibility = "";
-  setTimeout(() => {
-    document.addEventListener("pointerdown", closeOnPointer);
-    document.addEventListener("keydown", closeOnEscape);
-  });
-}
-
-
 interface TableCell { from: number; to: number; text: string; html: string; protected: boolean }
 interface TableProjection { from: number; to: number; rows: TableCell[][] }
 export interface TableSnapshot { source: string; tables: TableProjection[] }
 export type TableCellFormat = "bold" | "italic" | "strike" | "code" | "link";
-export function tableCellContextMenuKind(editing: boolean, selectionStart: number, selectionEnd: number): "format" | "structure" {
-  return editing && selectionStart !== selectionEnd ? "format" : "structure";
+export function tableCellTextSelection(state: EditorState, input: HTMLInputElement, allowDraft = false): { from: number; to: number; text: string; cellFrom: number; encodedCell: string } | null {
+  const cellFrom = Number(input.dataset.sourceFrom);
+  const cellTo = Number(input.dataset.sourceTo);
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  if (!Number.isInteger(cellFrom) || !Number.isInteger(cellTo) || cellFrom < 0 || cellTo < cellFrom || cellTo > state.doc.length
+    || start === null || end === null || start >= end) return null;
+  if (!allowDraft && state.sliceDoc(cellFrom, cellTo) !== input.value) return null;
+  const encodedCell = escapeMarkdownTableCell(input.value);
+  const from = cellFrom + escapeMarkdownTableCell(input.value.slice(0, start)).length;
+  const to = cellFrom + escapeMarkdownTableCell(input.value.slice(0, end)).length;
+  const text = encodedCell.slice(from - cellFrom, to - cellFrom);
+  if (!allowDraft && state.sliceDoc(from, to) !== text) return null;
+  return { from, to, text, cellFrom, encodedCell };
 }
 
 export function formatTableCellMarkdown(value: string, from: number, to: number, kind: TableCellFormat): { value: string; from: number; to: number } {
@@ -226,6 +192,8 @@ class TableWidget extends WidgetType {
           const input = document.createElement("input");
           input.type = "text";
           input.value = raw;
+          input.dataset.sourceFrom = String(cell.from);
+          input.dataset.sourceTo = String(cell.to);
           input.onmousedown = (event) => event.stopPropagation();
           input.onclick = (event) => event.stopPropagation();
           input.setAttribute("aria-label", `编辑第 ${rowIndex + 1} 行第 ${columnIndex + 1} 列`);
@@ -264,8 +232,10 @@ class TableWidget extends WidgetType {
               effects: setTableSnapshot.of(next),
               userEvent: "input.table-cell",
             });
-            const target = flat[current + move];
-            if (target) focusCell(target[0], target[1]);
+            if (move !== 0) {
+              const target = flat[current + move];
+              if (target) focusCell(target[0], target[1]);
+            }
           };
           const format = (kind: TableCellFormat) => {
             const result = formatTableCellMarkdown(input.value, input.selectionStart ?? 0, input.selectionEnd ?? 0, kind);
@@ -350,22 +320,11 @@ class TableWidget extends WidgetType {
         document.addEventListener("keydown", closeOnEscape);
       });
     };
-    const openFormatMenu = (event: MouseEvent, input: HTMLInputElement) => {
-      showSelectionFormatMenu(event, (kind) => {
-        const result = formatTableCellMarkdown(input.value, input.selectionStart ?? 0, input.selectionEnd ?? 0, kind);
-        input.value = result.value;
-        input.focus();
-        input.setSelectionRange(result.from, result.to);
-      }, input.getBoundingClientRect());
-    };
     table.oncontextmenu = (event) => {
       const cell = (event.target as Element | null)?.closest<HTMLElement>("th[data-table-row], td[data-table-row]");
       if (!cell || !table.contains(cell)) return;
       const input = cell.querySelector("input");
-      if (input instanceof HTMLInputElement && tableCellContextMenuKind(true, input.selectionStart ?? 0, input.selectionEnd ?? 0) === "format") {
-        openFormatMenu(event, input);
-        return;
-      }
+      if (input instanceof HTMLInputElement && input.selectionStart !== input.selectionEnd) return;
       openContextMenu(event, Number(cell.dataset.tableRow), Number(cell.dataset.tableColumn));
     };
     return root;

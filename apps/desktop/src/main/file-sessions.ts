@@ -265,6 +265,26 @@ function suggestedNameFromText(editorText: string): string | null {
   return null;
 }
 
+function suggestedNameFromFirstH1(editorText: string): string | null {
+  // ponytail: Save names use ATX H1 outside fenced code; use the document parser if Setext H1 naming is needed.
+  let fence: { marker: string; length: number } | null = null;
+  for (const line of editorText.split("\n")) {
+    const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (delimiter) {
+      const marker = delimiter[1]![0]!;
+      if (!fence) fence = { marker, length: delimiter[1]!.length };
+      else if (fence.marker === marker && delimiter[1]!.length >= fence.length && !delimiter[2]!.trim()) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const heading = /^ {0,3}#(?:[ \t]+|$)(.*)$/.exec(line);
+    if (!heading) continue;
+    const name = suggestedNameFromText(heading[1]!.replace(/[ \t]+#+[ \t]*$/, ""));
+    if (name) return name;
+  }
+  return null;
+}
+
 function entrySort(left: Dirent, right: Dirent): number {
   if (left.isDirectory() !== right.isDirectory()) return left.isDirectory() ? -1 : 1;
   return left.name.localeCompare(right.name, "zh-CN", { numeric: true, sensitivity: "base" });
@@ -362,6 +382,11 @@ export class FileSessionManager {
     if (session.importedStructured) {
       const sourceName = basename(session.importedStructured.sourcePath);
       return `${sourceName.slice(0, -extname(sourceName).length)}.md`;
+    }
+    if (session.isUntitled && typeof editorText === "string"
+      && (!session.displayNameOverride || session.displayNameOverride === "未命名（已恢复）")) {
+      const heading = suggestedNameFromFirstH1(editorText);
+      if (heading) return `${heading}.md`;
     }
     if (session.displayNameOverride) return session.displayNameOverride;
     if (session.isUntitled) {

@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, replaceTableSnapshotCell, tableCellContextMenuKind, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
+import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, replaceTableSnapshotCell, tableCellTextSelection, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
 
 const source = "| A | B |\n| --- | --- |\n| C | D |\n\n正文";
 const cell = (text: string) => ({ from: source.indexOf(text), to: source.indexOf(text) + 1, text, html: text, protected: false });
@@ -76,10 +76,17 @@ describe("Live Preview tables", () => {
   });
 });
 
-describe("table cell context menu", () => {
-  it("shows format actions only when editing a non-empty text selection", () => {
-    expect(tableCellContextMenuKind(false, 0, 2)).toBe("structure");
-    expect(tableCellContextMenuKind(true, 1, 1)).toBe("structure");
-    expect(tableCellContextMenuKind(true, 0, 2)).toBe("format");
+describe("table cell source selection", () => {
+  it("maps a selected input range to canonical Markdown and rejects an uncommitted draft", () => {
+    const from = source.indexOf("C");
+    const input = { value: "C", dataset: { sourceFrom: String(from), sourceTo: String(from + 1) }, selectionStart: 0, selectionEnd: 1 } as unknown as HTMLInputElement;
+    expect(tableCellTextSelection(state(), input)).toMatchObject({ from, to: from + 1, text: "C" });
+    input.value = "C|D";
+    input.selectionStart = 1;
+    input.selectionEnd = 2;
+    expect(tableCellTextSelection(state(), input)).toBeNull();
+    expect(tableCellTextSelection(state(), input, true)).toMatchObject({ from: from + 1, to: from + 3, text: "\\|", encodedCell: "C\\|D" });
+    input.dataset.sourceTo = "invalid";
+    expect(tableCellTextSelection(state(), input, true)).toBeNull();
   });
 });

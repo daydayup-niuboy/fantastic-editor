@@ -19,6 +19,8 @@ describe("editor text transaction", () => {
 
     const block = EditorState.create({ doc: "# 标题\n\n正文", selection: { anchor: 8 }, extensions: [markdown()] });
     expect(await captureEditorTextAnchor("doc-1", block)).toMatchObject({ from: 6, to: 8, expectedText: "正文" });
+    expect(await captureEditorTextAnchor("doc-1", block, { from: 2, to: 4 })).toMatchObject({ from: 2, to: 4, expectedText: "标题" });
+    expect(await captureEditorTextAnchor("doc-1", block, { from: -1, to: 4 })).toBeNull();
   });
 
   it("applies one undoable transaction and rejects stale or cross-document anchors", async () => {

@@ -28,11 +28,11 @@ function currentBlockRange(state: EditorState): { from: number; to: number } | n
   return { from: node.from, to: node.to };
 }
 
-export async function captureEditorTextAnchor(documentId: string, state: EditorState): Promise<EditorTextAnchor | null> {
+export async function captureEditorTextAnchor(documentId: string, state: EditorState, selectedRange?: { from: number; to: number }): Promise<EditorTextAnchor | null> {
   if (!documentId) return null;
   const selection = state.selection.main;
-  const range = selection.empty ? currentBlockRange(state) : { from: selection.from, to: selection.to };
-  if (!range || range.to <= range.from) return null;
+  const range = selectedRange ?? (selection.empty ? currentBlockRange(state) : { from: selection.from, to: selection.to });
+  if (!range || !Number.isInteger(range.from) || !Number.isInteger(range.to) || range.from < 0 || range.to <= range.from || range.to > state.doc.length) return null;
   const text = state.doc.toString();
   return {
     documentId,

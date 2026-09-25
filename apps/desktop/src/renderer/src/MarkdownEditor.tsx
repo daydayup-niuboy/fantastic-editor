@@ -18,7 +18,7 @@ import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync
 import { applyWysiwygTextChange, createMarkdownBlockInsertion, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
 import { livePreviewExtension, livePreviewMarkdownHighlight } from "./live-preview";
 import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
-import { tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
+import { tableCellTextSelection, tableSnapshotFromHtml, livePreviewTables, setTableSnapshot } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { livePreviewStructuredCode, setStructuredCodeSnapshot, structuredCodeSnapshotFromHtml } from "./live-preview-structured-code";
 import { livePreviewMermaid, mermaidSnapshotFromHtml, setMermaidSnapshot } from "./live-preview-mermaid";
@@ -94,6 +94,7 @@ interface SelectionTranslationAction {
   text: string;
   left: number;
   top: number;
+  tableInput?: HTMLInputElement;
 }
 
 interface SelectionTranslationPopover {
@@ -163,6 +164,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const typewriterPointerRef = useRef(false);
   const lastSentValueRef = useRef(value);
   const mouseSelectionRef = useRef(false);
+  const tablePointerSelectionRef = useRef<HTMLInputElement | null>(null);
   const mouseSelectionFinishFrameRef = useRef<number | null>(null);
   const translationSequenceRef = useRef(0);
   const translationOpeningRef = useRef(false);
@@ -479,6 +481,34 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (!mouseSelectionRef.current) dismissSelectionTranslation();
     };
 
+    const showTranslationAction = (
+      from: number,
+      to: number,
+      text: string,
+      start: { left: number; right: number; top: number; bottom: number },
+      end: { left: number; right: number; top: number; bottom: number },
+      tableInput?: HTMLInputElement,
+    ) => {
+      const buttonSize = 16;
+      const gap = 8;
+      const edge = 8;
+      const aboveLeft = { left: start.left, top: start.top - buttonSize - gap };
+      const belowRight = { left: end.right - buttonSize, top: end.bottom + gap };
+      const fits = ({ left, top }: { left: number; top: number }) => left >= edge && left + buttonSize <= window.innerWidth - edge && top >= edge && top + buttonSize <= window.innerHeight - edge;
+      const placement = fits(aboveLeft) ? aboveLeft
+        : fits(belowRight) ? belowRight
+          : start.top - buttonSize - gap >= edge ? aboveLeft : belowRight;
+      translationSequenceRef.current += 1;
+      setSelectionTranslationPopover(null);
+      onCancelTranslationRef.current?.();
+      setSelectionTranslationAction({
+        from, to, text,
+        left: Math.max(edge, Math.min(placement.left, window.innerWidth - buttonSize - edge)),
+        top: Math.max(edge, Math.min(placement.top, window.innerHeight - buttonSize - edge)),
+        ...(tableInput ? { tableInput } : {}),
+      });
+    };
+
     const finishMouseSelection = () => {
       if (!mouseSelectionRef.current) return;
       mouseSelectionRef.current = false;
@@ -491,25 +521,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const start = currentView.coordsAtPos(selection.from);
         const end = currentView.coordsAtPos(selection.to);
         if (!text.trim() || !start || !end) { dismissSelectionTranslation(); return; }
-        const buttonSize = 16;
-        const gap = 8;
-        const edge = 8;
-        const aboveLeft = { left: start.left, top: start.top - buttonSize - gap };
-        const belowRight = { left: end.right - buttonSize, top: end.bottom + gap };
-        const fits = ({ left, top }: { left: number; top: number }) => left >= edge && left + buttonSize <= window.innerWidth - edge && top >= edge && top + buttonSize <= window.innerHeight - edge;
-        const placement = fits(aboveLeft) ? aboveLeft
-          : fits(belowRight) ? belowRight
-            : start.top - buttonSize - gap >= edge ? aboveLeft : belowRight;
-        translationSequenceRef.current += 1;
-        setSelectionTranslationPopover(null);
-        onCancelTranslationRef.current?.();
-        setSelectionTranslationAction({
-          from: selection.from,
-          to: selection.to,
-          text,
-          left: Math.max(edge, Math.min(placement.left, window.innerWidth - buttonSize - edge)),
-          top: Math.max(edge, Math.min(placement.top, window.innerHeight - buttonSize - edge)),
-        });
+        showTranslationAction(selection.from, selection.to, text, start, end);
+      });
+    };
+
+    const finishTableSelection = (input: HTMLInputElement) => {
+      mouseSelectionRef.current = false;
+      mouseSelectionFinishFrameRef.current = window.requestAnimationFrame(() => {
+        mouseSelectionFinishFrameRef.current = null;
+        const currentView = viewRef.current;
+        const selected = currentView && input.isConnected ? tableCellTextSelection(currentView.state, input) : null;
+        if (!selected || !selected.text.trim()) { dismissSelectionTranslation(); return; }
+        const rect = input.getBoundingClientRect();
+        showTranslationAction(selected.from, selected.to, selected.text, rect, rect, input);
       });
     };
 
@@ -667,9 +691,22 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const clearLiteralPasteIntent = () => { literalPasteUntilRef.current = 0; };
     const clearTypewriterPointer = () => { typewriterPointerRef.current = false; };
     window.addEventListener("blur", clearLiteralPasteIntent);
-    const finishMouseSelectionAndTypewriter = () => { clearTypewriterPointer(); finishMouseSelection(); };
+    const captureTablePointer = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      const input = event.target instanceof Element ? event.target.closest(".cm-live-table-cell-editor input") : null;
+      tablePointerSelectionRef.current = input instanceof HTMLInputElement ? input : null;
+      if (tablePointerSelectionRef.current) dismissSelectionTranslation();
+    };
+    const finishMouseSelectionAndTypewriter = () => {
+      clearTypewriterPointer();
+      const input = tablePointerSelectionRef.current;
+      tablePointerSelectionRef.current = null;
+      if (input) finishTableSelection(input);
+      else finishMouseSelection();
+    };
     window.addEventListener("mouseup", finishMouseSelectionAndTypewriter);
     document.addEventListener("visibilitychange", clearLiteralPasteIntent);
+    hostRef.current.addEventListener("mousedown", captureTablePointer, true);
     hostRef.current.addEventListener("contextmenu", clearLiteralPasteIntent);
     view.scrollDOM.addEventListener("scroll", scheduleViewportAnchor, { passive: true });
     const resizeObserver = typeof ResizeObserver === "undefined"
@@ -686,10 +723,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       window.removeEventListener("blur", clearLiteralPasteIntent);
       window.removeEventListener("mouseup", finishMouseSelectionAndTypewriter);
       document.removeEventListener("visibilitychange", clearLiteralPasteIntent);
+      hostRef.current?.removeEventListener("mousedown", captureTablePointer, true);
       hostRef.current?.removeEventListener("contextmenu", clearLiteralPasteIntent);
       view.scrollDOM.removeEventListener("scroll", scheduleViewportAnchor);
       anchorsRef.current.clear();
       mouseSelectionRef.current = false;
+      tablePointerSelectionRef.current = null;
       translationSequenceRef.current += 1;
       onCancelTranslationRef.current?.();
       view.destroy();
@@ -740,14 +779,18 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     if (!action || !view || !documentId) return;
     const actionSequence = translationSequenceRef.current;
     const selection = view.state.selection.main;
-    if (selection.empty || selection.from !== action.from || selection.to !== action.to || view.state.sliceDoc(selection.from, selection.to) !== action.text) {
+    const tableSelection = action.tableInput?.isConnected ? tableCellTextSelection(view.state, action.tableInput) : null;
+    const selectionMatches = action.tableInput
+      ? tableSelection?.from === action.from && tableSelection.to === action.to && tableSelection.text === action.text
+      : !selection.empty && selection.from === action.from && selection.to === action.to;
+    if (!selectionMatches || action.to > view.state.doc.length || view.state.sliceDoc(action.from, action.to) !== action.text) {
       dismissSelectionTranslation();
       return;
     }
     translationOpeningRef.current = true;
     setTranslationOpening(true);
     try {
-      const anchor = await captureEditorTextAnchor(documentId, view.state);
+      const anchor = await captureEditorTextAnchor(documentId, view.state, action.tableInput ? { from: action.from, to: action.to } : undefined);
       if (actionSequence !== translationSequenceRef.current) return;
       if (!anchor || anchor.expectedText !== action.text) {
         dismissSelectionTranslation();
@@ -845,14 +888,26 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (!view) return;
       contextMenuCleanupRef.current?.();
       const target = event.target as Element | null;
-      if (target?.closest(".cm-live-table-context-menu, th[data-table-row], td[data-table-row]")) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
-      const selection = view.state.selection.main;
-      const clickInsideSelection = position !== null && position >= selection.from && position <= selection.to;
-      if (position !== null && (selection.empty || !clickInsideSelection)) {
-        view.dispatch({ selection: { anchor: position }, userEvent: "select.pointer" });
+      const tableInput = target?.closest<HTMLInputElement>(".cm-live-table-cell-editor input");
+      if (tableInput && host.contains(tableInput)) {
+        event.preventDefault();
+        event.stopPropagation();
+        const selected = tableCellTextSelection(view.state, tableInput, true);
+        if (!selected) return;
+        tableInput.blur();
+        if (selected.cellFrom + selected.encodedCell.length > view.state.doc.length
+          || view.state.sliceDoc(selected.cellFrom, selected.cellFrom + selected.encodedCell.length) !== selected.encodedCell) return;
+        view.dispatch({ selection: { anchor: selected.from, head: selected.to }, userEvent: "select.pointer" });
+      } else {
+        if (target?.closest(".cm-live-table-context-menu, th[data-table-row], td[data-table-row]")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        const selection = view.state.selection.main;
+        const clickInsideSelection = position !== null && position >= selection.from && position <= selection.to;
+        if (position !== null && (selection.empty || !clickInsideSelection)) {
+          view.dispatch({ selection: { anchor: position }, userEvent: "select.pointer" });
+        }
       }
       const closeMenu = () => {
         menu.remove();

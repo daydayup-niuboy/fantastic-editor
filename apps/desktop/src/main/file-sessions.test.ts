@@ -175,6 +175,8 @@ describe("FileSessionManager", () => {
     expect(manager.getSuggestedSaveName(sessionId, "")).toBe("document.md");
     expect(manager.getSuggestedSaveName(sessionId, "\n\n   \n")).toBe("document.md");
     expect(manager.getSuggestedSaveName(sessionId, "# 我的文章\n\n正文")).toBe("我的文章.md");
+    expect(manager.getSuggestedSaveName(sessionId, "引言\n\n# 第一篇文章 ###\n\n# 第二篇文章")).toBe("第一篇文章.md");
+    expect(manager.getSuggestedSaveName(sessionId, "```md\n# 代码中的标题\n```\n\n# 正文标题")).toBe("正文标题.md");
     expect(manager.getSuggestedSaveName(sessionId, "> 引用开头\n正文")).toBe("引用开头.md");
     expect(manager.getSuggestedSaveName(sessionId, "- 列表开头\n正文")).toBe("列表开头.md");
     expect(manager.getSuggestedSaveName(sessionId, "```ts\nconst a = 1;\n```")).toBe("ts.md");
@@ -377,7 +379,7 @@ describe("FileSessionManager", () => {
       activeSessionId: untitled.session!.sessionId,
       tabs: [
         { sessionId: saved.session!.sessionId, editorText: "saved-file draft\n" },
-        { sessionId: untitled.session!.sessionId, editorText: "untitled draft\n" },
+        { sessionId: untitled.session!.sessionId, editorText: "引言\n# 恢复标题\n" },
       ],
     });
     await rm(missingPath);
@@ -388,7 +390,8 @@ describe("FileSessionManager", () => {
     if (restored.status !== "restored") throw new Error("Expected restored session.");
     expect(restored.documents).toHaveLength(2);
     expect(restored.documents[0]?.session).toMatchObject({ displayName: "恢复 · missing.md", editorText: "saved-file draft\n", isUntitled: true });
-    expect(restored.documents[1]?.session).toMatchObject({ displayName: "未命名（已恢复）", editorText: "untitled draft\n", isUntitled: true });
+    expect(restored.documents[1]?.session).toMatchObject({ displayName: "未命名（已恢复）", editorText: "引言\n# 恢复标题\n", isUntitled: true });
+    expect(restoredManager.getSuggestedSaveName(restored.documents[1]!.session!.sessionId, "引言\n# 恢复标题\n")).toBe("恢复标题.md");
     expect(restored.warnings).toHaveLength(1);
   });});
 

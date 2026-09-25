@@ -6,31 +6,20 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前源码版本：**0.3.0-rc.14**。RC.14 本地候选已完成安装版、便携版和完整发布门禁，但尚未上传 GitHub；后续未发布源码跟进见开发进度文档。
+当前源码版本：**0.3.0-rc.17**。
 
-GitHub 当前可下载的预发布安装包仍为：**0.3.0-rc.8**（Windows x64）。
+Windows x64 预发布安装包：**0.3.0-rc.17**。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.8/fantastic-editor-0.3.0-rc.8-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.8/fantastic-editor-0.3.0-rc.8-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.8)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.17/fantastic-editor-0.3.0-rc.17-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.17/fantastic-editor-0.3.0-rc.17-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.17)
 
-RC.8 已于 2026-09-19 上传为 GitHub 预发布版本；下载链接、文件名和校验值均对应本地已核对的产物。
-
-本项目暂未采购商业代码签名证书，RC.8 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
+本项目暂未采购商业代码签名证书，RC.17 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.8-setup.exe` | 137038739 | `6B423A5D6E26B60356262C934FDCC9030D42B35BB86189241B8AE7746AA6338E` |
-| `fantastic-editor-0.3.0-rc.8-portable.exe` | 136780669 | `1478041801AB109645B4621DD3D29A6B7AC9629642BE0572DB8C5A4857DAD26D` |
-
-### 本地 RC.14 候选
-
-| 文件 | 字节数 | SHA-256 |
-| --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.14-setup.exe` | 137054648 | `48934EF751ECA91277DE0458B41AB200AB9CF2286C0E4349BFF2829F6CFC6382` |
-| `fantastic-editor-0.3.0-rc.14-portable.exe` | 136796507 | `F98F1B9CB24BD611A164224E38F83A5896D68754703AC20920EB8CC0F74D7150` |
-
-RC.14 两个程序均为 `NotSigned`；便携版已通过隔离启动，安装版已通过隔离安装、启动和卸载门禁。
+| `fantastic-editor-0.3.0-rc.17-setup.exe` | 121276177 | `FB34015A3EC1AF88E651D7BF25025ACD29BB4AD4A6D89D0B0C0B93C76EF26E26` |
+| `fantastic-editor-0.3.0-rc.17-portable.exe` | 121018140 | `4CA5F6F2BDA8C7AA2B909BDD63BFE44BF84867C5CBCD275F5CE225E75D27C2F5` |
 
 ## 编辑与预览
 
@@ -38,7 +27,7 @@ RC.14 两个程序均为 `NotSigned`；便携版已通过隔离启动，安装�
 
 写作区顶部常驻格式栏可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等常用选项；选择“自定义”可定位 `.ttf` 或 `.otf` 文件，安装到 Windows 当前用户字体库并立即应用，字体文件不随软件分发。
 
-Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格支持纯文本及受控行内 Markdown 的格内编辑、连续 Tab/Shift+Tab、末格自动增行，以及右键增删行列和调整列对齐。格内选中文字后，粗体、斜体、删除线、行内代码和链接命令横向紧凑排列。图片、公式、原始 HTML 或无法验证范围的单元格安全降级为 Markdown 源码。最终渲染可在分栏检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
+Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格支持纯文本及受控行内 Markdown 的格内编辑、连续 Tab/Shift+Tab、末格自动增行，以及右键增删行列和调整列对齐。格内选中文字后右键使用全局编辑菜单，也支持划词翻译；未选中文字时仍可使用表格结构菜单。图片、公式、原始 HTML 或无法验证范围的单元格安全降级为 Markdown 源码。最终渲染可在分栏检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
 
 普通图片和安全 SVG 派生图片在悬停时可使用上、下、左、右移动，中心按钮恢复默认位置和大小，右列按钮放大/缩小；原有另存、编辑、删除图标继续保留。该视图控制只影响 Live Preview 临时 DOM，不写入正文或输出；该功能已随 RC.13 打包。
 
@@ -46,7 +35,7 @@ Mermaid 成功渲染后的图表也使用同一套移动、复位和缩放控制
 
 AI 写作助手还支持一个用户自定义的 OpenAI 兼容 API：填写订阅地址和 API Key 后可一键读取标准 `/models` 列表，固定保存两个模型预设。服务名称、软件内名称和模型别名都由用户自定义且只用于显示，实际请求始终使用官方模型 ID；Key 由 Windows 系统加密保存。完整设置收在可折叠面板中，不挤占常用 AI 操作区。
 
-支持单文件与文件夹工作区、多标签、拖拽打开、标签排序、最近文件及未保存草稿恢复。新建、打开或切换文档后编辑器会自动获得焦点，可直接键入或粘贴。资源管理器可拖动调整宽度或隐藏，文档大纲可跳转标题；“打开的编辑器”中的未命名文档可右键或双击改显示名，首次另存为沿用该名称。已保存 Markdown 支持安全重命名。
+支持单文件与文件夹工作区、多标签、拖拽打开、标签排序、最近文件及未保存草稿恢复。新建、打开或切换文档后编辑器会自动获得焦点，可直接键入或粘贴。资源管理器可拖动调整宽度或隐藏，文档大纲可跳转标题；新建或恢复的未命名文档首次保存时默认以第一个 H1 建议文件名，用户在“打开的编辑器”中右键或双击显式改名后则沿用所设名称。已保存 Markdown 支持安全重命名。
 
 复制提供 Markdown 与安全 HTML 双格式；智能粘贴支持内部载荷和外部语义 HTML。打开或粘贴内容后，编辑区会主动识别整篇 Markdown 围栏包装或网页复制产生的结构性转义，并提供“一键转换/立即修复”；用户确认后通过单次编辑事务写回，可用一次 Ctrl+Z 撤销。该入口不再放在设置或命令面板中。原应用未放入剪贴板的内容无法恢复。
 
@@ -87,7 +76,7 @@ npm install
 npm start
 ```
 
-开发模式使用 `npm run dev`。完整发布门禁使用 `npm run dist:rc`，生成安装版与便携版并执行隐私扫描、产物校验、九组生产冒烟及安装—启动—卸载检查。RC.13 通过了 79 个测试文件、402 项测试、3 项签名配置测试和严格 TypeScript 检查。
+开发模式使用 `npm run dev`。完整发布门禁使用 `npm run dist:rc`，生成安装版与便携版并执行隐私扫描、产物校验、十组生产冒烟及安装—启动—卸载检查。RC.17 通过了 81 个测试文件、420 项测试、3 项签名配置测试和严格 TypeScript 检查。
 
 签名流程保留在 `npm run dist:signed`，仅在获得有效证书后使用。证书、环境配置与本地开发记录不提交公开仓库。
 
