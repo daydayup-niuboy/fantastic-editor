@@ -6,20 +6,20 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 ## 下载
 
-当前源码版本：**0.3.0-rc.17**。
+当前源码版本：**0.3.0-rc.9**。
 
-Windows x64 预发布安装包：**0.3.0-rc.17**。
+Windows x64 预发布安装包：**0.3.0-rc.9**。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.17/fantastic-editor-0.3.0-rc.17-setup.exe)
-- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.17/fantastic-editor-0.3.0-rc.17-portable.exe)
-- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.17)
+- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.9/fantastic-editor-0.3.0-rc.9-setup.exe)
+- [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.9/fantastic-editor-0.3.0-rc.9-portable.exe)
+- [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.9)
 
-本项目暂未采购商业代码签名证书，RC.17 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
+本项目暂未采购商业代码签名证书，RC.9 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.17-setup.exe` | 121276177 | `FB34015A3EC1AF88E651D7BF25025ACD29BB4AD4A6D89D0B0C0B93C76EF26E26` |
-| `fantastic-editor-0.3.0-rc.17-portable.exe` | 121018140 | `4CA5F6F2BDA8C7AA2B909BDD63BFE44BF84867C5CBCD275F5CE225E75D27C2F5` |
+| `fantastic-editor-0.3.0-rc.9-setup.exe` | 121277319 | `D35D37FF59853726AEF3F1E57C621D57E9958E67CF94FFD033335693CF18A709` |
+| `fantastic-editor-0.3.0-rc.9-portable.exe` | 121019288 | `CC44940AD02B43EB8152C34F9242C3B170BD517048D726FF3862B00E457F1DC3` |
 
 ## 编辑与预览
 
@@ -76,7 +76,7 @@ npm install
 npm start
 ```
 
-开发模式使用 `npm run dev`。完整发布门禁使用 `npm run dist:rc`，生成安装版与便携版并执行隐私扫描、产物校验、十组生产冒烟及安装—启动—卸载检查。RC.17 通过了 81 个测试文件、420 项测试、3 项签名配置测试和严格 TypeScript 检查。
+开发模式使用 `npm run dev`。完整发布门禁使用 `npm run dist:rc`，生成安装版与便携版并执行隐私扫描、产物校验、十组生产冒烟及安装—启动—卸载检查。RC.9 通过了 81 个测试文件、420 项测试、3 项签名配置测试和严格 TypeScript 检查。
 
 签名流程保留在 `npm run dist:signed`，仅在获得有效证书后使用。证书、环境配置与本地开发记录不提交公开仓库。
 

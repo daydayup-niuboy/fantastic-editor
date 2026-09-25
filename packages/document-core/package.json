@@ -1,6 +1,6 @@
 {
   "name": "@fantastic-editor/document-core",
-  "version": "0.3.0-rc.17",
+  "version": "0.3.0-rc.9",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
