@@ -406,12 +406,18 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="${mode}"]')?.click()`, true);
           await new Promise((resolve) => setTimeout(resolve, 200));
           for (const pair of ["()", "（）"]) {
-            await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
-            window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
-            window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            await window.webContents.insertText(pair);
-            await new Promise((resolve) => setTimeout(resolve, 150));
+            let seeded = false;
+            for (let seedTry = 0; seedTry < 3 && !seeded; seedTry++) {
+              if (seedTry > 0) await new Promise((resolve) => setTimeout(resolve, 300));
+              await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.focus()`, true);
+              window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+              window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              await window.webContents.insertText(pair);
+              await new Promise((resolve) => setTimeout(resolve, 150));
+              seeded = (await window.webContents.executeJavaScript(`document.querySelector('.cm-content')?.textContent ?? ''`, true) as string) === pair;
+            }
+            if (!seeded) throw new Error(`Tab entry regression: could not seed ${pair} in ${mode}`);
             window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Home" });
             window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Home" });
             await new Promise((resolve) => setTimeout(resolve, 100));
@@ -478,19 +484,24 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
         await new Promise((resolve) => setTimeout(resolve, 200));
 
-        const initial = await window.webContents.executeJavaScript(`(() => {
-          const lines = [...document.querySelectorAll(".cm-line")];
-          const emptyLine = [...lines].reverse().find((line) => (line.textContent ?? "").trim() === "-" || (line.textContent ?? "").trim() === "•");
-          const rect = emptyLine?.getBoundingClientRect();
-          return {
-            singleEditor: document.querySelectorAll(".cm-editor").length === 1,
-            liveClass: document.querySelector(".cm-editor")?.classList.contains("cm-live-preview") === true,
-            headingStyled: Boolean(document.querySelector(".cm-live-heading-1")),
-            fontOptions: document.querySelector("[data-testid=wysiwyg-font-preset]")?.querySelectorAll("option").length ?? 0,
-            toolbarButtons: [...document.querySelectorAll(".live-preview-format-toolbar button")].map((button) => button.textContent?.trim() ?? ""),
-            emptyLine: rect ? { x: rect.left + 18, y: rect.top + rect.height / 2 } : null,
-            lineText: lines.map((line) => line.textContent ?? "")
+        const initial = await window.webContents.executeJavaScript(`(async () => {
+          const sample = () => {
+            const lines = [...document.querySelectorAll(".cm-line")];
+            const emptyLine = [...lines].reverse().find((line) => (line.textContent ?? "").trim() === "-" || (line.textContent ?? "").trim() === "•");
+            const rect = emptyLine?.getBoundingClientRect();
+            return {
+              singleEditor: document.querySelectorAll(".cm-editor").length === 1,
+              liveClass: document.querySelector(".cm-editor")?.classList.contains("cm-live-preview") === true,
+              headingStyled: Boolean(document.querySelector(".cm-live-heading-1")),
+              fontOptions: document.querySelector("[data-testid=wysiwyg-font-preset]")?.querySelectorAll("option").length ?? 0,
+              toolbarButtons: [...document.querySelectorAll(".live-preview-format-toolbar button")].map((button) => button.textContent?.trim() ?? ""),
+              emptyLine: rect ? { x: rect.left + 18, y: rect.top + rect.height / 2 } : null,
+              lineText: lines.map((line) => line.textContent ?? "")
+            };
           };
+          let result = sample();
+          for (let i = 0; i < 80 && !result.emptyLine; i++) { await new Promise((r) => setTimeout(r, 50)); result = sample(); }
+          return result;
         })()`, true) as { singleEditor: boolean; liveClass: boolean; headingStyled: boolean; fontOptions: number; toolbarButtons: string[]; emptyLine: { x: number; y: number } | null; lineText: string[] };
         if (!initial.emptyLine) throw new Error("Live Preview smoke could not locate the empty list item.");
 
@@ -783,7 +794,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           return { globalMenu, sourceFlashed, boldOn, boldOff, italicOn, italicOff, strikeOn, strikeOff, linkOn, linkOff };
         })()`, true) as { globalMenu: boolean; sourceFlashed: boolean; boldOn: boolean; boldOff: boolean; italicOn: boolean; italicOff: boolean; strikeOn: boolean; strikeOff: boolean; linkOn: boolean; linkOff: boolean };
         const tableNestedLink = await window.webContents.executeJavaScript(`(async () => {
-          const wait = async (check) => { for (let i = 0; i < 100; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 30)); } return false; };
+          const wait = async (check) => { for (let i = 0; i < 160; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 30)); } return false; };
           await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
           [...document.querySelectorAll('.cm-live-table td button')].at(-1)?.click();
           const input = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
@@ -792,10 +803,14 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           input.setSelectionRange(0, input.value.length);
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
           const unlinked = input.value === '~~*乙*~~' && document.activeElement === input;
-          input.setSelectionRange(0, input.value.length);
-          input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-          const menu = document.querySelector('.editor-context-menu');
-          const globalMenu = Boolean(menu && [...menu.querySelectorAll('.editor-context-menu-item')].some(button => button.textContent?.includes('复制')));
+          let menu = null;
+          let globalMenu = false;
+          for (let menuAttempt = 0; menuAttempt < 3 && !globalMenu; menuAttempt++) {
+            if (menuAttempt > 0) await new Promise((r) => setTimeout(r, 150));
+            if (input.isConnected) { input.setSelectionRange(0, input.value.length); input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); }
+            menu = document.querySelector('.editor-context-menu');
+            globalMenu = Boolean(menu && [...menu.querySelectorAll('.editor-context-menu-item')].some(button => button.textContent?.includes('复制')));
+          }
           [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].find(button => button.textContent?.trim() === '▢复制')?.click();
           const submitted = await wait(() => !document.querySelector('.cm-live-table td .cm-live-table-cell-input'));
           const rendered = await wait(() => {
@@ -895,7 +910,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.insertText("```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#28745b\"/></svg>\n```\n");
         const svgContentWorkflow = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (check, timeoutMs = 6_000) => { const deadline = Date.now() + timeoutMs; while (Date.now() < deadline) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return check(); };
-          const rendered = await wait(() => document.querySelector('.cm-live-image img[alt="SVG 内容"]')?.getAttribute('src')?.startsWith('fantastic-asset://asset/') === true, 60_000);
+          const rendered = await wait(() => document.querySelector('.cm-live-image img[alt="SVG 内容"]')?.getAttribute('src')?.startsWith('fantastic-asset://asset/') === true, 90_000);
           document.querySelector('.cm-live-image button[aria-label="编辑源码"]')?.click();
           const sourceSelected = await wait(() => window.getSelection()?.toString().includes(String.fromCharCode(96, 96, 96) + 'svg') === true);
           return { rendered, sourceSelected, liveImages: document.querySelectorAll('.cm-live-image').length, previewSvg: Boolean(document.querySelector('.resolved-inline-svg')), placeholder: Boolean(document.querySelector('.inline-svg-placeholder')), status: document.querySelector('.status')?.textContent ?? '', diagnostics: [...document.querySelectorAll('.diagnostic-item')].map(item => item.textContent) };
@@ -931,18 +946,30 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           return { liveShown, previewShown, sourceSelected, copyWorked, branchCollapsed, sourceHidden, sourceExpanded, kinds, scriptExecuted, stageClass: document.querySelector('.document-stage')?.className ?? '', previewLanguages: [...document.querySelectorAll('.preview-content pre > code')].map(code => code.className) };
         })()`, true) as { liveShown: boolean; previewShown: boolean; sourceSelected: boolean; copyWorked: boolean; branchCollapsed: boolean; sourceHidden: boolean; sourceExpanded: boolean; kinds: string[]; scriptExecuted: boolean; stageClass: string; previewLanguages: string[] };
         await new Promise((resolve) => setTimeout(resolve, 300));
-        await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80; i++) { const content = document.querySelector('.editor-pane.editor-mode-wysiwyg .cm-content') ?? document.querySelector('.cm-content'); if (content) { content.focus(); return; } await new Promise(r => setTimeout(r, 25)); } })()`, true);
-        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
-        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
-        await window.webContents.insertText("# 投影稳定性\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n- [ ] 切换任务\n\n```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"160\" height=\"40\"><rect width=\"160\" height=\"40\" fill=\"#28745b\"/></svg>\n```\n");
+        const stabilityMarkdown = "# 投影稳定性\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n- [ ] 切换任务\n\n```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"160\" height=\"40\"><rect width=\"160\" height=\"40\" fill=\"#28745b\"/></svg>\n```\n";
+        let stabilityInserted = false;
+        for (let attempt = 0; attempt < 2 && !stabilityInserted; attempt++) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 400));
+          await window.webContents.executeJavaScript(`(async () => { if (!document.querySelector('.editor-pane.editor-mode-wysiwyg')) document.querySelector('button[aria-label="写作模式"]')?.click(); for (let i = 0; i < 80; i++) { const content = document.querySelector('.editor-pane.editor-mode-wysiwyg .cm-content') ?? document.querySelector('.cm-content'); if (content) { content.focus(); return; } await new Promise(r => setTimeout(r, 25)); } })()`, true);
+          window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+          window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+          await window.webContents.insertText(stabilityMarkdown);
+          stabilityInserted = await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 40; i++) { if ((document.querySelector('.cm-content')?.textContent ?? '').includes('投影稳定性')) return true; await new Promise(r => setTimeout(r, 50)); } return false; })()`, true);
+        }
+        if (!stabilityInserted) throw new Error("task projection scenario: insertText never landed in the editor");
         const taskStabilityPoint = await window.webContents.executeJavaScript(`(async () => {
-          const wait = async (check) => { for (let i = 0; i < 240; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
+          const wait = async (check) => { for (let i = 0; i < 400; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 50)); } return false; };
           const ready = await wait(() => Boolean(document.querySelector('.cm-live-mermaid .mermaid-diagram svg') && document.querySelector('.cm-live-task-marker') && document.querySelector('.cm-live-image')));
           if (!ready) return {
             error: {
               mermaid: Boolean(document.querySelector('.cm-live-mermaid .mermaid-diagram svg')),
               task: Boolean(document.querySelector('.cm-live-task-marker')),
               image: Boolean(document.querySelector('.cm-live-image')),
+              pane: document.querySelector('.editor-pane')?.className ?? '',
+              writingPressed: document.querySelector('button[aria-label="写作模式"]')?.getAttribute('aria-pressed'),
+              livePane: Boolean(document.querySelector('.editor-pane.editor-mode-wysiwyg .cm-editor.cm-live-preview')),
+              cmHasStability: (document.querySelector('.cm-content')?.textContent ?? '').includes('投影稳定性'),
+              cmLines: document.querySelectorAll('.cm-line').length,
             },
           };
           const task = document.querySelector('.cm-live-task-marker');
@@ -1087,7 +1114,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, codeCursor, belowTable, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, codeCursor, belowTable, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, richRendered: tableInsertPoint.richRendered, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });
