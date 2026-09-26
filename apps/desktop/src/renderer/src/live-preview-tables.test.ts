@@ -1,9 +1,10 @@
 import { EditorState } from "@codemirror/state";
+import { markdown } from "@codemirror/lang-markdown";
 import { describe, expect, it } from "vitest";
-import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, replaceTableSnapshotCell, tableCellTextSelection, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
+import { formatTableCellMarkdown, isEditableTableCell, isPlainTableCell, mapTableVisibleText, replaceTableSnapshotCell, tableCellTextSelection, tableDecorations, livePreviewTables, revealTableSource, setTableSnapshot } from "./live-preview-tables";
 
 const source = "| A | B |\n| --- | --- |\n| C | D |\n\n正文";
-const cell = (text: string) => ({ from: source.indexOf(text), to: source.indexOf(text) + 1, text, html: text, protected: false });
+const cell = (text: string) => ({ from: source.indexOf(text), to: source.indexOf(text) + 1, text, html: text });
 const snapshot = { source, tables: [{ from: 0, to: source.indexOf("\n\n") + 1, rows: [[cell("A"), cell("B")], [cell("C"), cell("D")]] }] };
 const state = () => EditorState.create({ doc: source, selection: { anchor: source.length }, extensions: [livePreviewTables] });
 
@@ -28,7 +29,7 @@ describe("Live Preview tables", () => {
   it("rejects malformed and overlapping projections", () => {
     expect(tableDecorations(state(), { source, tables: [{ ...snapshot.tables[0]!, from: -1 }] }).size).toBe(0);
     expect(tableDecorations(state(), { source, tables: [...snapshot.tables, ...snapshot.tables] }).size).toBe(1);
-    expect(tableDecorations(state(), { source, tables: [{ ...snapshot.tables[0]!, rows: [[{ from: NaN, to: 3, text: "A", html: "A", protected: false }]] }] }).size).toBe(0);
+    expect(tableDecorations(state(), { source, tables: [{ ...snapshot.tables[0]!, rows: [[{ from: NaN, to: 3, text: "A", html: "A" }]] }] }).size).toBe(0);
   });
   it("replaces one plain cell while keeping snapshot ranges aligned", () => {
     expect(isPlainTableCell("普通文字")).toBe(true);
@@ -37,21 +38,21 @@ describe("Live Preview tables", () => {
     expect(next?.source).toContain("| 甲\\|乙 | D |");
     expect(next?.tables[0]?.rows[1]?.[1]?.from).toBe(snapshot.tables[0]!.rows[1]![1]!.from + 3);
   });
-  it("edits supported inline Markdown but rejects protected cell content", () => {
+  it("edits supported inline Markdown but keeps protected cells out of inline transactions", () => {
     const complexSource = "| **粗体** 与 [链接](https://example.com) | B |\n| --- | --- |\n| C | D |\n";
     const raw = "**粗体** 与 [链接](https://example.com)";
     const from = complexSource.indexOf(raw);
     const complex = { source: complexSource, tables: [{ from: 0, to: complexSource.length, rows: [[
-      { from, to: from + raw.length, text: "粗体 与 链接", html: "<strong>粗体</strong> 与 <a>链接</a>", protected: false },
-      { from: complexSource.indexOf("B"), to: complexSource.indexOf("B") + 1, text: "B", html: "B", protected: false },
+      { from, to: from + raw.length, text: "粗体 与 链接", html: "<strong>粗体</strong> 与 <a>链接</a>" },
+      { from: complexSource.indexOf("B"), to: complexSource.indexOf("B") + 1, text: "B", html: "B" },
     ]] }] };
-    expect(isEditableTableCell(raw)).toBe(true);
-    expect(isEditableTableCell("内联 `<svg>`")).toBe(true);
-    expect(isEditableTableCell("内联 ``<svg>`内容``")).toBe(true);
-    expect(isEditableTableCell("内联 <svg>")).toBe(false);
-    expect(isEditableTableCell("内联 `<svg>")).toBe(false);
     expect(replaceTableSnapshotCell(complex, 0, 0, 0, "**更新** 与 `代码`")?.source).toContain("**更新** 与 `代码`");
-    expect(replaceTableSnapshotCell({ ...complex, tables: [{ ...complex.tables[0]!, rows: [[{ ...complex.tables[0]!.rows[0]![0]!, protected: true }]] }] }, 0, 0, 0, "x")).toBeNull();
+    expect(isEditableTableCell("<span>HTML</span>")).toBe(false);
+    expect(isEditableTableCell("$x$")).toBe(false);
+    expect(isEditableTableCell("![图](image.png)")).toBe(false);
+    expect(isEditableTableCell("`<span>` 和 **文字**")).toBe(true);
+    const protectedCell = { ...complex, tables: [{ ...complex.tables[0]!, rows: [[{ ...complex.tables[0]!.rows[0]![0]!, protected: true }]] }] };
+    expect(replaceTableSnapshotCell(protectedCell, 0, 0, 0, "更新")).toBeNull();
   });
   it("formats only the selected table-cell draft", () => {
     expect(formatTableCellMarkdown("甲乙丙", 1, 2, "bold")).toEqual({ value: "甲**乙**丙", from: 3, to: 4 });
@@ -82,9 +83,37 @@ describe("Live Preview tables", () => {
 });
 
 describe("table cell source selection", () => {
+  it("maps repeated visible text past link destinations and rejects hidden markup", () => {
+    const raw = "[cat](https://cat)cat";
+    const doc = `| ${raw} |\n| --- |`;
+    const parsed = EditorState.create({ doc, extensions: [markdown()] });
+    const from = doc.indexOf(raw);
+    expect(mapTableVisibleText(EditorState.create({ doc }), from, from + raw.length, ["cat", "cat"])).toBeNull();
+    expect(mapTableVisibleText(parsed, from, from + raw.length, ["cat", "cat"])).toEqual([
+      { from: from + 1, to: from + 4 },
+      { from: from + 18, to: from + 21 },
+    ]);
+    const html = "<span title=\"cat\">cat</span>";
+    const htmlDoc = `| ${html} |\n| --- |`;
+    const htmlFrom = htmlDoc.indexOf(html);
+    expect(mapTableVisibleText(EditorState.create({ doc: htmlDoc, extensions: [markdown()] }), htmlFrom, htmlFrom + html.length, ["cat"])).toEqual([
+      { from: htmlFrom + 18, to: htmlFrom + 21 },
+    ]);
+    const rich = "**cat**cat";
+    const richDoc = `| ${rich} |\n| --- |`;
+    const richFrom = richDoc.indexOf(rich);
+    expect(mapTableVisibleText(EditorState.create({ doc: richDoc, extensions: [markdown()] }), richFrom, richFrom + rich.length, ["cat", "cat"])).toEqual([
+      { from: richFrom + 2, to: richFrom + 5 },
+      { from: richFrom + 7, to: richFrom + 10 },
+    ]);
+    const entity = "&amp;";
+    const entityDoc = `| ${entity} |\n| --- |`;
+    const entityFrom = entityDoc.indexOf(entity);
+    expect(mapTableVisibleText(EditorState.create({ doc: entityDoc, extensions: [markdown()] }), entityFrom, entityFrom + entity.length, ["&"])).toBeNull();
+  });
   it("maps a selected input range to canonical Markdown and rejects an uncommitted draft", () => {
     const from = source.indexOf("C");
-    const input = { value: "C", dataset: { sourceFrom: String(from), sourceTo: String(from + 1) }, selectionStart: 0, selectionEnd: 1 } as unknown as HTMLInputElement;
+    const input = { value: "C", dataset: { sourceFrom: String(from), sourceTo: String(from + 1) }, selectionStart: 0, selectionEnd: 1 } as unknown as HTMLTextAreaElement;
     expect(tableCellTextSelection(state(), input)).toMatchObject({ from, to: from + 1, text: "C" });
     input.value = "C|D";
     input.selectionStart = 1;

@@ -86,6 +86,9 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
     return () => { window.cancelAnimationFrame(frame); window.clearTimeout(timeout); };
   }, [fontFamily, html, previewDefinition]);
   const themedHtml = useMemo(() => previewReady ? compileWechatPublishHtml({ fragment: withoutLeadingPreviewTitle(html), definition: previewDefinition, wrapperFontFromContext: fontFamily }) : "", [fontFamily, html, previewDefinition, previewReady]);
+  // React19 按对象身份重写 dangerouslySetInnerHTML：每次渲染新建 {__html} 会原样重写 innerHTML，
+  // 抹掉 mermaid 等命令式渲染。记忆化后仅 html 变化时重写。
+  const themedInnerHtml = useMemo(() => ({ __html: themedHtml }), [themedHtml]);
   const issues = reports[viewportWidth] ?? [];
   const allIssues = MOBILE_WIDTHS.flatMap((width) => reports[width] ?? []);
   const summary = Object.values(reports).some((report) => report === null) ? "running" : mobileAuditSummary(allIssues);
@@ -248,7 +251,7 @@ export function WechatThemePreview({ html, themeId, themes, definition, fontFami
           <div className="wechat-phone-shell" style={{ width: viewportWidth + 28 }}>
             <div className="wechat-phone-bar"><span>公众号预览</span><small>{viewportWidth}px</small></div>
             <div className="wechat-phone-viewport" style={{ width: viewportWidth }}>
-              {themedHtml ? <article ref={contentRef} className="wechat-themed-content" style={{ fontFamily }} dangerouslySetInnerHTML={{ __html: themedHtml }} /> : <div className="wechat-preview-loading" role="status">处理中，请稍后</div>}
+              {themedHtml ? <article ref={contentRef} className="wechat-themed-content" style={{ fontFamily }} dangerouslySetInnerHTML={themedInnerHtml} /> : <div className="wechat-preview-loading" role="status">处理中，请稍后</div>}
             </div>
           </div>
           <aside className="wechat-audit-panel">

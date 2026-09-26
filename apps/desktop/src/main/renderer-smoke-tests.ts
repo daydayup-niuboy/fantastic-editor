@@ -112,12 +112,44 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         await window.webContents.insertText("# AI 表格翻译测试\n\n| 原文 | 译文 |\n| --- | --- |\n| 表格测试内容 | 文本 |\n");
         await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
+        const renderedCell = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          let cell;
+          while (Date.now() < deadline && !(cell = [...document.querySelectorAll('.cm-live-table td button')].find(button => button.textContent?.includes('表格测试内容')))) await new Promise(resolve => setTimeout(resolve, 40));
+          const text = cell?.firstChild;
+          if (!(text instanceof Text)) return null;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const rect = range.getBoundingClientRect();
+          return { x1: rect.left + 2, x2: rect.right - 2, y: rect.top + rect.height / 2 };
+        })()`, true) as { x1: number; x2: number; y: number } | null;
+        if (!renderedCell) throw new Error("Rendered table cell was unavailable for pointer selection.");
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(renderedCell.x1), y: Math.round(renderedCell.y) });
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(renderedCell.x1), y: Math.round(renderedCell.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseMove", x: Math.round(renderedCell.x2), y: Math.round(renderedCell.y) });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(renderedCell.x2), y: Math.round(renderedCell.y), button: "left", clickCount: 1 });
+        const renderedTranslation = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline && !document.querySelector('.selection-translate-trigger')) await new Promise(resolve => setTimeout(resolve, 40));
+          const selected = window.getSelection()?.toString() ?? '';
+          const trigger = document.querySelector('.selection-translate-trigger');
+          const noInput = !document.querySelector('.cm-live-table td .cm-live-table-cell-input');
+          trigger?.click();
+          while (Date.now() < deadline && document.querySelector('.selection-translate-result')?.textContent?.trim() !== '处理结果') await new Promise(resolve => setTimeout(resolve, 40));
+          const translated = document.querySelector('.selection-translate-result')?.textContent?.trim() === '处理结果';
+          document.querySelector('.selection-translate-close')?.click();
+          return { selected, trigger: Boolean(trigger), noInput, translated };
+        })()`, true) as { selected: string; trigger: boolean; noInput: boolean; translated: boolean };
+        if (!renderedTranslation.trigger || !renderedTranslation.noInput || !renderedTranslation.translated || !renderedTranslation.selected.includes("表格测试内容")) throw new Error(`Rendered table selection translation failed: ${JSON.stringify(renderedTranslation)}`);
         const tableTranslation = await window.webContents.executeJavaScript(`(async () => {
           const waitFor = async (test) => { const deadline = Date.now() + 10000; while (Date.now() < deadline) { const value = test(); if (value) return value; await new Promise((resolve) => setTimeout(resolve, 40)); } return null; };
           const cell = await waitFor(() => [...document.querySelectorAll('.cm-live-table td button')].find(button => button.textContent?.includes('表格测试内容')));
+          const before = [...document.querySelectorAll('.cm-live-table th, .cm-live-table td')].map(item => { const rect = item.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; });
           cell?.click();
-          const input = document.querySelector('.cm-live-table td input');
-          if (!(input instanceof HTMLInputElement)) return { trigger: false, translated: false };
+          const after = [...document.querySelectorAll('.cm-live-table th, .cm-live-table td')].map(item => { const rect = item.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; });
+          const stable = before.length === after.length && before.every((rect, index) => Object.keys(rect).every(key => Math.abs(rect[key] - after[index][key]) < 1));
+          const input = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
+          if (!(input instanceof HTMLTextAreaElement)) return { trigger: false, translated: false, stable };
           input.setSelectionRange(0, input.value.length);
           input.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
           input.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
@@ -125,9 +157,27 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           trigger?.click();
           const translated = await waitFor(() => document.querySelector('.selection-translate-result')?.textContent?.trim() === '处理结果');
           document.querySelector('.selection-translate-close')?.click();
-          return { trigger: Boolean(trigger), translated: Boolean(translated) };
-        })()`, true) as { trigger: boolean; translated: boolean };
-        if (!tableTranslation.trigger || !tableTranslation.translated) throw new Error(`Table selection translation failed: ${JSON.stringify(tableTranslation)}`);
+          const active = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
+          let multilineAnchor = false;
+          if (active instanceof HTMLTextAreaElement) {
+            active.style.width = '70px';
+            active.style.height = '25px';
+            active.style.textAlign = 'center';
+            active.setSelectionRange(3, active.value.length);
+            active.scrollTop = active.scrollHeight;
+            active.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+            active.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+            const secondTrigger = await waitFor(() => document.querySelector('.selection-translate-trigger'));
+            const inputRect = active.getBoundingClientRect();
+            const actionRect = secondTrigger?.getBoundingClientRect();
+            multilineAnchor = active.scrollHeight > active.clientHeight && Boolean(actionRect
+              && actionRect.left >= inputRect.left - 30 && actionRect.left <= inputRect.right + 30
+              && actionRect.top >= inputRect.top - 40 && actionRect.top <= inputRect.bottom + 40);
+            active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          }
+          return { trigger: Boolean(trigger), translated: Boolean(translated), stable, multilineAnchor };
+        })()`, true) as { trigger: boolean; translated: boolean; stable: boolean; multilineAnchor: boolean };
+        if (!tableTranslation.trigger || !tableTranslation.translated || !tableTranslation.stable || !tableTranslation.multilineAnchor) throw new Error(`Table selection translation or layout failed: ${JSON.stringify(tableTranslation)}`);
         await window.webContents.executeJavaScript(`(() => {
           const original = window.setTimeout;
           window.__restoreTranslationSmokeTimeout = () => { window.setTimeout = original; delete window.__restoreTranslationSmokeTimeout; };
@@ -265,7 +315,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           while (Date.now() < deadline) { if (document.querySelector(".ai-result")?.textContent?.includes("选择文字或把光标")) return true; await new Promise((resolve) => setTimeout(resolve, 50)); }
           return false;
         })()`, true);
-        await finishSmoke("ai", Boolean(cancelled), { selectionTranslation, visibleGlyph, inkPixels, popoverInteraction, tableTranslation, translationTimeout, applied: appliedResult, undone, stale, cancelled });
+        await finishSmoke("ai", Boolean(cancelled), { selectionTranslation, visibleGlyph, inkPixels, popoverInteraction, renderedTranslation, tableTranslation, translationTimeout, applied: appliedResult, undone, stale, cancelled });
       })().catch((error) => void finishSmoke("ai", false, { error: error instanceof Error ? error.message : String(error) }));
     });
   } else if (process.env.FANTASTIC_EDITOR_PASTE_SMOKE_TEST === "1") {
@@ -393,7 +443,8 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         await new Promise((resolve) => setTimeout(resolve, 200));
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "f", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "f", modifiers: ["control"] });
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        const searchFocused = await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 120; i++) { if (document.activeElement?.getAttribute('aria-label') === '查找文本') return true; await new Promise(r => setTimeout(r, 25)); } return false; })()`, true) as boolean;
+        if (!searchFocused) throw new Error("Search regression: find input never focused");
         await window.webContents.insertText("Turns");
         for (let index = 1; index <= 3; index++) {
           window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Enter" });
@@ -584,7 +635,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
 
         const firstChanged = JSON.stringify(initial.lineText) !== JSON.stringify(afterFirstDelete.text);
-        await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80; i++) { const content = document.querySelector('.editor-pane.editor-mode-wysiwyg .cm-content') ?? document.querySelector('.cm-content'); if (content) { content.focus(); return; } await new Promise(r => setTimeout(r, 25)); } })()`, true);
+        await window.webContents.executeJavaScript(`(async () => { if (!document.querySelector('.editor-pane.editor-mode-wysiwyg')) document.querySelector('button[aria-label="写作模式"]')?.click(); for (let i = 0; i < 80; i++) { const content = document.querySelector('.editor-pane.editor-mode-wysiwyg .cm-content') ?? document.querySelector('.cm-content'); if (content) { content.focus(); return; } await new Promise(r => setTimeout(r, 25)); } })()`, true);
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
         window.webContents.insertText("![图片测试](missing-image.png)\n\n末尾");
@@ -658,13 +709,19 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         const tableLastTab = await window.webContents.executeJavaScript(`(async () => {
           const wait = async (check) => { for (let i = 0; i < 120; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 25)); } return false; };
           await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
+          const protectedCell = [...document.querySelectorAll('.cm-live-table td')].find(cell => cell.textContent?.includes('HTML'));
+          protectedCell?.querySelector('button')?.click();
+          const protectedClickStable = Boolean(protectedCell && !protectedCell.querySelector('.cm-live-table-cell-input') && document.querySelector('.cm-live-table'));
+          protectedCell?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+          const sourceAvailable = [...document.querySelectorAll('.cm-live-table-context-menu button')].some(button => button.textContent === '编辑表格源码');
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
           const headers = document.querySelectorAll('.cm-live-table th button');
           headers[1]?.click();
-          document.querySelector('.cm-live-table th input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-          const skippedProtected = await wait(() => document.querySelector('.cm-live-table td input')?.value === 'D');
-          document.querySelector('.cm-live-table td input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+          document.querySelector('.cm-live-table th .cm-live-table-cell-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+          const lastCellFocused = await wait(() => document.querySelector('.cm-live-table td .cm-live-table-cell-input')?.value === 'D');
+          document.querySelector('.cm-live-table td .cm-live-table-cell-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
           const appended = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 3);
-          const focused = document.activeElement?.matches('.cm-live-table td input') === true;
+          const focused = await wait(() => document.activeElement?.matches('.cm-live-table td .cm-live-table-cell-input') === true);
           const activeCell = document.activeElement?.closest('td');
           const rect = activeCell?.getBoundingClientRect();
           activeCell?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect?.left ?? 0, clientY: rect?.top ?? 0 }));
@@ -672,18 +729,23 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const rowSynced = deleteRow?.disabled === false;
           deleteRow?.click();
           const deleted = await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
-          return { skippedProtected, appended, focused, rowSynced, deleted, sourceVisible: !document.querySelector('.cm-live-table') };
-        })()`, true) as { skippedProtected: boolean; appended: boolean; focused: boolean; rowSynced: boolean; deleted: boolean; sourceVisible: boolean };
+          return { protectedClickStable, sourceAvailable, lastCellFocused, appended, focused, rowSynced, deleted, sourceVisible: !document.querySelector('.cm-live-table') };
+        })()`, true) as { protectedClickStable: boolean; sourceAvailable: boolean; lastCellFocused: boolean; appended: boolean; focused: boolean; rowSynced: boolean; deleted: boolean; sourceVisible: boolean };
         const tableRichEdit = await window.webContents.executeJavaScript(`(async () => {
           for (let i = 0; i < 80 && !document.querySelector('.cm-live-table th strong'); i++) await new Promise(r => setTimeout(r, 50));
           document.querySelector('.cm-live-table th button')?.click();
-          const input = document.querySelector('.cm-live-table th input');
+          const input = document.querySelector('.cm-live-table th .cm-live-table-cell-input');
           const raw = input?.value ?? '';
+          const before = input?.closest('th')?.getBoundingClientRect();
+          if (input) input.value = '400 V / 800 V 动力电池 ↔ 12 V（或 48 V）蓄电池'.repeat(3);
+          const wrapped = input instanceof HTMLTextAreaElement && input.scrollHeight > input.clientHeight && input.scrollWidth <= input.clientWidth + 2;
+          const after = input?.closest('th')?.getBoundingClientRect();
+          const stable = Boolean(before && after && Math.abs(before.width - after.width) < 1 && Math.abs(before.height - after.height) < 1);
           if (input) input.value = '**更新**';
           input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
           for (let i = 0; i < 80 && document.querySelector('.cm-live-table th strong')?.textContent !== '更新'; i++) await new Promise(r => setTimeout(r, 50));
-          return { raw, rendered: document.querySelector('.cm-live-table th strong')?.textContent === '更新' };
-        })()`, true) as { raw: string; rendered: boolean };
+          return { raw, wrapped, stable, rendered: document.querySelector('.cm-live-table th strong')?.textContent === '更新' };
+        })()`, true) as { raw: string; wrapped: boolean; stable: boolean; rendered: boolean };
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Z", modifiers: ["control"] });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Z", modifiers: ["control"] });
         const tableCellFormatting = await window.webContents.executeJavaScript(`(async () => {
@@ -694,8 +756,8 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           let sourceFlashed = false;
           const choose = async (label) => {
             cell()?.click();
-            const input = document.querySelector('.cm-live-table td input');
-            if (!(input instanceof HTMLInputElement)) return false;
+            const input = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
+            if (!(input instanceof HTMLTextAreaElement)) return false;
             input.select();
             input.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
             const menu = document.querySelector('.editor-context-menu');
@@ -705,7 +767,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
             const observer = new MutationObserver(() => { if (!document.querySelector('.cm-live-table')) sourceFlashed = true; });
             observer.observe(document.querySelector('.cm-content'), { childList: true, subtree: true });
             action?.click();
-            const closed = await wait(() => !document.querySelector('.cm-live-table td input'));
+            const closed = await wait(() => !document.querySelector('.cm-live-table td .cm-live-table-cell-input'));
             await new Promise(resolve => setTimeout(resolve, 50));
             observer.disconnect();
             return Boolean(action) && closed;
@@ -724,8 +786,8 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const wait = async (check) => { for (let i = 0; i < 100; i++) { if (check()) return true; await new Promise(r => setTimeout(r, 30)); } return false; };
           await wait(() => document.querySelectorAll('.cm-live-table tr').length === 2);
           [...document.querySelectorAll('.cm-live-table td button')].at(-1)?.click();
-          const input = document.querySelector('.cm-live-table td input');
-          if (!(input instanceof HTMLInputElement)) return { unlinked: false, submitted: false, rendered: false };
+          const input = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
+          if (!(input instanceof HTMLTextAreaElement)) return { unlinked: false, submitted: false, rendered: false };
           input.value = '[~~*乙*~~](https://www.baidu.com)';
           input.setSelectionRange(0, input.value.length);
           input.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
@@ -735,7 +797,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const menu = document.querySelector('.editor-context-menu');
           const globalMenu = Boolean(menu && [...menu.querySelectorAll('.editor-context-menu-item')].some(button => button.textContent?.includes('复制')));
           [...(menu?.querySelectorAll('.editor-context-menu-item') ?? [])].find(button => button.textContent?.trim() === '▢复制')?.click();
-          const submitted = await wait(() => !document.querySelector('.cm-live-table td input'));
+          const submitted = await wait(() => !document.querySelector('.cm-live-table td .cm-live-table-cell-input'));
           const rendered = await wait(() => {
             const cell = [...document.querySelectorAll('.cm-live-table td button')].find(button => button.textContent?.includes('乙'));
             return Boolean(cell && cell.textContent?.includes('乙') && cell.querySelector('del, s') && cell.querySelector('em, i')) && !document.querySelector('.cm-live-table td a');
@@ -748,7 +810,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           for (let i = 0; i < 80 && document.querySelectorAll('.cm-live-table tr').length !== 2; i++) await new Promise(r => setTimeout(r, 50));
           const undone = document.querySelectorAll('.cm-live-table tr').length === 2;
           [...document.querySelectorAll('.cm-live-table td button')].at(-1)?.click();
-          const input = document.querySelector('.cm-live-table td input');
+          const input = document.querySelector('.cm-live-table td .cm-live-table-cell-input');
           if (input) input.value = '已修改';
           input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
           for (let i = 0; i < 80 && ![...document.querySelectorAll('.cm-live-table td button')].some(button => button.textContent === '已修改'); i++) await new Promise(r => setTimeout(r, 50));
@@ -780,16 +842,16 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           const steps = [];
           for (const expected of ['B', 'C', 'D', '']) {
             const currentTables = document.querySelectorAll('.cm-live-table');
-            const before = currentTables[1]?.querySelector('input')?.value ?? null;
-            currentTables[1]?.querySelector('input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-            const moved = await wait(() => document.querySelectorAll('.cm-live-table')[1]?.querySelector('input')?.value === expected);
-            steps.push({ before, expected, moved, after: document.querySelectorAll('.cm-live-table')[1]?.querySelector('input')?.value ?? null, rows: document.querySelectorAll('.cm-live-table')[1]?.querySelectorAll('tr').length ?? 0 });
+            const before = currentTables[1]?.querySelector('.cm-live-table-cell-input')?.value ?? null;
+            currentTables[1]?.querySelector('.cm-live-table-cell-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+            const moved = await wait(() => document.querySelectorAll('.cm-live-table')[1]?.querySelector('.cm-live-table-cell-input')?.value === expected);
+            steps.push({ before, expected, moved, after: document.querySelectorAll('.cm-live-table')[1]?.querySelector('.cm-live-table-cell-input')?.value ?? null, rows: document.querySelectorAll('.cm-live-table')[1]?.querySelectorAll('tr').length ?? 0 });
             stayedInSecond = stayedInSecond && moved;
             if (!moved) break;
             await new Promise(r => setTimeout(r, 100));
           }
           const tables = document.querySelectorAll('.cm-live-table');
-          return { stayedInSecond, focusedSecond: Boolean(tables[1]?.contains(document.activeElement)), firstActive: Boolean(tables[0]?.querySelector('input')), rowCounts: [...tables].map(table => table.querySelectorAll('tr').length), steps };
+          return { stayedInSecond, focusedSecond: Boolean(tables[1]?.contains(document.activeElement)), firstActive: Boolean(tables[0]?.querySelector('.cm-live-table-cell-input')), rowCounts: [...tables].map(table => table.querySelectorAll('tr').length), steps };
         })()`, true) as { stayedInSecond: boolean; focusedSecond: boolean; firstActive: boolean; rowCounts: number[]; steps: Array<{ before: string | null; expected: string; moved: boolean; after: string | null; rows: number }> };
         await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="源码模式"]')?.click()`, true);
         await window.webContents.executeJavaScript(`(async () => { for (let i = 0; i < 80 && !document.querySelector('.editor-pane.editor-mode-source .cm-content'); i++) await new Promise(r => setTimeout(r, 25)); })()`, true);
@@ -964,7 +1026,11 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
         const codeCursorBefore = await cursorLine();
         window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Up" });
         window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Up" });
-        const codeCursorAfterUp = await cursorLine();
+        let codeCursorAfterUp = await cursorLine();
+        for (let i = 0; i < 20 && codeCursorAfterUp === codeCursorBefore; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          codeCursorAfterUp = await cursorLine();
+        }
         const codeCursorClickPoint = await window.webContents.executeJavaScript(`(() => {
           const line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent?.includes('from huggingface_hub'));
           const rect = line?.getBoundingClientRect();
@@ -979,7 +1045,41 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           && codeCursorBefore === "snapshot_download("
           && codeCursorAfterUp === "from huggingface_hub import snapshot_download"
           && codeCursorAfterClick === "from huggingface_hub import snapshot_download";
-        const valid = cursorValid && tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.mermaidControls && formulaWorkflow.mermaidMoved && formulaWorkflow.mermaidReset && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.rendered && tableCellFormatting.globalMenu && !tableCellFormatting.sourceFlashed && tableCellFormatting.boldOn && tableCellFormatting.boldOff && tableCellFormatting.italicOn && tableCellFormatting.italicOff && tableCellFormatting.strikeOn && tableCellFormatting.strikeOff && tableCellFormatting.linkOn && tableCellFormatting.linkOff && tableNestedLink.unlinked && tableNestedLink.globalMenu && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.skippedProtected && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
+        window.webContents.sendInputEvent({ type: "keyDown", keyCode: "A", modifiers: ["control"] });
+        window.webContents.sendInputEvent({ type: "keyUp", keyCode: "A", modifiers: ["control"] });
+        await window.webContents.insertText("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n### 选型说明\n\n选型说明正文\n");
+        await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="写作模式"]')?.click()`, true);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const belowTablePoint = await window.webContents.executeJavaScript(`(async () => {
+          const scroller = document.querySelector('.cm-scroller');
+          let line;
+          for (let offset = 0; offset < (scroller?.scrollHeight ?? 0); offset += 200) {
+            scroller.scrollTop = offset;
+            await new Promise(resolve => setTimeout(resolve, 20));
+            line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent === '选型说明');
+            if (line) break;
+          }
+          line?.scrollIntoView({ block: 'center' });
+          await new Promise(resolve => setTimeout(resolve, 60));
+          const rect = line?.getBoundingClientRect();
+          return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!belowTablePoint) throw new Error("Heading below table is missing.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(belowTablePoint.x), y: Math.round(belowTablePoint.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(belowTablePoint.x), y: Math.round(belowTablePoint.y), button: "left", clickCount: 1 });
+        const belowTableHeadingCaret = await cursorLine();
+        const belowTableParagraphPoint = await window.webContents.executeJavaScript(`(() => {
+          const line = [...document.querySelectorAll('.cm-line')].find(item => item.textContent === '选型说明正文');
+          const rect = line?.getBoundingClientRect();
+          return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!belowTableParagraphPoint) throw new Error("Paragraph below heading is missing.");
+        window.webContents.sendInputEvent({ type: "mouseDown", x: Math.round(belowTableParagraphPoint.x), y: Math.round(belowTableParagraphPoint.y), button: "left", clickCount: 1 });
+        window.webContents.sendInputEvent({ type: "mouseUp", x: Math.round(belowTableParagraphPoint.x), y: Math.round(belowTableParagraphPoint.y), button: "left", clickCount: 1 });
+        const belowTableParagraphCaret = await cursorLine();
+        const belowTable = { headingCaret: belowTableHeadingCaret, paragraphCaret: belowTableParagraphCaret };
+        const belowTableValid = belowTableHeadingCaret === "选型说明" && belowTableParagraphCaret === "选型说明正文";
+        const valid = cursorValid && belowTableValid && tabSkippedClosing && markdownDiagnostics.shown && markdownDiagnostics.jumped && markdownDiagnosticCleared && taskProjectionStability.toggled && taskProjectionStability.scrollDelta <= 2 && taskProjectionStability.mermaidPreserved && taskProjectionStability.svgPresent && svgContentWorkflow.rendered && svgContentWorkflow.sourceSelected && structuredCodeWorkflow.liveShown && structuredCodeWorkflow.previewShown && structuredCodeWorkflow.sourceSelected && structuredCodeWorkflow.copyWorked && structuredCodeWorkflow.branchCollapsed && structuredCodeWorkflow.sourceHidden && structuredCodeWorkflow.sourceExpanded && structuredCodeWorkflow.kinds.join(",") === "json,yaml,toml,html,config" && !structuredCodeWorkflow.scriptExecuted && formulaWorkflow.rendered && formulaWorkflow.mermaidRendered && formulaWorkflow.mermaidControls && formulaWorkflow.mermaidMoved && formulaWorkflow.mermaidReset && formulaWorkflow.codeStyled && formulaWorkflow.codeColored && formulaWorkflow.selected && tableWorkflow.shown && tableWorkflow.inserted && tableInsertPoint.constrained && tableInsertPoint.richRendered && tableRichEdit.raw === '**A**' && tableRichEdit.wrapped && tableRichEdit.stable && tableRichEdit.rendered && tableCellFormatting.globalMenu && !tableCellFormatting.sourceFlashed && tableCellFormatting.boldOn && tableCellFormatting.boldOff && tableCellFormatting.italicOn && tableCellFormatting.italicOff && tableCellFormatting.strikeOn && tableCellFormatting.strikeOff && tableCellFormatting.linkOn && tableCellFormatting.linkOff && tableNestedLink.unlinked && tableNestedLink.globalMenu && tableNestedLink.submitted && tableNestedLink.rendered && tableUndoEdit.undone && tableUndoEdit.opened && tableUndoEdit.edited && tableLastTab.protectedClickStable && tableLastTab.sourceAvailable && tableLastTab.lastCellFocused && tableLastTab.appended && tableLastTab.focused && tableLastTab.rowSynced && tableLastTab.deleted && !tableLastTab.sourceVisible && multiTableTab.stayedInSecond && multiTableTab.focusedSecond && !multiTableTab.firstActive && multiTableTab.rowCounts.join(",") === "2,3" && imageWorkflow.shown && imageWorkflow.sourceSelected && imageDeleted && imageRestored && liveTyped && liveUndo.articlePresent && liveUndo.typedRemoved && liveUndo.focused && sourceTyped
           && initial.singleEditor && initial.liveClass && initial.headingStyled && initial.fontOptions >= 7
           && ["正文", "H1", "H2", "H3", "链接"].every((label) => initial.toolbarButtons.includes(label))
           && firstChanged && secondChanged && afterFirstDelete.focused && afterSecondDelete.focused
@@ -987,7 +1087,7 @@ export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: Fi
           && kaitiBold.applied && kaitiBold.removed && kaitiBold.fontFamily.includes("KaiTi") && Number(kaitiBold.fontWeight) >= 700 && kaitiBold.fontSynthesis.includes("weight")
           && blockTypes.headingApplied && blockTypes.normalApplied && themeApplied && themedEditInserted && themedEditUndone && commandPaletteOpened
           && final.singleEditor && final.source.includes("*测试粗体*");
-        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, codeCursor, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
+        await finishSmoke("live-preview", valid, { tabSkippedClosing, markdownDiagnostics, markdownDiagnosticCleared, codeCursor, belowTable, taskProjectionStability, svgContentWorkflow, structuredCodeWorkflow, formulaWorkflow, tableLayout: { constrained: tableInsertPoint.constrained, widths: tableInsertPoint.widths }, tableWorkflow, tableRichEdit, tableCellFormatting, tableNestedLink, tableUndoEdit, tableLastTab, multiTableTab, imageWorkflow, imageDeleted, imageRestored, liveTyped, liveUndo, sourceTyped, initial, afterFirstDelete, afterSecondDelete, selectionMade, selectionRendering, editorFormatMenu, toolbarPersistent, italicVisible, italicStyle, italicToggle, kaitiBold, blockTypes, themeApplied, themedEditInserted, themedEditUndone, commandPaletteOpened, final, firstChanged, secondChanged });
       })().catch((error: unknown) => {
         const diagnostic = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack ?? "" } : { message: String(error) };
         void finishSmoke("live-preview", false, { error: diagnostic });

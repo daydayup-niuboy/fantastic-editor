@@ -8,18 +8,16 @@ Windows 本地优先 Markdown 编辑器，公益免费项目。
 
 当前源码版本：**0.3.0-rc.9**。
 
-Windows x64 预发布安装包：**0.3.0-rc.9**。
+Windows x64 预发布便携包：**0.3.0-rc.9**。
 
-- [安装版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.9/fantastic-editor-0.3.0-rc.9-setup.exe)
 - [单文件便携版](https://github.com/daydayup-niuboy/fantastic-editor/releases/download/v0.3.0-rc.9/fantastic-editor-0.3.0-rc.9-portable.exe)
 - [版本说明与校验清单](https://github.com/daydayup-niuboy/fantastic-editor/releases/tag/v0.3.0-rc.9)
 
-本项目暂未采购商业代码签名证书，RC.9 两个程序均为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
+本项目暂未采购商业代码签名证书，RC.9 便携包为 `NotSigned`。Windows 可能显示未知发布者或 SmartScreen 提示，请核对下载来源和 SHA-256。
 
 | 文件 | 字节数 | SHA-256 |
 | --- | ---: | --- |
-| `fantastic-editor-0.3.0-rc.9-setup.exe` | 121277319 | `D35D37FF59853726AEF3F1E57C621D57E9958E67CF94FFD033335693CF18A709` |
-| `fantastic-editor-0.3.0-rc.9-portable.exe` | 121019288 | `CC44940AD02B43EB8152C34F9242C3B170BD517048D726FF3862B00E457F1DC3` |
+| `fantastic-editor-0.3.0-rc.9-portable.exe` | 107508973 | `738F2E7C95EE220B942A60004D3AC7871FAD9D03270AA56BCCA0CEE422D676B8` |
 
 ## 编辑与预览
 
@@ -27,7 +25,7 @@ Windows x64 预发布安装包：**0.3.0-rc.9**。
 
 写作区顶部常驻格式栏可设置正文、H1/H2/H3、粗体、斜体、删除线、链接，并上下移动选中内容。粗体和斜体支持再次点击取消；中文斜体、楷体粗体和原生文本选区已完成人工验收。字体菜单提供微软雅黑、Segoe UI、Arial、等线、宋体、楷体等常用选项；选择“自定义”可定位 `.ttf` 或 `.otf` 文件，安装到 Windows 当前用户字体库并立即应用，字体文件不随软件分发。
 
-Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格支持纯文本及受控行内 Markdown 的格内编辑、连续 Tab/Shift+Tab、末格自动增行，以及右键增删行列和调整列对齐。格内选中文字后右键使用全局编辑菜单，也支持划词翻译；未选中文字时仍可使用表格结构菜单。图片、公式、原始 HTML 或无法验证范围的单元格安全降级为 Markdown 源码。最终渲染可在分栏检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
+Live Preview 已支持图片、公式、代码块和规则 GFM 表格投影；表格支持纯文本及受控行内 Markdown 的格内编辑、连续 Tab/Shift+Tab、末格自动增行，以及右键增删行列和调整列对齐。格内编辑时文字按列宽软换行，格子尺寸保持稳定。格内选中文字后右键使用全局编辑菜单，也支持划词翻译；未选中文字时仍可使用表格结构菜单。图片、公式、原始 HTML 或无法验证范围的单元格普通点击保持显示，可通过右键“编辑表格源码”进入源码。最终渲染可在分栏检查；“复制到公众号”位于左侧活动栏。旧版独立结构化编辑面板不属于当前默认写作模式。
 
 普通图片和安全 SVG 派生图片在悬停时可使用上、下、左、右移动，中心按钮恢复默认位置和大小，右列按钮放大/缩小；原有另存、编辑、删除图标继续保留。该视图控制只影响 Live Preview 临时 DOM，不写入正文或输出；该功能已随 RC.13 打包。
 
@@ -76,7 +74,7 @@ npm install
 npm start
 ```
 
-开发模式使用 `npm run dev`。完整发布门禁使用 `npm run dist:rc`，生成安装版与便携版并执行隐私扫描、产物校验、十组生产冒烟及安装—启动—卸载检查。RC.9 通过了 81 个测试文件、420 项测试、3 项签名配置测试和严格 TypeScript 检查。
+开发模式使用 `npm run dev`。便携版门禁使用 `npm run dist:portable`，执行隐私扫描、产物校验和生产冒烟；同时提供 `npm run dist:rc` 构建安装版与便携版，并检查隔离安装—启动—卸载。当前 RC.9 源码通过了 82 个测试文件、425 项测试、3 项签名配置测试和严格 TypeScript 检查。
 
 签名流程保留在 `npm run dist:signed`，仅在获得有效证书后使用。证书、环境配置与本地开发记录不提交公开仓库。
 

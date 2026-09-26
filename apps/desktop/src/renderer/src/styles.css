@@ -364,19 +364,19 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .cm-live-formula { cursor: pointer; }
 .cm-live-formula-block { max-width: 100%; overflow-x: auto; padding: 8px 0; }
 .cm-live-formula:focus-visible { outline: 2px solid currentColor; }
-.cm-live-mermaid { position: relative; z-index: 0; width: 100%; max-width: var(--live-reading-width, 820px); margin: 12px auto; overflow: visible; }
+.cm-live-mermaid { position: relative; z-index: 0; width: 100%; max-width: var(--live-reading-width, 820px); margin: 0 auto; padding: 12px 0; overflow: visible; }
 .cm-live-mermaid:hover, .cm-live-mermaid:focus-within { z-index: 24; }
 .cm-live-mermaid .mermaid-diagram { margin: 0; transform-origin: center center; transition: transform .16s ease; }
 .cm-live-mermaid:hover .mermaid-diagram, .cm-live-mermaid:focus-within .mermaid-diagram { transform: translate(var(--live-image-offset-x, 0px), var(--live-image-offset-y, 0px)) scale(var(--live-image-zoom, 1)); }
 .cm-live-image.is-active img, .cm-live-mermaid.is-active .mermaid-diagram { transform: translate(var(--live-image-offset-x, 0px), var(--live-image-offset-y, 0px)) scale(var(--live-image-zoom, 1)); }
 .cm-live-image.is-active .cm-live-image-actions { display: flex; }
 .cm-live-image.is-active .cm-live-image-controls, .cm-live-mermaid.is-active .cm-live-image-controls { opacity: 1; visibility: visible; pointer-events: auto; }
-.cm-live-table { box-sizing: border-box; width: 100%; max-width: min(100%, var(--live-reading-width, 720px)); margin: 8px auto; overflow-x: auto; padding: 0; }
+.cm-live-table { box-sizing: border-box; width: 100%; max-width: min(100%, var(--live-reading-width, 720px)); margin: 0 auto; overflow-x: auto; padding: 8px 0; }
 .cm-live-table table { border-collapse: collapse; width: 100%; }
-.cm-live-table th, .cm-live-table td { border: 1px solid var(--border); padding: 6px 10px; }
-.cm-live-table td > button, .cm-live-table th > button { display: block; width: 100%; text-align: inherit; font: inherit; color: inherit; background: transparent; border: 0; white-space: pre-wrap; cursor: text; }
-.cm-live-table td input, .cm-live-table th input { box-sizing: border-box; width: 100%; min-width: 80px; padding: 1px 0; color: var(--text); background: transparent; border: 0; border-radius: 0; font: inherit; text-align: inherit; outline: 0; }
-.cm-live-table-cell-editor { display: grid; gap: 3px; min-width: 150px; }
+.cm-live-table th, .cm-live-table td { position: relative; border: 1px solid var(--border); padding: 6px 10px; }
+.cm-live-table td > button, .cm-live-table th > button { display: block; width: 100%; text-align: inherit; font: inherit; color: inherit; background: transparent; border: 0; white-space: pre-wrap; cursor: text; user-select: text; }
+.cm-live-table-cell-input { box-sizing: border-box; display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; margin: 0; padding: 1px 0; color: var(--text); background: transparent; border: 0; border-radius: 0; resize: none; overflow: auto; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; outline: 0; }
+.cm-live-table-cell-editor { position: absolute; inset: 6px 10px; min-width: 0; min-height: 0; }
 .cm-live-table-cell-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
 .cm-live-table-cell-tools button { min-width: 26px; padding: 2px 5px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 3px; font: inherit; cursor: pointer; }
 .cm-live-table-context-menu { position: fixed; z-index: 1000; display: grid; min-width: 176px; padding: 5px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 18%); font-size: 13px; }
@@ -416,7 +416,7 @@ body.is-resizing, body.is-resizing * { cursor: col-resize !important; user-selec
 .cm-live-image-control-zoom-out { grid-column: 3; grid-row: 3; }
 .cm-live-image-control-delete { grid-column: 3; grid-row: 4; }
 .cm-live-image-control:hover, .cm-live-image-control:focus-visible { background: var(--accent-soft); }
-.cm-live-structured-code, .preview-structured-code { position: relative; box-sizing: border-box; width: 100%; max-width: var(--live-reading-width, 820px); margin: 10px auto; white-space: normal; }
+.cm-live-structured-code, .preview-structured-code { position: relative; box-sizing: border-box; width: 100%; max-width: var(--live-reading-width, 820px); margin: 0 auto; padding: 10px 0; white-space: normal; }
 .structured-code-visualization { overflow: hidden; color: var(--text); background: color-mix(in srgb, var(--surface-raised) 92%, transparent); border: 1px solid var(--border); border-radius: 8px; }
 .structured-code-visualization > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: color-mix(in srgb, var(--accent) 8%, transparent); border-bottom: 1px solid var(--border); }
 .structured-code-visualization > header span { color: var(--muted); font-size: 12px; }

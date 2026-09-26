@@ -18,7 +18,7 @@ import type { EditorSourceSelection, EditorViewportAnchor } from "./preview-sync
 import { applyWysiwygTextChange, createMarkdownBlockInsertion, escapeMarkdownTableCell, type MarkdownSelectionMark, type WysiwygTextChange } from "./wysiwyg-transactions";
 import { livePreviewExtension, livePreviewMarkdownHighlight } from "./live-preview";
 import { imageSnapshotFromHtml, livePreviewImages, setImageSnapshot } from "./live-preview-images";
-import { formatTableCellMarkdown, replaceTableSnapshotCell, tableCellTextSelection, tableSnapshotFromHtml, livePreviewTables, setTableSnapshot, type TableCellFormat } from "./live-preview-tables";
+import { formatTableCellMarkdown, replaceTableSnapshotCell, tableCellRenderedSelection, tableCellTextSelection, tableSnapshotFromHtml, livePreviewTables, setTableSnapshot, type TableCellFormat } from "./live-preview-tables";
 import { formulaSnapshotFromHtml, livePreviewFormulas, setFormulaSnapshot } from "./live-preview-formulas";
 import { livePreviewStructuredCode, setStructuredCodeSnapshot, structuredCodeSnapshotFromHtml } from "./live-preview-structured-code";
 import { livePreviewMermaid, mermaidSnapshotFromHtml, setMermaidSnapshot } from "./live-preview-mermaid";
@@ -94,7 +94,8 @@ interface SelectionTranslationAction {
   text: string;
   left: number;
   top: number;
-  tableInput?: HTMLInputElement;
+  tableInput?: HTMLTextAreaElement;
+  tableButton?: HTMLButtonElement;
 }
 
 interface SelectionTranslationPopover {
@@ -133,6 +134,59 @@ function centerTypewriterCaret(view: EditorView, position: number): void {
   view.scrollDOM.scrollTop += caret.top - viewport.top - viewport.height / 2 + (caret.bottom - caret.top) / 2;
 }
 
+interface SelectionAnchorRect { left: number; right: number; top: number; bottom: number }
+
+// 表格单元格的翻译入口要贴住选中文字本身；用整格 rect 会在宽表格里把图标甩到格子角落。
+function cellSelectionAnchor(element: HTMLTextAreaElement | HTMLButtonElement): { start: SelectionAnchorRect; end: SelectionAnchorRect } {
+  const cellRect = element.getBoundingClientRect();
+  const fallback = { start: cellRect as SelectionAnchorRect, end: cellRect as SelectionAnchorRect };
+  const selection = window.getSelection();
+  if (element instanceof HTMLButtonElement && selection && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return fallback;
+    const rects = [...range.getClientRects()];
+    const first = rects[0];
+    const last = rects[rects.length - 1];
+    return first && last ? { start: first, end: last } : fallback;
+  }
+  if (element instanceof HTMLTextAreaElement) {
+    const selectionStart = element.selectionStart;
+    const selectionEnd = element.selectionEnd;
+    if (selectionStart === null || selectionEnd === null || selectionEnd <= selectionStart) return fallback;
+    const style = window.getComputedStyle(element);
+    const mirror = document.createElement("div");
+    mirror.style.cssText = `position:fixed;visibility:hidden;pointer-events:none;box-sizing:border-box;left:${cellRect.left}px;top:${cellRect.top - element.scrollTop}px;width:${cellRect.width}px;min-height:${cellRect.height}px;white-space:pre-wrap;overflow-wrap:anywhere;`;
+    mirror.style.font = style.font;
+    mirror.style.lineHeight = style.lineHeight;
+    mirror.style.letterSpacing = style.letterSpacing;
+    mirror.style.textAlign = style.textAlign;
+    mirror.style.padding = style.padding;
+    mirror.style.tabSize = style.tabSize;
+    mirror.append(document.createTextNode(element.value.slice(0, selectionStart)));
+    const selected = document.createElement("span");
+    selected.textContent = element.value.slice(selectionStart, selectionEnd);
+    mirror.append(selected, document.createTextNode(element.value.slice(selectionEnd) || "\u200b"));
+    document.body.appendChild(mirror);
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(selected);
+      const rects = [...range.getClientRects()].filter(rect => rect.bottom > cellRect.top && rect.top < cellRect.bottom);
+      const first = rects[0];
+      const last = rects[rects.length - 1];
+      const clipped = (rect: DOMRect) => ({
+        left: Math.max(cellRect.left, Math.min(rect.left, cellRect.right)),
+        right: Math.max(cellRect.left, Math.min(rect.right, cellRect.right)),
+        top: Math.max(cellRect.top, Math.min(rect.top, cellRect.bottom)),
+        bottom: Math.max(cellRect.top, Math.min(rect.bottom, cellRect.bottom)),
+      });
+      return first && last ? { start: clipped(first), end: clipped(last) } : fallback;
+    } finally {
+      mirror.remove();
+    }
+  }
+  return fallback;
+}
+
 const editorTabBinding = {
   ...indentWithTab,
   run: (view: EditorView) => skipAutoClosedCharacter(view) || indentWithTab.run!(view),
@@ -164,7 +218,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const typewriterPointerRef = useRef(false);
   const lastSentValueRef = useRef(value);
   const mouseSelectionRef = useRef(false);
-  const tablePointerSelectionRef = useRef<HTMLInputElement | null>(null);
+  const tablePointerSelectionRef = useRef<HTMLTextAreaElement | HTMLButtonElement | null>(null);
   const mouseSelectionFinishFrameRef = useRef<number | null>(null);
   const translationSequenceRef = useRef(0);
   const translationOpeningRef = useRef(false);
@@ -487,7 +541,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       text: string,
       start: { left: number; right: number; top: number; bottom: number },
       end: { left: number; right: number; top: number; bottom: number },
-      tableInput?: HTMLInputElement,
+      tableElement?: HTMLTextAreaElement | HTMLButtonElement,
     ) => {
       const buttonSize = 16;
       const gap = 8;
@@ -505,7 +559,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         from, to, text,
         left: Math.max(edge, Math.min(placement.left, window.innerWidth - buttonSize - edge)),
         top: Math.max(edge, Math.min(placement.top, window.innerHeight - buttonSize - edge)),
-        ...(tableInput ? { tableInput } : {}),
+        ...(tableElement instanceof HTMLTextAreaElement ? { tableInput: tableElement } : {}),
+        ...(tableElement instanceof HTMLButtonElement ? { tableButton: tableElement } : {}),
       });
     };
 
@@ -525,15 +580,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       });
     };
 
-    const finishTableSelection = (input: HTMLInputElement) => {
+    const finishTableSelection = (element: HTMLTextAreaElement | HTMLButtonElement) => {
       mouseSelectionRef.current = false;
       mouseSelectionFinishFrameRef.current = window.requestAnimationFrame(() => {
         mouseSelectionFinishFrameRef.current = null;
         const currentView = viewRef.current;
-        const selected = currentView && input.isConnected ? tableCellTextSelection(currentView.state, input) : null;
+        const selected = currentView && element.isConnected
+          ? element instanceof HTMLTextAreaElement ? tableCellTextSelection(currentView.state, element) : tableCellRenderedSelection(currentView.state, element, window.getSelection())
+          : null;
         if (!selected || !selected.text.trim()) { dismissSelectionTranslation(); return; }
-        const rect = input.getBoundingClientRect();
-        showTranslationAction(selected.from, selected.to, selected.text, rect, rect, input);
+        const anchor = cellSelectionAnchor(element);
+        showTranslationAction(selected.from, selected.to, selected.text, anchor.start, anchor.end, element);
       });
     };
 
@@ -693,15 +750,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     window.addEventListener("blur", clearLiteralPasteIntent);
     const captureTablePointer = (event: MouseEvent) => {
       if (event.button !== 0) return;
-      const input = event.target instanceof Element ? event.target.closest(".cm-live-table-cell-editor input") : null;
-      tablePointerSelectionRef.current = input instanceof HTMLInputElement ? input : null;
+      const element = event.target instanceof Element ? event.target.closest(".cm-live-table-cell-input, .cm-live-table th > button, .cm-live-table td > button") : null;
+      tablePointerSelectionRef.current = element instanceof HTMLTextAreaElement || element instanceof HTMLButtonElement ? element : null;
       if (tablePointerSelectionRef.current) dismissSelectionTranslation();
     };
     const finishMouseSelectionAndTypewriter = () => {
       clearTypewriterPointer();
-      const input = tablePointerSelectionRef.current;
+      const element = tablePointerSelectionRef.current;
       tablePointerSelectionRef.current = null;
-      if (input) finishTableSelection(input);
+      if (element) finishTableSelection(element);
       else finishMouseSelection();
     };
     window.addEventListener("mouseup", finishMouseSelectionAndTypewriter);
@@ -780,9 +837,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const actionSequence = translationSequenceRef.current;
     const selection = view.state.selection.main;
     const tableSelection = action.tableInput?.isConnected ? tableCellTextSelection(view.state, action.tableInput) : null;
+    const renderedSelection = action.tableButton?.isConnected ? tableCellRenderedSelection(view.state, action.tableButton, window.getSelection()) : null;
     const selectionMatches = action.tableInput
       ? tableSelection?.from === action.from && tableSelection.to === action.to && tableSelection.text === action.text
-      : !selection.empty && selection.from === action.from && selection.to === action.to;
+      : action.tableButton
+        ? renderedSelection?.from === action.from && renderedSelection.to === action.to && renderedSelection.text === action.text
+        : !selection.empty && selection.from === action.from && selection.to === action.to;
     if (!selectionMatches || action.to > view.state.doc.length || view.state.sliceDoc(action.from, action.to) !== action.text) {
       dismissSelectionTranslation();
       return;
@@ -790,7 +850,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     translationOpeningRef.current = true;
     setTranslationOpening(true);
     try {
-      const anchor = await captureEditorTextAnchor(documentId, view.state, action.tableInput ? { from: action.from, to: action.to } : undefined);
+      const anchor = await captureEditorTextAnchor(documentId, view.state, action.tableInput || action.tableButton ? { from: action.from, to: action.to } : undefined);
       if (actionSequence !== translationSequenceRef.current) return;
       if (!anchor || anchor.expectedText !== action.text) {
         dismissSelectionTranslation();
@@ -888,7 +948,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (!view) return;
       contextMenuCleanupRef.current?.();
       const target = event.target as Element | null;
-      const tableInput = target?.closest<HTMLInputElement>(".cm-live-table-cell-editor input");
+      const tableInput = target?.closest<HTMLTextAreaElement>(".cm-live-table-cell-input");
       let tableSelection: { value: string; start: number; end: number; cellFrom: number; encodedCell: string; rowIndex: number; columnIndex: number } | null = null;
       if (tableInput && host.contains(tableInput)) {
         event.preventDefault();
@@ -1190,6 +1250,18 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     });
     view.requestMeasure();
   }, [livePreview]);
+
+  // 字号缩放、字体、阅读宽度与主题投影只改 CSS 布局,不产生事务;不补量高时高度图与真实渲染错位,写作模式鼠标命中与光标绘制会整体偏移。
+  useEffect(() => {
+    viewRef.current?.requestMeasure();
+  }, [fontSize, fontFamily, readingMaxWidth, wechatThemeDefinition]);
+
+  // KaTeX/自定义字体加载完成会改变 widget 与行高,需在字体就绪后重新量高。
+  useEffect(() => {
+    const remeasure = () => viewRef.current?.requestMeasure();
+    document.fonts.addEventListener("loadingdone", remeasure);
+    return () => document.fonts.removeEventListener("loadingdone", remeasure);
+  }, []);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: spellCheckCompartmentRef.current.reconfigure(EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", autocorrect: spellCheck ? "on" : "off" })) });

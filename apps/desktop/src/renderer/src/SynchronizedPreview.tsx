@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   type CSSProperties,
   type ReactEventHandler,
@@ -88,6 +89,9 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
   const shouldScrollRef = useRef(false);
   const interactionReadyRef = useRef(false);
   interactionReadyRef.current = enabled && active && identityKey !== null;
+  // React 19 按对象身份应用 dangerouslySetInnerHTML：每次渲染新建 {__html} 会原样重写
+  // innerHTML，抹掉 decorate() 做的命令式装饰（结构卡/工具条），且 html 值未变时 effect 不会重跑。记忆化保证仅在 html 变化时重写。
+  const innerHtml = useMemo(() => ({ __html: html }), [html]);
 
   const clearOverlay = () => {
     const overlay = overlayRef.current;
@@ -304,7 +308,7 @@ export const SynchronizedPreview = forwardRef<SynchronizedPreviewHandle, Synchro
       onErrorCapture={onErrorCapture}
       onLoadCapture={onLoadCapture}
     >
-      <article className="preview-content" ref={contentRef} style={{ "--reading-max-width": readingMaxWidth } as CSSProperties} dangerouslySetInnerHTML={{ __html: html }} />
+      <article className="preview-content" ref={contentRef} style={{ "--reading-max-width": readingMaxWidth } as CSSProperties} dangerouslySetInnerHTML={innerHtml} />
       <div className="preview-selection-layer" ref={overlayRef} data-box-count="0" aria-hidden="true" />
     </div>
   );

@@ -1,13 +1,14 @@
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { escapeMarkdownTableCell, markdownTableDetails, markdownTableInsertedCellOffset, transformMarkdownTable, type MarkdownTableOperation } from "./wysiwyg-transactions";
 import { remapUnchangedSnapshotRange } from "./live-preview-snapshot";
 
-interface TableCell { from: number; to: number; text: string; html: string; protected: boolean }
+interface TableCell { from: number; to: number; text: string; html: string; protected?: boolean }
 interface TableProjection { from: number; to: number; rows: TableCell[][] }
 export interface TableSnapshot { source: string; tables: TableProjection[] }
 export type TableCellFormat = "bold" | "italic" | "strike" | "code" | "link";
-export function tableCellTextSelection(state: EditorState, input: HTMLInputElement, allowDraft = false): { from: number; to: number; text: string; cellFrom: number; encodedCell: string } | null {
+export function tableCellTextSelection(state: EditorState, input: HTMLTextAreaElement, allowDraft = false): { from: number; to: number; text: string; cellFrom: number; encodedCell: string } | null {
   const cellFrom = Number(input.dataset.sourceFrom);
   const cellTo = Number(input.dataset.sourceTo);
   const start = input.selectionStart;
@@ -21,6 +22,64 @@ export function tableCellTextSelection(state: EditorState, input: HTMLInputEleme
   const text = encodedCell.slice(from - cellFrom, to - cellFrom);
   if (!allowDraft && state.sliceDoc(from, to) !== text) return null;
   return { from, to, text, cellFrom, encodedCell };
+}
+
+const hiddenInlineNodes = new Set(["LinkMark", "URL", "LinkTitle", "EmphasisMark", "CodeMark", "StrikethroughMark", "HighlightMark", "HTMLTag", "Entity", "Escape"]);
+
+export function mapTableVisibleText(state: EditorState, cellFrom: number, cellTo: number, values: readonly string[]): { from: number; to: number }[] | null {
+  const raw = state.sliceDoc(cellFrom, cellTo);
+  const tree = ensureSyntaxTree(state, cellTo, 40);
+  if (!tree) return null;
+  const hidden: { from: number; to: number }[] = [];
+  tree.iterate({ from: cellFrom, to: cellTo, enter(node) {
+    if (hiddenInlineNodes.has(node.type.name)) hidden.push({ from: node.from, to: node.to });
+  } });
+  const mapped: { from: number; to: number }[] = [];
+  let offset = 0;
+  for (const value of values) {
+    let found = raw.indexOf(value, offset);
+    while (found >= 0 && hidden.some(range => cellFrom + found < range.to && cellFrom + found + value.length > range.from)) {
+      found = raw.indexOf(value, found + 1);
+    }
+    if (found < 0) return null;
+    mapped.push({ from: cellFrom + found, to: cellFrom + found + value.length });
+    offset = found + value.length;
+  }
+  return mapped;
+}
+
+export function tableCellRenderedSelection(state: EditorState, button: HTMLButtonElement, selection: Selection | null): { from: number; to: number; text: string } | null {
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null;
+  const range = selection.getRangeAt(0);
+  if (!button.contains(range.startContainer) || !button.contains(range.endContainer)) return null;
+  const cellFrom = Number(button.dataset.sourceFrom);
+  const cellTo = Number(button.dataset.sourceTo);
+  if (!Number.isInteger(cellFrom) || !Number.isInteger(cellTo) || cellFrom < 0 || cellTo < cellFrom || cellTo > state.doc.length) return null;
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(button);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const visibleFrom = prefix.toString().length;
+  const visibleTo = visibleFrom + range.toString().length;
+  let visibleOffset = 0;
+  let from = -1;
+  let to = -1;
+  const nodes = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+  const values: string[] = [];
+  for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
+    const value = node.textContent ?? "";
+    if (value) values.push(value);
+  }
+  const mapped = mapTableVisibleText(state, cellFrom, cellTo, values);
+  if (!mapped) return null;
+  for (let index = 0; index < values.length; index++) {
+    const value = values[index]!;
+    const source = mapped[index]!;
+    if (from < 0 && visibleFrom >= visibleOffset && visibleFrom < visibleOffset + value.length) from = source.from + visibleFrom - visibleOffset;
+    if (visibleTo > visibleOffset && visibleTo <= visibleOffset + value.length) to = source.from + visibleTo - visibleOffset;
+    visibleOffset += value.length;
+  }
+  const text = range.toString();
+  return from >= cellFrom && to > from && text.trim() && state.sliceDoc(from, to) === text ? { from, to, text } : null;
 }
 
 export function formatTableCellMarkdown(value: string, from: number, to: number, kind: TableCellFormat, linkUrl = "https://"): { value: string; from: number; to: number } {
@@ -101,8 +160,7 @@ export function isEditableTableCell(source: string): boolean {
 export function replaceTableSnapshotCell(snapshot: TableSnapshot, tableIndex: number, rowIndex: number, columnIndex: number, value: string): TableSnapshot | null {
   const table = snapshot.tables[tableIndex];
   const cell = table?.rows[rowIndex]?.[columnIndex];
-  const expectedText = table && cell ? snapshot.source.slice(cell.from, cell.to) : "";
-  if (!table || !cell || cell.protected || !isEditableTableCell(expectedText)) return null;
+  if (!table || !cell || cell.protected || !isEditableTableCell(snapshot.source.slice(cell.from, cell.to))) return null;
   const insert = escapeMarkdownTableCell(value);
   const delta = insert.length - (cell.to - cell.from);
   const shift = (position: number) => position <= cell.from ? position : position >= cell.to ? position + delta : cell.from + insert.length;
@@ -181,18 +239,39 @@ class TableWidget extends WidgetType {
           button.append(content.content.cloneNode(true));
         } else button.textContent = cell.text || "空单元格";
         button.dataset.tableCell = `${rowIndex}:${columnIndex}`;
+        button.dataset.sourceFrom = String(cell.from);
+        button.dataset.sourceTo = String(cell.to);
         const raw = this.snapshot.source.slice(cell.from, cell.to);
         const editable = !cell.protected && isEditableTableCell(raw);
-        button.title = editable ? (isPlainTableCell(raw) ? "编辑单元格" : "编辑单元格 Markdown") : "在源码中编辑此单元格";
-        button.onmousedown = (event) => { event.preventDefault(); event.stopPropagation(); };
+        button.title = !editable ? "右键选择“编辑表格源码”" : isPlainTableCell(raw) ? "编辑单元格" : "编辑单元格 Markdown";
+        button.onmousedown = (event) => event.stopPropagation();
         button.onclick = (event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!editable) { selectSource(cell.from, cell.to); return; }
+          // 拖选文字后的 click 不得弹原始 Markdown 输入框（粗体等跨渲染边界的选区无法映射回源码，
+          // 旧守卫会漏放）；只看本单元格内是否存在原生选区，保持渲染态与 Obsidian 一致。
+          const nativeSelection = window.getSelection();
+          if (event.detail > 0 && nativeSelection && nativeSelection.rangeCount > 0 && !nativeSelection.isCollapsed) {
+            const range = nativeSelection.getRangeAt(0);
+            if (button.contains(range.startContainer) && button.contains(range.endContainer)) return;
+          }
+          if (!editable) return;
+          let caret = 0;
+          if (event.detail > 0 && raw === button.textContent) {
+            const point = document.caretRangeFromPoint?.(event.clientX, event.clientY);
+            if (point && button.contains(point.startContainer)) {
+              const prefix = document.createRange();
+              prefix.selectNodeContents(button);
+              prefix.setEnd(point.startContainer, point.startOffset);
+              caret = Math.min(raw.length, prefix.toString().length);
+            }
+          }
           const editor = document.createElement("div");
-          editor.className = "cm-live-table-cell-editor";
-          const input = document.createElement("input");
-          input.type = "text";
+        editor.className = "cm-live-table-cell-editor";
+        const input = document.createElement("textarea");
+        input.className = "cm-live-table-cell-input";
+        input.wrap = "soft";
+        input.rows = 1;
           input.value = raw;
           input.dataset.sourceFrom = String(cell.from);
           input.dataset.sourceTo = String(cell.to);
@@ -210,33 +289,46 @@ class TableWidget extends WidgetType {
           const finish = (commit: boolean, move = 0) => {
             if (finished) return;
             finished = true;
-            if (!commit) { editor.replaceWith(button); button.focus(); return; }
+            const run = () => {
+            if (!commit) { editor.remove(); button.style.visibility = ""; button.focus(); return; }
             const insert = escapeMarkdownTableCell(input.value);
-            const flat = rows.flatMap((row, r) => row.flatMap((candidate, c) => {
-              const source = this.snapshot.source.slice(candidate.from, candidate.to);
-              return !candidate.protected && isEditableTableCell(source) ? [[r, c] as const] : [];
-            }));
+            const flat = rows.flatMap((row, r) => row.flatMap((candidate, c) => candidate.protected || !isEditableTableCell(this.snapshot.source.slice(candidate.from, candidate.to)) ? [] : [[r, c] as const]));
             const current = flat.findIndex(([r, c]) => r === rowIndex && c === columnIndex);
             if (move > 0 && current === flat.length - 1) {
               const relativeFrom = cell.from - from;
               const relativeTo = cell.to - from;
               const edited = this.expectedSource.slice(0, relativeFrom) + insert + this.expectedSource.slice(relativeTo);
               const appended = transformMarkdownTable(edited, { kind: "insert-row", rowIndex: rows.length - 1, position: "after" });
-              if (!appended || view.state.sliceDoc(from, to) !== this.expectedSource) { editor.replaceWith(button); return; }
+              if (!appended || view.state.sliceDoc(from, to) !== this.expectedSource) { editor.remove(); button.style.visibility = ""; return; }
               view.dispatch({ changes: { from, to, insert: appended }, userEvent: "input.table-cell" });
               focusCell(rows.length, 0);
               return;
             }
             const next = replaceTableSnapshotCell(this.snapshot, this.tableIndex, rowIndex, columnIndex, input.value);
-            if (!next || view.state.sliceDoc(from, to) !== this.expectedSource) { editor.replaceWith(button); return; }
-            view.dispatch({
-              changes: { from: cell.from, to: cell.to, insert },
-              effects: setTableSnapshot.of(next),
-              userEvent: "input.table-cell",
-            });
+            if (!next || view.state.sliceDoc(from, to) !== this.expectedSource) { editor.remove(); button.style.visibility = ""; return; }
+            if (input.value === raw) {
+              // 值未变：只关输入框、不发事务。否则 html:"" 的快照会让该单元格持久显示原始 Markdown。
+              editor.remove();
+              button.style.visibility = "";
+            } else {
+              view.dispatch({
+                changes: { from: cell.from, to: cell.to, insert },
+                effects: setTableSnapshot.of(next),
+                userEvent: "input.table-cell",
+              });
+            }
             if (move !== 0) {
               const target = flat[current + move];
               if (target) focusCell(target[0], target[1]);
+            }
+            };
+            try {
+              run();
+            } catch (error) {
+              // 失焦可能发生在 CodeMirror 更新中（编辑器点击 → 选区 setState → 同步重渲染 → blur），dispatch 会被
+              // CM 拒绝（"EditorView.update in progress"）；推迟到当前更新结束后重跑，run 内的源码一致性校验兜底。
+              if (error instanceof Error && error.message.includes("update is in progress")) { queueMicrotask(run); return; }
+              throw error;
             }
           };
           const format = (kind: TableCellFormat) => {
@@ -245,7 +337,11 @@ class TableWidget extends WidgetType {
             input.focus();
             input.setSelectionRange(result.from, result.to);
           };
+          let composing = false;
+          input.addEventListener("compositionstart", () => { composing = true; });
+          input.addEventListener("compositionend", () => { composing = false; });
           input.onkeydown = (event) => {
+            if (composing || event.isComposing) return;
             if (event.key === "Escape") { event.preventDefault(); finish(false); }
             else if (event.key === "Enter") { event.preventDefault(); finish(true); }
             else if (event.key === "Tab") { event.preventDefault(); finish(true, event.shiftKey ? -1 : 1); }
@@ -256,9 +352,12 @@ class TableWidget extends WidgetType {
           };
           input.onblur = () => finish(true);
           editor.append(input);
-          button.replaceWith(editor);
+          button.style.visibility = "hidden";
+          td.append(editor);
           input.focus();
-          input.select();
+          input.setSelectionRange(caret, caret);
+          input.scrollTop = 0;
+          input.scrollLeft = 0;
         };
         td.append(button);
         tr.append(td);
@@ -325,10 +424,13 @@ class TableWidget extends WidgetType {
     table.oncontextmenu = (event) => {
       const cell = (event.target as Element | null)?.closest<HTMLElement>("th[data-table-row], td[data-table-row]");
       if (!cell || !table.contains(cell)) return;
-      const input = cell.querySelector("input");
-      if (input instanceof HTMLInputElement && input.selectionStart !== input.selectionEnd) return;
+      const input = cell.querySelector<HTMLTextAreaElement>(".cm-live-table-cell-input");
+      if (input && input.selectionStart !== input.selectionEnd) return;
       openContextMenu(event, Number(cell.dataset.tableRow), Number(cell.dataset.tableColumn));
     };
+    for (const image of root.querySelectorAll("img")) {
+      image.onload = () => view.requestMeasure();
+    }
     return root;
   }
   ignoreEvent(): boolean { return true; }
