@@ -26,7 +26,7 @@ import { buildCodeMirrorWechatThemeProjectionCss } from "./wechat-theme-projecti
 import type { SearchNavigationResult, TextSearchOptions } from "./visible-text-search";
 import { applyEditorTextReplacement, captureEditorTextAnchor, type EditorTextAnchor } from "./editor-text-transaction";
 import { DEFAULT_PREVIEW_FONT_SIZE } from "./preview-font";
-import { shouldPrefixUntitledHeading } from "./untitled-heading";
+import { createUntitledHeadingFilter } from "./untitled-heading";
 import { defaultTranslationLanguage, TRANSLATION_LANGUAGES, type TranslationLanguageId } from "./selection-translation";
 
 interface MarkdownEditorProps {
@@ -76,6 +76,8 @@ export interface MarkdownEditorHandle {
   replaceAll(query: string, replacement: string, options?: TextSearchOptions): number;
   revealSourceRange(from: number, to: number): boolean;
   clearSearch(): void;
+  commitComposition(): Promise<void>;
+  currentText(): string | null;
   focus(): void;
   toggleSelectionMark(mark: MarkdownSelectionMark): boolean;
   insertLink(url: string): boolean;
@@ -211,6 +213,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onStatusRef = useRef(onStatus);
   const literalPasteUntilRef = useRef(0);
   const prefixUntitledHeadingRef = useRef(prefixUntitledHeading);
+  const composingRef = useRef(false);
   const livePreviewCompartmentRef = useRef(new Compartment());
   const spellCheckCompartmentRef = useRef(new Compartment());
   const typewriterModeRef = useRef(typewriterMode);
@@ -224,6 +227,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const translationOpeningRef = useRef(false);
   const popoverDragRef = useRef<{ pointerId: number; x: number; y: number; left: number; top: number; width: number; height: number } | null>(null);
   const contextMenuCleanupRef = useRef<(() => void) | null>(null);
+  const [composing, setComposing] = useState(false);
   const [translationOpening, setTranslationOpening] = useState(false);
   const [selectionTranslationAction, setSelectionTranslationAction] = useState<SelectionTranslationAction | null>(null);
   const [selectionTranslationPopover, setSelectionTranslationPopover] = useState<SelectionTranslationPopover | null>(null);
@@ -507,6 +511,17 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       closeSearchPanel(view);
       view.dispatch({ effects: setSearchQuery.of(new SearchQuery({ search: "" })), selection: { anchor: position } });
     },
+    async commitComposition() {
+      const view = viewRef.current;
+      if (!view || !composingRef.current) return;
+      // 失焦让浏览器结束 IME 组合：临时显示文字以 compositionend 提交进正文，再取回焦点。
+      view.contentDOM.blur();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      viewRef.current?.contentDOM.focus();
+    },
+    currentText() {
+      return viewRef.current?.state.doc.toString() ?? null;
+    },
     focus() {
       viewRef.current?.requestMeasure();
       viewRef.current?.focus();
@@ -628,11 +643,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           spellCheckCompartmentRef.current.of(EditorView.contentAttributes.of({ spellcheck: spellCheck ? "true" : "false", autocorrect: spellCheck ? "on" : "off" })),
           livePreviewCompartmentRef.current.of(livePreview ? [livePreviewExtension, livePreviewImages, livePreviewTables, livePreviewFormulas, livePreviewStructuredCode, livePreviewMermaid] : []),
           Prec.highest(keymap.of([editorTabBinding])), keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping,
-          EditorState.transactionFilter.of((tr) => {
-            if (!prefixUntitledHeadingRef.current || !tr.docChanged) return tr;
-            const offset = shouldPrefixUntitledHeading(tr.startState.doc.toString(), tr.newDoc.toString(), tr.isUserEvent("input.paste"));
-            return offset === null ? tr : [tr, { changes: { from: offset, insert: "# " }, sequential: true }];
-          }),
+          EditorState.transactionFilter.of(createUntitledHeadingFilter({
+            isEnabled: () => prefixUntitledHeadingRef.current,
+            isComposing: () => composingRef.current,
+          })),
           EditorView.domEventHandlers({
             mousedown: (event) => {
               if (event.button === 0) {
@@ -745,6 +759,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       }),
     });
     viewRef.current = view;
+    view.focus();
+    const handleCompositionStart = () => { composingRef.current = true; setComposing(true); };
+    const handleCompositionEnd = () => { composingRef.current = false; setComposing(false); };
+    view.contentDOM.addEventListener("compositionstart", handleCompositionStart);
+    view.contentDOM.addEventListener("compositionend", handleCompositionEnd);
     const clearLiteralPasteIntent = () => { literalPasteUntilRef.current = 0; };
     const clearTypewriterPointer = () => { typewriterPointerRef.current = false; };
     window.addEventListener("blur", clearLiteralPasteIntent);
@@ -777,6 +796,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       if (viewportFrame !== null) window.cancelAnimationFrame(viewportFrame);
       if (mouseSelectionFinishFrameRef.current !== null) window.cancelAnimationFrame(mouseSelectionFinishFrameRef.current);
       resizeObserver?.disconnect();
+      view.contentDOM.removeEventListener("compositionstart", handleCompositionStart);
+      view.contentDOM.removeEventListener("compositionend", handleCompositionEnd);
       window.removeEventListener("blur", clearLiteralPasteIntent);
       window.removeEventListener("mouseup", finishMouseSelectionAndTypewriter);
       document.removeEventListener("visibilitychange", clearLiteralPasteIntent);
@@ -1286,16 +1307,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     }
     // 本地输入已经通过 onChange 发出 lastSent，父组件滞后的 value 不得整篇回写。
     if (current === lastSentValueRef.current) return;
+    // 输入法组合期间禁止整篇回写：组合文字只存在于 DOM，回写会把临时显示一并抹掉。
+    if (composingRef.current) return;
     lastSentValueRef.current = value;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
       annotations: Transaction.addToHistory.of(false),
     });
-  }, [value]);
+  }, [value, composing]);
 
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !livePreview || !imagePreviewHtml) return;
+    // 输入法组合期间不向视图派发事务：快照派发会打断组合，临时显示文字将无法提交进正文。
+    if (composingRef.current) return;
     view.dispatch({ effects: [
       setImageSnapshot.of(imageSnapshotFromHtml(value, imagePreviewHtml, documentId ?? undefined)),
       setTableSnapshot.of(tableSnapshotFromHtml(value, imagePreviewHtml)),
@@ -1303,7 +1328,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       setStructuredCodeSnapshot.of(structuredCodeSnapshotFromHtml(value, imagePreviewHtml)),
       setMermaidSnapshot.of(mermaidSnapshotFromHtml(value, imagePreviewHtml, darkMode, fontFamily ?? "sans-serif")),
     ] });
-  }, [value, imagePreviewHtml, documentId, livePreview, darkMode, fontFamily]);
+  }, [value, imagePreviewHtml, documentId, livePreview, darkMode, fontFamily, composing]);
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     const files = [...event.dataTransfer.files];

@@ -236,6 +236,7 @@ export function App() {
   const recoveryWaitersRef = useRef<Array<() => void>>([]);
   const recoveryPromiseRef = useRef<ReturnType<typeof window.fantasticEditor.restoreRecoverySession> | null>(null);
   const recoveryWriteInFlightRef = useRef(false);
+  const documentActionPendingRef = useRef(false);
   const pendingRecoveryRef = useRef<PersistRecoveryRequest | null>(null);
   const externalChangeCheckBusyRef = useRef(false);
   const updateTabs = useCallback((updater: (current: DocumentTab[]) => DocumentTab[]) => {
@@ -611,6 +612,7 @@ export function App() {
   }, [active?.documentId, active?.workspaceRevision, draft, previewRefreshVersion]);
 
   const acceptOpenedFile = useCallback((result: OpenFileResult, workspaceFileId: string | null = null) => {
+    documentActionPendingRef.current = true;
     if (result.status === "cancelled") return;
     if (result.status === "failed" || !result.session) {
       setStatus(result.error ?? "打开文件失败");
@@ -661,6 +663,7 @@ export function App() {
   }, [acceptOpenedFile, refreshRecentFiles]);
 
   const newFile = useCallback(async () => {
+    documentActionPendingRef.current = true;
     await waitForRecoveryReady();
     const result = await window.fantasticEditor.createUntitledFile();
     if (result.status === "opened") setWorkspace(null);
@@ -668,6 +671,7 @@ export function App() {
   }, [acceptOpenedFile, waitForRecoveryReady]);
 
   const openFile = useCallback(async () => {
+    documentActionPendingRef.current = true;
     await waitForRecoveryReady();
     const result = await window.fantasticEditor.openMarkdownFile();
     if (result.status === "opened") setWorkspace(null);
@@ -875,9 +879,15 @@ export function App() {
     setStatus(changed ? "已完成智能标点转换；代码、链接和代码围栏保持不变，可按 Ctrl+Z 撤销。" : "智能标点未执行：文档版本已经变化。");
   }, []);
 
+  // 保存/另存为前先结束输入法组合并读取编辑器正文：未提交的临时显示文字不进入建议文件名与写盘内容。
+  const readCommittedEditorText = useCallback(async () => {
+    await markdownEditorRef.current?.commitComposition();
+    return markdownEditorRef.current?.currentText() ?? draftRef.current;
+  }, []);
+
   const saveAs = useCallback(async (): Promise<ActiveDocument | null> => {
     if (!active) { setStatus("请先新建或打开一个 Markdown 文件"); return null; }
-    const editorText = draftRef.current;
+    const editorText = await readCommittedEditorText();
     const result = await window.fantasticEditor.saveCurrentFileAs({ sessionId: active.sessionId, editorText });
     if (result.status === "saved") {
       const next: ActiveDocument = {
@@ -898,12 +908,12 @@ export function App() {
     }
     if (result.status !== "cancelled") setStatus(result.error ?? "另存为未完成");
     return null;
-  }, [active, updateTabs]);
+  }, [active, readCommittedEditorText, updateTabs]);
 
   const save = useCallback(async () => {
     if (!active) { setStatus("请先新建或打开一个 Markdown 文件"); return; }
     if (active.isUntitled && !active.importedStructured) { await saveAs(); return; }
-    const editorText = draftRef.current;
+    const editorText = await readCommittedEditorText();
     const result = await window.fantasticEditor.saveCurrentFile({ sessionId: active.sessionId, editorText });
     if (result.status === "saved") {
       const savedAsMarkdown = result.saveMode === "markdown";
@@ -921,7 +931,7 @@ export function App() {
       if (savedAsMarkdown && result.workspaceMode === "single-file") setWorkspace(null);
       setStatus(result.saveMode === "original" ? `已按原格式保存 ${result.displayName ?? active.displayName}` : `已保存 ${result.displayName ?? active.displayName}`);
     } else setStatus(result.error ?? "保存未完成");
-  }, [active, saveAs, updateTabs]);
+  }, [active, readCommittedEditorText, saveAs, updateTabs]);
 
   const describeOutputResult = useCallback((result: OutputCommandResult) => {
     if (
@@ -1237,10 +1247,14 @@ export function App() {
           draft: session.editorText,
         }];
       });
-      updateTabs(() => restoredTabs);
-      setWorkspace(null);
-      const target = restoredTabs.find((tab) => tab.sessionId === result.activeSessionId) ?? restoredTabs.at(-1);
-      if (target) presentTab(target);
+      updateTabs((current) => current.length === 0
+        ? restoredTabs
+        : [...current, ...restoredTabs.filter((tab) => !current.some((item) => item.sessionId === tab.sessionId))]);
+      if (!documentActionPendingRef.current) {
+        setWorkspace(null);
+        const target = restoredTabs.find((tab) => tab.sessionId === result.activeSessionId) ?? restoredTabs.at(-1);
+        if (target) presentTab(target);
+      }
       setDiagnostics(messageDiagnostics(result.warnings));
       setStatus(`已恢复 ${restoredTabs.length} 个文档${result.warnings.length > 0 ? `，${result.warnings.length} 项需要注意` : ""}`);
       markRecoveryReady();

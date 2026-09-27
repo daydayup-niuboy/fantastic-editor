@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { shouldPrefixUntitledHeading, untitledHeadingPrefixOffset } from "./untitled-heading";
+import { createUntitledHeadingFilter, shouldPrefixUntitledHeading, untitledHeadingPrefixOffset } from "./untitled-heading";
 
 describe("untitled first-line heading", () => {
   it("prefixes a plain first line and leaves headings lists quotes and fences alone", () => {
@@ -25,10 +25,7 @@ describe("untitled first-line heading", () => {
     const state = EditorState.create({
       doc: "\n",
       selection: { anchor: 1 },
-      extensions: [EditorState.transactionFilter.of((transaction) => {
-        const offset = shouldPrefixUntitledHeading(transaction.startState.doc.toString(), transaction.newDoc.toString(), transaction.isUserEvent("input.paste"));
-        return offset === null ? transaction : [transaction, { changes: { from: offset, insert: "# " }, sequential: true }];
-      })],
+      extensions: [EditorState.transactionFilter.of(createUntitledHeadingFilter({ isEnabled: () => true, isComposing: () => false }))],
     });
     const transaction = state.update({
       changes: { from: 1, insert: "Outlook 正文" },
@@ -37,5 +34,18 @@ describe("untitled first-line heading", () => {
     });
     expect(transaction.newDoc.toString()).toBe("\n# Outlook 正文");
     expect(transaction.newSelection.main.head).toBe(transaction.newDoc.length);
+  });
+
+  it("leaves transactions untouched while an IME composition is active", () => {
+    let composing = true;
+    const state = EditorState.create({
+      doc: "客户拜访",
+      extensions: [EditorState.transactionFilter.of(createUntitledHeadingFilter({ isEnabled: () => true, isComposing: () => composing }))],
+    });
+    const duringComposition = state.update({ changes: { from: 4, insert: "\n" } });
+    expect(duringComposition.newDoc.toString()).toBe("客户拜访\n");
+    composing = false;
+    const afterComposition = state.update({ changes: { from: 4, insert: "\n" } });
+    expect(afterComposition.newDoc.toString()).toBe("# 客户拜访\n");
   });
 });

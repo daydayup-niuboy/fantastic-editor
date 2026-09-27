@@ -1,11 +1,132 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { BrowserWindow } from "electron";
+import { dialog, type BrowserWindow } from "electron";
 
 type FinishSmoke = (scenario: string, valid: boolean, diagnostics?: unknown) => Promise<void>;
 
 export function installRendererSmokeTests(window: BrowserWindow, finishSmoke: FinishSmoke): boolean {
-  if (process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1") {
+  if (["escape", "save", "seed", "compose"].includes(process.env.FANTASTIC_EDITOR_UNTITLED_DIAG ?? "")) {
+    const mode = process.env.FANTASTIC_EDITOR_UNTITLED_DIAG;
+    let suggestedName = "";
+    const originalShowSaveDialog = dialog.showSaveDialog;
+    dialog.showSaveDialog = (async (...args: Parameters<typeof dialog.showSaveDialog>) => {
+      const options = args.at(-1);
+      suggestedName = typeof options === "object" && options !== null && "defaultPath" in options
+        ? String(options.defaultPath ?? "") : "";
+      return { canceled: true };
+    }) as typeof dialog.showSaveDialog;
+    window.webContents.once("did-finish-load", () => {
+      window.show();
+      window.focus();
+      void (async () => {
+        console.error('untitled diagnostic: loaded');
+        const snapshot = () => window.webContents.executeJavaScript(`(() => {
+          const host = document.querySelector('.editor-host');
+          const editor = document.querySelector('.cm-content');
+          const key = host && Object.keys(host).find(name => name.startsWith('__reactFiber$'));
+          let fiber = key ? host[key] : null;
+          let view = null;
+          let draft = null;
+          for (let node = fiber, depth = 0; node && depth < 60; node = node.return, depth++) {
+            for (let hook = node.memoizedState, index = 0; hook && typeof hook === 'object' && index < 80; hook = hook.next, index++) {
+              const current = hook.memoizedState?.current;
+              if (!view && current?.state?.doc && current?.contentDOM === editor) view = current;
+            }
+            if (node.type?.name === 'App') {
+              let appHook = node.memoizedState;
+              for (let i = 0; i < 5; i++) appHook = appHook?.next;
+              draft = appHook?.memoizedState ?? null;
+              break;
+            }
+          }
+          return {
+            visible: editor?.textContent ?? null,
+            source: view?.state.doc.toString() ?? null,
+            draft,
+            selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() ?? null,
+            focused: document.activeElement === editor,
+            windowFocused: document.hasFocus(),
+            composition: editor?.getAttribute('contenteditable') ?? null
+          };
+        })()`, true) as Promise<unknown>;
+        const ready = await window.webContents.executeJavaScript(`(async () => {
+          const deadline = Date.now() + 10000;
+          while (Date.now() < deadline) {
+            const button = document.querySelector('[data-testid="new-document"]');
+            if (button) { button.click(); break; }
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          while (Date.now() < deadline) {
+            if (document.querySelector('.cm-content')) return true;
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          return false;
+        })()`, true) as boolean;
+        console.error('untitled diagnostic: ready', ready);
+        if (!ready) throw new Error('Untitled editor did not mount');
+        const atMount = await snapshot();
+        console.error('untitled diagnostic: mount snapshot', JSON.stringify(atMount));
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const afterFocusDelay = await snapshot();
+        console.error('untitled diagnostic: after focus delay', JSON.stringify(afterFocusDelay));
+        const point = await window.webContents.executeJavaScript(`(() => {
+          const rect = document.querySelector('.cm-content')?.getBoundingClientRect();
+          return rect ? { x: Math.round(rect.left + 100), y: Math.round(rect.top + 20) } : null;
+        })()`, true) as { x: number; y: number } | null;
+        if (!point) throw new Error('Editor content has no bounds');
+        window.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+        window.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (mode === 'compose') {
+          await window.webContents.insertText('阶段一');
+          await window.webContents.executeJavaScript(`(() => {
+            const editor = document.querySelector('.cm-content');
+            if (!(editor instanceof HTMLElement)) return false;
+            editor.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+            const line = editor.querySelector('.cm-line:last-child') ?? editor;
+            line.appendChild(document.createTextNode('正在输入的组合文字'));
+            return true;
+          })()`, true);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          await window.webContents.executeJavaScript(`(() => {
+            const editor = document.querySelector('.cm-content');
+            if (!(editor instanceof HTMLElement)) return false;
+            editor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '正在输入的组合文字' }));
+            return true;
+          })()`, true);
+          await new Promise(resolve => setTimeout(resolve, 300));
+          const afterCompose = await snapshot() as { source: string | null; visible: string | null };
+          const composed = Boolean(afterCompose.source?.includes('正在输入的组合文字'));
+          const committed = Boolean(afterCompose.source?.includes('阶段一'));
+          console.error('untitled diagnostic: compose snapshot', JSON.stringify(afterCompose));
+          await finishSmoke('untitled-diagnostic', composed && committed, { mode, atMount, afterFocusDelay, afterCompose, composed, committed, suggestedName });
+          return;
+        }
+        const insertion = await Promise.race([
+          window.webContents.insertText('fresh-untitled-probe').then(() => 'completed'),
+        new Promise<string>(resolve => setTimeout(() => resolve('timed-out'), 2000)),
+      ]);
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+        await window.webContents.insertText('body');
+        console.error('untitled diagnostic: typed', insertion);
+        const afterInput = await snapshot();
+        console.error('untitled diagnostic: input snapshot');
+        if (mode === 'seed') {
+          await new Promise(resolve => setTimeout(resolve, 1200));
+        } else if (mode === 'escape') {
+          window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+          window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+        } else {
+          await window.webContents.executeJavaScript(`document.querySelector('button[aria-label="保存"]')?.click()`, true);
+        }
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const afterAction = await snapshot();
+        await finishSmoke('untitled-diagnostic', false, { mode, atMount, afterFocusDelay, afterInput, afterAction, suggestedName });
+      })().catch(error => void finishSmoke('untitled-diagnostic', false, { error: error instanceof Error ? error.message : String(error) }));
+    });
+    window.webContents.once('destroyed', () => { dialog.showSaveDialog = originalShowSaveDialog; });
+  } else if (process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1") {
     window.webContents.once("did-finish-load", () => {
       void (async () => {
         const ready = await window.webContents.executeJavaScript(`(async () => {

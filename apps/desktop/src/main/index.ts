@@ -97,6 +97,10 @@ if (process.env.FANTASTIC_EDITOR_AI_SMOKE_TEST === "1" && process.env.FANTASTIC_
   app.setName("fantastic-editor-ai-smoke");
   app.setPath("userData", process.env.FANTASTIC_EDITOR_AI_SMOKE_USER_DATA);
 }
+if (process.env.FANTASTIC_EDITOR_UNTITLED_DIAG && process.env.FANTASTIC_EDITOR_UNTITLED_DIAG_USER_DATA) {
+  app.setName("fantastic-editor-untitled-diagnostic");
+  app.setPath("userData", process.env.FANTASTIC_EDITOR_UNTITLED_DIAG_USER_DATA);
+}
 
 protocol.registerSchemesAsPrivileged([{
   scheme: ASSET_SCHEME,
